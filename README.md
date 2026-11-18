@@ -340,3 +340,40 @@ Chanakya-Research-Commons/
 ├── frontend/                   # (UI layer — WIP)
 └── docs/                       # (Additional documentation — WIP)
 ```
+
+---
+
+## 10. Changelog
+
+| Date | Commit | What Changed |
+|---|---|---|
+| 2026-11-18 | `e3b16bf` | Initial commit — project scaffolded |
+| 2026-11-18 | `1a8af58` | Setup: Docker Compose, schema.sql, seed_database.py added |
+| 2026-11-18 | `1f5106a` | `.env` configured, README initialized |
+| 2026-11-18 | *(today)* | README fully rewritten — architecture, DB design, pipeline walkthrough, quick start |
+
+> [!NOTE]
+> This changelog is kept up to date automatically as the project progresses.
+
+## 9. Project Structure
+
+```
+Chanakya-Research-Commons/
+├── docker-compose.yml          # Infrastructure: Postgres, MinIO, Ollama
+├── .env                        # Environment variables (not committed)
+├── .gitignore
+├── README.md
+│
+├── db/
+│   └── schema.sql              # Full DDL — both public (OLTP) and dw (OLAP) schemas
+│
+├── data_pipeline/
+│   └── seed_database.py        # End-to-end data pipeline script
+│
+├── evaluation/
+│   └── ground_truth.json       # Generated after seeding — duplicate pairs, spam IDs, spike topics
+│
+├── backend/                    # (API layer — WIP)
+├── frontend/                   # (UI layer — WIP)
+└── docs/                       # (Additional documentation — WIP)
+```
