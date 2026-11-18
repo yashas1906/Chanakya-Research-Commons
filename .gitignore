@@ -1,0 +1,116 @@
+# =============================================================
+# Chanakya Research Commons — .gitignore
+# =============================================================
+
+# ── Python virtual environment ────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Python cache & compiled files ────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# ── Distribution / packaging ──────────────────────────────────
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+wheels/
+
+# ── pip ───────────────────────────────────────────────────────
+pip-log.txt
+pip-delete-this-directory.txt
+
+# ── Jupyter / IPython ─────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── Testing & coverage ────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
+
+# ── Environment / secrets ─────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── IDE & editor folders ──────────────────────────────────────
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+*.swo
+*~
+
+# ── OS generated files ────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ── Docker volumes (local bind mounts, not repo files) ────────
+docker-volumes/
+pg_data/
+minio_data/
+ollama_data/
+
+# ── MinIO / data lake local cache ─────────────────────────────
+raw-ingestion/
+minio/
+
+# ── Model weights & large binary files ────────────────────────
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+models/
+.cache/
+
+# ── Sentence-transformers cache ───────────────────────────────
+sentence_transformers/
+transformers_cache/
+
+# ── Evaluation outputs (generated, not source) ────────────────
+# Keep the directory but ignore generated files
+evaluation/*.json
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Node (if frontend uses npm/pnpm) ──────────────────────────
+node_modules/
+.pnpm-store/
+
+# ── Misc ──────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.temp
+.mypy_cache/
+.ruff_cache/
