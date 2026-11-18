@@ -351,6 +351,7 @@ Chanakya-Research-Commons/
 | 2026-11-18 | `1a8af58` | Setup: Docker Compose, schema.sql, seed_database.py added |
 | 2026-11-18 | `1f5106a` | `.env` configured, README initialized |
 | 2026-11-18 | *(today)* | README fully rewritten — architecture, DB design, pipeline walkthrough, quick start |
+| 2026-11-19 | `chore` | `.gitignore` written from scratch; `.venv` (21,484 files) removed from git index; repo cleaned to 5 tracked source files |
 
 > [!NOTE]
 > This changelog is kept up to date automatically as the project progresses.
