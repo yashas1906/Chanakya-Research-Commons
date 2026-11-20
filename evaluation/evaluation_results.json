@@ -1,0 +1,56 @@
+{
+  "F4_F5_deduplication": {
+    "method": "MinHash + LSH (128 permutations, threshold=0.65)",
+    "baseline_exact_title_f1": 0.0,
+    "true_positives": 30,
+    "false_positives": 11,
+    "false_negatives": 0,
+    "precision": 0.7317,
+    "recall": 1.0,
+    "f1_score": 0.8451
+  },
+  "F5_unified_search": {
+    "queries_evaluated": 6,
+    "baseline_sql_ilike": {
+      "precision_at_5": 0.2,
+      "mrr": 0.3333
+    },
+    "hybrid_rrf_pgvector_pagerank": {
+      "precision_at_5": 0.8333,
+      "mrr": 0.8333
+    }
+  },
+  "F6_recommendations": {
+    "users_evaluated": 20,
+    "baseline_global_popularity_relevance_at_5": 0.16,
+    "content_based_pgvector_relevance_at_5": 0.97
+  },
+  "F7_trends_and_anomalies": {
+    "topic_spike_detection": {
+      "planted_spikes": [
+        "CRISPR gene editing",
+        "data privacy law",
+        "graph neural networks"
+      ],
+      "detected_top_3": [
+        "CRISPR gene editing",
+        "data privacy law",
+        "graph neural networks"
+      ],
+      "recall_at_3": 1.0
+    },
+    "spam_detection_isolation_forest": {
+      "true_positives": 5,
+      "false_positives": 1,
+      "false_negatives": 0,
+      "precision": 0.8333,
+      "recall": 1.0,
+      "f1_score": 0.9091
+    }
+  },
+  "F8_rag_retrieval": {
+    "questions_tested": 3,
+    "avg_retrieval_latency_ms": 18.63,
+    "avg_top1_passage_cosine_sim": 0.7335
+  }
+}

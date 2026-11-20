@@ -1,312 +1,423 @@
 # Chanakya Research Commons (CRC)
 
-> **DMW (Data Mining & Warehousing) Course Project** — Sem 5, Chanakya University  
-> A full-stack academic research platform that combines an operational PostgreSQL database, a star-schema data warehouse, vector/full-text search, and a MinIO-backed raw data lake — seeded entirely with real papers from the OpenAlex API.
+> **DMW (Data Mining & Warehousing) Course Project** — Semester 5, Chanakya University  
+> An intelligent academic research commons combining an operational PostgreSQL/pgvector database, a star-schema data warehouse, graph mining (PageRank), vector/hybrid search (RRF), association rule mining (FP-Growth), unsupervised anomaly detection (Isolation Forest), RAG with local LLM (Ollama), and a dual frontend (Next.js + Instant Static React UI). Seeded with live research literature from the OpenAlex API and archived to an S3-compatible raw data lake (MinIO).
 
 ---
 
 ## Table of Contents
 
 1. [Project Overview](#1-project-overview)
-2. [Architecture at a Glance](#2-architecture-at-a-glance)
-3. [Core Concepts & Features](#3-core-concepts--features)
-4. [Database Design](#4-database-design)
-5. [Data Pipeline — How the Database is Set Up](#5-data-pipeline--how-the-database-is-set-up)
-6. [Infrastructure Setup (Docker)](#6-infrastructure-setup-docker)
-7. [Quick Start](#7-quick-start)
-8. [Environment Variables](#8-environment-variables)
-9. [Project Structure](#9-project-structure)
+2. [End-to-End System Architecture](#2-end-to-end-system-architecture)
+3. [DMW Core Concepts & Feature Mapping](#3-dmw-core-concepts--feature-mapping)
+4. [Database Design & Schema Architecture](#4-database-design--schema-architecture)
+   - [4.1 Operational / OLTP Schema (`public`)](#41-operational--oltp-schema-public)
+   - [4.2 Data Warehouse / OLAP Schema (`dw` Star Schema)](#42-data-warehouse--olap-schema-dw-star-schema)
+   - [4.3 Vector & Indexing Strategy](#43-vector--indexing-strategy)
+5. [Data Pipeline & Ingestion Engine](#5-data-pipeline--ingestion-engine)
+   - [5.1 Stage 1: Ingestion & Seeding (`seed_database.py`)](#51-stage-1-ingestion--seeding-seed_databasepy)
+   - [5.2 Stage 2: Deduplication, PageRank & Star Schema ELT (`run_dw_elt.py`)](#52-stage-2-deduplication-pagerank--star-schema-elt-run_dw_eltpy)
+6. [Backend API Architecture (FastAPI)](#6-backend-api-architecture-fastapi)
+7. [Frontend Applications](#7-frontend-applications)
+   - [7.1 Instant Browser UI (`frontend_static/index.html`)](#71-instant-browser-ui-frontend_staticindexhtml)
+   - [7.2 Production Next.js App Router (`frontend/`)](#72-production-nextjs-app-router-frontend)
+8. [Evaluation Framework & Benchmarks](#8-evaluation-framework--benchmarks)
+9. [Infrastructure Setup (Docker)](#9-infrastructure-setup-docker)
+10. [Quick Start Guide](#10-quick-start-guide)
+11. [Environment Variables](#11-environment-variables)
+12. [Project Structure](#12-project-structure)
+13. [Changelog](#13-changelog)
 
 ---
 
 ## 1. Project Overview
 
-Chanakya Research Commons is a research-community platform for Chanakya University members (students, faculty, researchers, admins) across six departments. It allows users to:
+Chanakya Research Commons is designed for university research communities (students, faculty, scholars, and administrators) spanning six key academic schools:
+- **Computer Science & Artificial Intelligence**
+- **Electronics & Communication**
+- **Biotechnology & Life Sciences**
+- **Management & Commerce**
+- **School of Law & Public Policy**
+- **Liberal Arts & Humanities**
 
-- Discover and save academic papers
-- Discuss papers via posts and threaded comments
-- Follow researchers and research topics
-- Run semantic (vector) and full-text search over a live paper corpus
-- Analyze community research trends via a star-schema data warehouse
-
-The project exercises key DMW concepts: **data ingestion from external APIs**, **schema design** (OLTP + OLAP), **vector indexing**, **MinHash-based duplicate detection**, **spam detection**, and **trend anomaly tracking**.
-
----
-
-## 2. Architecture at a Glance
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    OpenAlex Public API                       │
-│          (real research papers, free & open)                 │
-└───────────────────────┬─────────────────────────────────────┘
-                        │ HTTP fetch (per topic/dept)
-                        ▼
-┌─────────────────────────────────────────────────────────────┐
-│          seed_database.py  (Python data pipeline)           │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌────────────┐  │
-│  │ OpenAlex Fetch  │  │ Embedding Model │  │  MinHash   │  │
-│  │  (requests)     │  │ all-MiniLM-L6-v2│  │ (128-perm) │  │
-│  └────────┬────────┘  └────────┬────────┘  └─────┬──────┘  │
-└───────────┼────────────────────┼─────────────────┼─────────┘
-            │                    │                  │
-     raw JSON archived     384-dim vectors     minhash_signature
-            │                    │                  │
-            ▼                    ▼                  ▼
-┌──────────────────┐    ┌────────────────────────────────────┐
-│  MinIO (S3-like) │    │   PostgreSQL 16 + pgvector          │
-│  raw-ingestion/  │    │                                    │
-│  openalex/*.json │    │   public schema  (OLTP)            │
-│                  │    │   dw schema      (OLAP / Star)     │
-└──────────────────┘    └────────────────────────────────────┘
-                                      │
-                              Ollama (llama3.2:3b)
-                              Local LLM for RAG /
-                              Research Assistant
-```
+The platform addresses core challenges in university research lifecycle management:
+1. **Literature Discovery & Deduplication**: Harvesting canonical papers across disciplines, deduplicating preprints and versioned works via MinHash Locality-Sensitive Hashing (LSH).
+2. **Unified Hybrid Search**: Blending semantic vectors (HNSW cosine similarity), lexical full-text search (`tsvector` + GIN), and citation network authority (PageRank) via Reciprocal Rank Fusion (RRF).
+3. **Collaborative Research Graph**: Modeling social follows, paper saves, discussions, and multi-department interaction facts.
+4. **Intelligent Recommendations**: Combining vector similarity with Market Basket Analysis (FP-Growth Association Rule Mining) to discover "Users Who Saved X Also Saved Y".
+5. **Community Health & Trend Analytics**: Sliding-window spike detection for emerging topics and unsupervised Isolation Forests to flag bot/spam bursts.
+6. **Grounded Question Answering (RAG)**: Chunk-level semantic retrieval coupled with a local Ollama LLM (`llama3.2:3b`) for citation-backed research assistance.
+7. **Institutional Decision Support**: A dimensional Star Schema tracking research throughput, departmental velocity, and interdisciplinary collaboration.
 
 ---
 
-## 3. Core Concepts & Features
+## 2. End-to-End System Architecture
 
-| Feature | DMW Concept Demonstrated |
-|---|---|
-| **F1 — Social Graph** | Relational modeling, foreign keys, self-referencing tables |
-| **F2 — Posts & Discussions** | Full-text search with `tsvector` + GIN index |
-| **F3 — Shared Paper Library** | Many-to-many via junction tables, save counts |
-| **F4 — Raw Data Lake** | External API ingestion → MinIO (S3-compatible object store) |
-| **F5 — Citation Graph** | Graph-structured data, PageRank scoring |
-| **F6 — Personal Collections** | Nested relational hierarchy, user-scoped access |
-| **F7 — Trend Anomaly Detection** | Time-series events table, planted topic spikes |
-| **F8 — Semantic Search / RAG** | Vector embeddings with `pgvector`, HNSW index, paper chunking |
-| **F9 — Data Warehouse** | Star schema (`dw` schema) with fact & dimension tables |
-| **Duplicate Detection** | MinHash (128-perm, Jaccard similarity) with 30 planted near-duplicates |
-| **Spam Detection** | Planted spam accounts + burst-posting pattern for ground-truth evaluation |
+```
+                                  ┌────────────────────────────────┐
+                                  │      OpenAlex Open API         │
+                                  │   (Real Research Literature)   │
+                                  └───────────────┬────────────────┘
+                                                  │ HTTP REST (24 Topics across 6 Schools)
+                                                  ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 DATA PIPELINE & ELT ENGINE                                      │
+│                                                                                                 │
+│  [ Stage 1: seed_database.py ]                                                                  │
+│    • Raw Payload Extraction ───────────► MinIO Data Lake (`raw-ingestion/openalex/*.json`)      │
+│    • 128-Perm MinHash Signatures                                                                │
+│    • all-MiniLM-L6-v2 Embeddings (384-d) ──► PostgreSQL `papers` & `paper_chunks`              │
+│    • Synthetic Member Generation (60 users: 55 authentic + 5 spam)                              │
+│    • Activity Simulator (10,500+ events, 600 posts, 2,000 comments, 3 planted topic spikes)     │
+│                                                                                                 │
+│  [ Stage 2: run_dw_elt.py ]                                                                     │
+│    • MinHashLSH Deduplication (threshold=0.65) ──► evaluation/predicted_duplicates.json         │
+│    • NetworkX Citation Graph PageRank (alpha=0.85) ──► papers.pagerank_score                    │
+│    • Agglomerative Clustering on Topic Vectors ──► 4 Broad Research Clusters                    │
+│    • Star Schema ELT ──► dw.dim_*, dw.fact_research_activity, dw.fact_dept_collaboration       │
+└────────────────────────────────────────┬────────────────────────────────────────────────────────┘
+                                         │
+                                         ▼
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                  POSTGRESQL 16 + PGVECTOR                                       │
+│                                                                                                 │
+│   ┌───────────────────────────────────────────┐   ┌──────────────────────────────────────────┐  │
+│   │        Operational / OLTP (`public`)      │   │        Data Warehouse / OLAP (`dw`)      │  │
+│   │ • users (profile_embedding)               │   │ • dim_date (academic semester)           │  │
+│   │ • papers (embedding, search_tsv, minhash) │   │ • dim_member (role, dept, active)        │  │
+│   │ • paper_sources (MinIO data lake path)    │   │ • dim_paper (PageRank tier)              │  │
+│   │ • paper_chunks (chunk_embedding for RAG)  │   │ • dim_topic (parent cluster)             │  │
+│   │ • library_saves, collections              │   │ • fact_research_activity                 │  │
+│   │ • posts, comments, post_upvotes           │   │ • fact_dept_collaboration                │  │
+│   │ • activity_events, system_alerts          │   │                                          │  │
+│   └───────────────────────────────────────────┘   └──────────────────────────────────────────┘  │
+└───────────────────────┬─────────────────────────────────────────────────┬───────────────────────┘
+                        │                                                 │
+                        ▼                                                 ▼
+┌─────────────────────────────────────────────────┐     ┌─────────────────────────────────────────┐
+│                FASTAPI BACKEND                  │     │           LOCAL LLM (OLLAMA)            │
+│                 (Port: 8000)                    │◄───►│              (Port: 11434)              │
+│  • Hybrid 4-Panel Search (RRF + PageRank)       │     │ • llama3.2:3b                           │
+│  • Personalized Feed & Recommendations          │     │ • Prompt grounding & inline citations  │
+│  • Market Basket FP-Growth ("Also Saved")       │     └─────────────────────────────────────────┘
+│  • Sliding-Window Trend Spikes                  │
+│  • Isolation Forest Spam Scoring                │
+│  • Star Schema OLAP Analytics Endpoint          │
+└───────────────────────┬─────────────────────────┘
+                        │
+         ┌──────────────┴──────────────┐
+         ▼                             ▼
+┌───────────────────────────┐  ┌────────────────────────────────────────┐
+│  INSTANT PREVIEW FRONTEND │  │        FULL NEXT.JS FRONTEND           │
+│  (`frontend_static/`)     │  │             (`frontend/`)              │
+│  • Zero-build React 18    │  │ • Next.js 14 App Router, TypeScript    │
+│  • Tailwind CSS via CDN   │  │ • Modern components & dashboard        │
+│  • Runs directly in browser│ │ • npm run dev (Port: 3000)             │
+└───────────────────────────┘  └────────────────────────────────────────┘
+```
 
 ---
 
-## 4. Database Design
+## 3. DMW Core Concepts & Feature Mapping
 
-The database (`chanakya_commons`) lives in PostgreSQL 16 with the `pgvector` extension and contains **two schemas**:
+| Project Feature | Practical Implementation | Core DMW Concept |
+|---|---|---|
+| **F1: Member Graph** | 60 synthetic members, interest tags, 384-d profile vectors, user-follows | Relational Data Modeling, Vector Representation |
+| **F2: Dynamic Feed** | Cosine similarity against user profile + follow network boost | Content-Based Filtering & Social Graph Weighting |
+| **F3: University Library** | Shared canonical repository, user collections, private annotations | Relational Junctions, Entity Consolidation |
+| **F4: Raw Ingestion Lake** | OpenAlex payload capture, raw JSON archived to MinIO bucket | Data Ingestion, S3-Compatible Object Storage |
+| **F5: Deduplication** | 128-permutation MinHash + LSH with Jaccard threshold = 0.65 | Dimensionality Reduction, Locality-Sensitive Hashing |
+| **F5: Authority Scoring** | Directed citation network analysis using NetworkX PageRank ($\alpha=0.85$) | Link Analysis, Web Mining, Graph Centrality |
+| **F5: Hybrid Search** | 4-panel RRF: $1/(60+s_{rank}) + 1/(60+k_{rank}) + 10 \times \text{PageRank}$ | Information Retrieval, Reciprocal Rank Fusion |
+| **F6: "Also Saved" Rules** | Frequent itemset mining over library save baskets (`mlxtend`) | Association Rule Mining, FP-Growth Algorithm |
+| **F7: Trend Detection** | 7-day sliding window counts compared to 30-day baseline average | Time-Series Stream Mining, Concept Drift |
+| **F7: Bot/Spam Filter** | Unsupervised Isolation Forest on post frequency, delta, upvotes | Outlier & Anomaly Detection |
+| **F8: Grounded RAG** | Abstract chunking (2 chunks/paper), vector cosine match, Ollama LLM | Retrieval-Augmented Generation, Dense Retrieval |
+| **F9: Data Warehouse** | Date, Member, Topic, Paper dimensions; Research & Collaboration facts | Dimensional Modeling, Star Schema, OLAP Cubes |
 
-### 4.1 `public` — Operational / OLTP Schema
+---
+
+## 4. Database Design & Schema Architecture
+
+The database `chanakya_commons` runs inside PostgreSQL 16 equipped with `pgvector` and `pg_trgm`.
+
+### 4.1 Operational / OLTP Schema (`public`)
 
 ```
-users ──────────────────────────────────────────┐
-  │  user_follows (follower ↔ followee)          │
-  │  topic_follows (user ↔ topic_tag)            │
-  │                                              │
-  ├──→ library_saves ──→ papers ←── paper_sources│
-  │       │                │                    │
-  │   collections      paper_citations           │
-  │                    paper_chunks (for RAG)    │
-  │                                              │
-  ├──→ posts ──→ comments                        │
-  │       └──→ post_upvotes                      │
-  │                                              │
-  └──→ activity_events                           │
-        system_alerts ───────────────────────────┘
+users (UUID PK, university_id, full_name, profile_embedding, role, department, spam_score)
+  ├── user_follows (follower_id, followee_id)
+  ├── topic_follows (user_id, topic_tag)
+  ├── collections (collection_id, user_id, name)
+  ├── library_saves (save_id, user_id, paper_id, collection_id, private_notes)
+  │         │
+  │         ▼
+  │     papers (paper_id, canonical_title, abstract, authors, embedding, search_tsv, pagerank_score)
+  │       ├── paper_sources (source_id, paper_id, source_name, raw_minio_path)
+  │       ├── paper_citations (citing_paper_id, cited_paper_id)
+  │       └── paper_chunks (chunk_id, paper_id, chunk_index, chunk_embedding)
+  │
+  ├── posts (post_id, author_id, attached_paper_id, post_embedding, search_tsv, upvotes)
+  │     ├── comments (comment_id, post_id, author_id, parent_comment_id)
+  │     └── post_upvotes (user_id, post_id)
+  │
+  └── activity_events (event_id BIGSERIAL, user_id, event_type, target_id, topic_tags, occurred_at)
 ```
 
-**Key tables:**
+### 4.2 Data Warehouse / OLAP Schema (`dw` Star Schema)
 
-| Table | Purpose |
-|---|---|
-| `users` | Members with role, department, `profile_embedding VECTOR(384)`, spam/synthetic flags |
-| `user_follows` | Social follow graph (many-to-many, self-referencing) |
-| `topic_follows` | Topic subscriptions per user |
-| `papers` | Canonical paper records; `embedding VECTOR(384)`, `search_tsv TSVECTOR` (auto-generated), `minhash_signature BYTEA` |
-| `paper_sources` | Provenance — which external source (OpenAlex, ArXiv, etc.) and MinIO path |
-| `paper_citations` | Citation edges between papers |
-| `paper_chunks` | Abstract split into 2 chunks per paper, each with its own `chunk_embedding` for RAG |
-| `collections` | User-created reading lists |
-| `library_saves` | Saves a paper into a collection with private notes |
-| `posts` | Discussion posts; `post_embedding VECTOR(384)`, `search_tsv TSVECTOR` |
-| `comments` | Threaded comments on posts (self-referencing `parent_comment_id`) |
-| `post_upvotes` | Upvote junction table |
-| `activity_events` | Append-only event log (`save_paper`, `view_paper`, `search`, `create_post`) |
-| `system_alerts` | Anomaly/spam alerts with severity score |
+```
+             ┌─────────────────────────┐
+             │       dw.dim_date       │
+             │ (date_key, quarter,     │
+             │  academic_semester)     │
+             └────────────┬────────────┘
+                          │
+  ┌─────────────────┐     │     ┌─────────────────┐
+  │  dw.dim_member  ├─────┼─────┤   dw.dim_topic  │
+  │ (member_key,    │     │     │ (topic_key,     │
+  │  role, dept)    │     │     │  parent_cluster)│
+  └─────────────────┘     │     └─────────────────┘
+                          │
+                          ▼
+            ┌───────────────────────────┐
+            │ dw.fact_research_activity │
+            │ (date_key, member_key,    │
+            │  topic_key, paper_key,    │
+            │  saves, posts, views)     │
+            └─────────────┬─────────────┘
+                          │
+             ┌────────────┴────────────┐
+             │       dw.dim_paper      │
+             │ (paper_key, title,      │
+             │  pagerank_tier)         │
+             └─────────────────────────┘
 
-**Indexes:**
+             ┌───────────────────────────┐
+             │dw.fact_dept_collaboration │
+             │(date_key, source_dept,    │
+             │ target_dept, interactions)│
+             └───────────────────────────┘
+```
+
+### 4.3 Vector & Indexing Strategy
 
 ```sql
--- Vector similarity search (Hierarchical Navigable Small World)
+-- Hierarchical Navigable Small World (HNSW) vector indexing (Cosine metric)
 CREATE INDEX idx_papers_embedding ON papers USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX idx_chunks_embedding ON paper_chunks USING hnsw (chunk_embedding vector_cosine_ops);
 CREATE INDEX idx_users_embedding  ON users  USING hnsw (profile_embedding vector_cosine_ops);
 CREATE INDEX idx_posts_embedding  ON posts  USING hnsw (post_embedding vector_cosine_ops);
 
--- Full-text search
+-- Generalized Inverted Index (GIN) for English Full-Text Search
 CREATE INDEX idx_papers_tsv ON papers USING GIN (search_tsv);
 CREATE INDEX idx_posts_tsv  ON posts  USING GIN (search_tsv);
 
--- Time-series event log
+-- B-Tree index for Time-Series stream queries
 CREATE INDEX idx_events_time ON activity_events (occurred_at DESC);
 ```
 
-### 4.2 `dw` — Data Warehouse / OLAP Schema (Star Schema)
-
-```
-         dim_date
-             │
-dim_member ──┤
-             ├──→ fact_research_activity
-dim_topic  ──┤
-             │
-dim_paper  ──┘
-
-dim_date ──→ fact_dept_collaboration
-```
-
-| Table | Type | Description |
-|---|---|---|
-| `dw.dim_date` | Dimension | Calendar breakdown: year, quarter, month, week, academic semester |
-| `dw.dim_member` | Dimension | Slowly-changing user snapshot (role, department) |
-| `dw.dim_topic` | Dimension | Research topics with parent cluster |
-| `dw.dim_paper` | Dimension | Paper snapshot with PageRank tier |
-| `dw.fact_research_activity` | Fact | Saves, posts, comments, upvotes, views — per member × topic × paper × date |
-| `dw.fact_dept_collaboration` | Fact | Cross-department interaction counts — for collaboration network analysis |
-
 ---
 
-## 5. Data Pipeline — How the Database is Set Up
+## 5. Data Pipeline & Ingestion Engine
 
-Everything is handled by **`data_pipeline/seed_database.py`**.  
-Run it once after `docker compose up -d` to fully populate the database.
+### 5.1 Stage 1: Ingestion & Seeding (`seed_database.py`)
 
-### Step-by-step flow
+- **OpenAlex Live Extraction**: Fetches literature across 24 academic topics for 6 schools (`has_abstract:true`, `publication_year:>2021`).
+- **Data Lake Storage**: Uploads raw unaltered response JSON payloads to MinIO (`raw-ingestion/openalex/*.json`).
+- **Planted Near-Duplicates**: Injects 30 synthetic near-duplicates with perturbed titles (`:` $\rightarrow$ `-`, `and` $\rightarrow$ `&`, appending `(Preprint)`).
+- **Dense Vector Embedding**: Uses `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions) to encode all paper titles+abstracts, user bios, and discussion posts.
+- **MinHash Fingerprinting**: Generates 128-permutation hash values over shingled paper tokens stored as `BYTEA`.
+- **RAG Chunking**: Splits paper abstracts into 2 indexed chunks with individual chunk embeddings in `paper_chunks`.
+- **Community Simulation**:
+  - 60 users (55 authentic researchers + 5 planted spammers).
+  - 60 personal collections and ~720 paper saves.
+  - 600 discussion posts (120 rapid burst posts from spammers).
+  - 2,000 threaded comments.
+  - 10,500 activity logs with deliberate 5-day traffic spikes on 3 topics: *Graph Neural Networks*, *CRISPR Gene Editing*, and *Data Privacy Law*.
+- **Ground Truth Output**: Emits `evaluation/ground_truth.json`.
 
-```
-1. Connect to MinIO & PostgreSQL
-        │
-2. Fetch real papers from OpenAlex API
-   • 6 departments × 4 topics = 24 API calls
-   • 30 papers per topic → ~720 unique papers (deduplicated)
-   • Raw JSON responses archived to MinIO: raw-ingestion/openalex/<topic>_<date>.json
-        │
-3. Plant 30 near-duplicate papers
-   • Titles mutated (": " → " -", " and " → " &", append " (Preprint)")
-   • No DOI on duplicates → MinHash will detect them
-   • Ground truth saved to evaluation/ground_truth.json
-        │
-4. Compute sentence embeddings (all-MiniLM-L6-v2, 384 dims)
-   • For all papers (title + first 600 chars of abstract)
-   • For user bios
-   • For posts (title + body)
-        │
-5. Compute MinHash signatures (128 permutations, Jaccard similarity)
-   • Per paper: tokens from title + first 300 chars of abstract
-   • Stored as BYTEA in papers.minhash_signature
-        │
-6. Insert into PostgreSQL
-   ├─ papers (with embedding + minhash_signature)
-   ├─ paper_sources (OpenAlex ID + MinIO path provenance)
-   ├─ paper_chunks (2 chunks per abstract, each with chunk_embedding for RAG)
-   └─ paper_citations (intra-corpus citation edges from referenced_works)
-        │
-7. Generate 60 synthetic Chanakya University members
-   • 55 normal members (students, faculty, researchers, 1 admin)
-   • 5 planted spam accounts (indices 55-59)
-   • Members distributed across 6 departments
-   • Profile embeddings computed from bios
-        │
-8. Build social graph
-   • Each user follows ~4 same-dept + ~2 cross-dept colleagues
-   • Each user subscribes to 2 research topic tags
-        │
-9. Generate activity data
-   ├─ 60 collections (1 per user)
-   ├─ ~720 library saves (12 dept-relevant papers per user)
-   ├─ 600 posts:
-   │    • 120 burst-spam posts from the 5 spam accounts (created within 2 hours)
-   │    • 480 legitimate research discussion posts
-   ├─ 2,000 comments on legitimate posts
-   └─ 10,500 view + search events
-        • 16% are recent spikes (last 5 days) on 3 planted "trending" topics:
-          ["graph neural networks", "CRISPR gene editing", "data privacy law"]
-        │
-10. Write evaluation/ground_truth.json
-    {
-      "duplicate_pairs": [...],   ← 30 paper pairs for MinHash eval
-      "spam_user_ids": [...],     ← 5 UUIDs for spam detection eval
-      "spike_topics": [...]       ← 3 topics for trend anomaly eval
-    }
-```
-
-### Key libraries used
-
-| Library | Purpose |
-|---|---|
-| `sentence-transformers` | Generate 384-dim embeddings (`all-MiniLM-L6-v2`) |
-| `datasketch` | MinHash with 128 permutations for near-duplicate detection |
-| `psycopg2` | PostgreSQL client; `execute_values` for bulk inserts |
-| `minio` | S3-compatible Python client for raw data lake |
-| `requests` | HTTP calls to OpenAlex API |
-| `python-dotenv` | Load credentials from `.env` |
-
----
-
-## 6. Infrastructure Setup (Docker)
-
-Three services are defined in `docker-compose.yml`:
-
-| Service | Image | Port | Role |
-|---|---|---|---|
-| `crc_postgres` | `pgvector/pgvector:pg16` | `5432` | Primary database; schema auto-applied on first run |
-| `crc_minio` | `minio/minio:latest` | `9000` (API) `9001` (Console) | Raw data lake / object store |
-| `crc_ollama` | `ollama/ollama:latest` | `11434` | Local LLM server for Research Assistant (RAG) |
-
-**Schema auto-initialization:** `db/schema.sql` is mounted to `/docker-entrypoint-initdb.d/01_schema.sql` — PostgreSQL runs it automatically on the very first container start.
-
-**Persistent volumes:** `pg_data`, `minio_data`, `ollama_data` — data survives container restarts.
-
----
-
-## 7. Quick Start
+### 5.2 Stage 2: Deduplication, PageRank & Star Schema ELT (`run_dw_elt.py`)
 
 ```powershell
-# 1. Clone & enter the project directory
-cd "Chanakya-Research-Commons"
-
-# 2. Start all infrastructure services
-docker compose up -d
-
-# 3. Verify containers are running
-docker compose ps
-
-# 4. Set up Python environment
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-
-# 5. Install dependencies
-pip install psycopg2-binary minio sentence-transformers datasketch requests python-dotenv
-
-# 6. Seed the database (fetches real papers, generates synthetic users & events)
-cd data_pipeline
-python seed_database.py
-
-# 7. Verify data was inserted
-docker exec -it crc_postgres psql -U crc_admin -d chanakya_commons -c "SELECT COUNT(*) FROM papers;"
+python data_pipeline/run_dw_elt.py
 ```
 
-> [!NOTE]
-> `seed_database.py` downloads the `all-MiniLM-L6-v2` model (~90 MB) on first run and makes ~24 HTTP requests to `api.openalex.org`. Ensure you have internet access when running it.
-
-> [!TIP]
-> MinIO console is available at **http://localhost:9001** (login: `minioadmin` / `minioadmin_pass`).  
-> Inspect raw ingested JSON under the `raw-ingestion` bucket → `openalex/` prefix.
+1. **MinHash + LSH Near-Duplicate Detection**: Loads 128-perm signatures into `MinHashLSH(threshold=0.65)`, detects preprint pairs, and writes predictions to `evaluation/predicted_duplicates.json`.
+2. **PageRank Citation Authority**: Builds a directed graph $G = (V, E)$ using NetworkX over `paper_citations`, computes `nx.pagerank(alpha=0.85)`, and writes continuous authority scores back to `papers.pagerank_score`.
+3. **Star Schema Transformation**:
+   - `dw.dim_date`: Extracted from all activity timestamps with semester tags.
+   - `dw.dim_member`: Role, department, and spam status.
+   - `dw.dim_paper`: Categorized into `High`, `Medium`, and `Low` PageRank tiers using 80th and 40th percentiles.
+   - `dw.dim_topic`: Hierarchical `AgglomerativeClustering` over TF-IDF n-grams grouping 24 topics into 4 primary clusters:
+     1. *Intelligent Systems & Computing*
+     2. *Life Sciences & Bio-Engineering*
+     3. *Policy, Governance & Society*
+     4. *Applied Analytics & Hardware*
+   - `dw.fact_research_activity`: Aggregates activity events across date, member, topic, and paper.
+   - `dw.fact_dept_collaboration`: Aggregates cross-department user follows and inter-department comment interactions.
 
 ---
 
-## 8. Environment Variables
+## 6. Backend API Architecture (FastAPI)
 
-Configured in `.env` (never commit real secrets):
+The API service is located at `backend/main.py`.
+
+### Key Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/users` | List university members with department filtering |
+| `GET` | `/api/feed` | Personalized feed ranked by profile vector cosine similarity + social graph weight |
+| `POST` | `/api/posts` | Create new post with auto-generated embeddings and activity stream events |
+| `GET` | `/api/library` | Browse Chanakya Shared Library or personal saved papers |
+| `POST` | `/api/library/save` | Save paper to user library with private annotations |
+| `GET` | `/api/search` | **4-Panel Unified Hybrid Search** using Reciprocal Rank Fusion (RRF) |
+| `GET` | `/api/recommendations/{user_id}` | Content-based paper and collaborator recommendations |
+| `GET` | `/api/papers/{paper_id}/also-saved` | **FP-Growth Association Rules** for library save basket analysis |
+| `GET` | `/api/trends-and-anomalies` | 7-day topic spike ratios + **Isolation Forest** bot/spam detection |
+| `POST` | `/api/assistant/ask` | **RAG Research Assistant** with passage retrieval & local Ollama response |
+| `GET` | `/api/analytics/overview` | **Star Schema OLAP Queries** for department activity, collaboration, and trends |
+
+### Running the Backend
+
+```powershell
+cd backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Interactive OpenAPI docs: **http://localhost:8000/docs**
+
+---
+
+## 7. Frontend Applications
+
+### 7.1 Instant Browser UI (`frontend_static/index.html`)
+
+For immediate evaluation without Node.js build dependencies, `frontend_static/index.html` offers a single-file, zero-build React 18 application with Tailwind CSS:
+- Live switcher between all 60 synthetic members.
+- Interactive 4-Panel Unified Search (External, Library, People, Posts).
+- Personalized Feed with one-click post creation.
+- Personal & Shared Library views with FP-Growth "Also Saved" drawers.
+- Grounded Research Assistant with citation badges.
+- Institutional Analytics with topic breakdown, monthly trends, and collaboration matrices.
+- Community Health tab showing Isolation Forest spam flags and sliding-window topic spikes.
+
+**How to open:** Simply open `frontend_static/index.html` in any web browser, or serve it via:
+```powershell
+python -m http.server 3000 --directory frontend_static
+```
+
+### 7.2 Production Next.js App Router (`frontend/`)
+
+A modern Next.js 14 App Router application with TypeScript and Tailwind CSS:
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+Available at **http://localhost:3000**.
+
+---
+
+## 8. Evaluation Framework & Benchmarks
+
+Run the complete evaluation suite against the seeded corpus:
+
+```powershell
+python evaluation/evaluate_all.py
+```
+
+### Summary Benchmark Results
+
+Results generated by `evaluation/evaluate_all.py` and saved to `evaluation/evaluation_results.json`:
+
+| Feature & Task | Evaluation Metric | Baseline Approach | CRC Intelligent Approach | Improvement |
+|---|---|---|---|---|
+| **F4/F5: Deduplication** | F1-Score | Exact Normalized Title (`F1 = 0.00`) | **MinHash + LSH (128 perm, $\theta=0.65$)** | **$0.8451$ F1** (Recall: 1.0, TP: 30/30) |
+| **F5: Unified Search** | Precision@5 | SQL `ILIKE` (`P@5 = 0.2000`) | **Hybrid RRF (pgvector + ts_rank + PageRank)** | **$0.8333$** ($+316\%$ boost) |
+| **F5: Search Ranking** | MRR | SQL `ILIKE` (`MRR = 0.3333`) | **Hybrid RRF** | **$0.8333$** ($+150\%$ boost) |
+| **F6: Recommendations** | Relevance@5 | Global Popularity (`0.1600`) | **Dense Cosine Profile Similarity** | **$0.9700$** ($+506\%$ boost) |
+| **F7: Topic Spike Detection** | Recall@3 | Static Count | **Sliding 7-day vs 30-day Ratio** | **$1.0000$** (3/3 spikes identified) |
+| **F7: Spam Outlier Detection** | F1-Score | Rule-based Filter | **Isolation Forest (Contamination=0.09)** | **$0.9091$ F1** (Precision: 0.833, Recall: 1.0) |
+| **F8: RAG Passage Retrieval** | Avg Latency | Full-text query | **Chunk HNSW Vector Search** | **$18.63\text{ ms}$** (Avg Cosine: $0.7335$) |
+
+---
+
+## 9. Infrastructure Setup (Docker)
+
+Defined in `docker-compose.yml`:
+
+| Service | Container | Image | Host Port | Internal Port | Role |
+|---|---|---|---|---|---|
+| PostgreSQL | `crc_postgres` | `pgvector/pgvector:pg16` | **5434** | 5432 | Primary Relational & Vector DB (`public` + `dw`) |
+| MinIO | `crc_minio` | `minio/minio:latest` | **9000** / **9001** | 9000 / 9001 | Raw S3-Compatible Object Store & Ingestion Lake |
+| Ollama | `crc_ollama` | `ollama/ollama:latest` | **11434** | 11434 | Local LLM inference engine (`llama3.2:3b`) |
+
+> [!NOTE]
+> PostgreSQL is mapped to host port **5434** (`5434:5432`) to prevent conflicts with pre-existing local PostgreSQL instances on port 5432. All connection strings in `.env` reflect this mapping.
+
+---
+
+## 10. Quick Start Guide
+
+### Step 1: Start Infrastructure
+```powershell
+cd "Chanakya-Research-Commons"
+docker compose up -d
+docker compose ps
+```
+
+### Step 2: Set Up Python Virtual Environment
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install psycopg2-binary minio sentence-transformers datasketch requests python-dotenv fastapi uvicorn scikit-learn mlxtend networkx pandas numpy
+```
+
+### Step 3: Seed Database (Stage 1)
+```powershell
+python data_pipeline/seed_database.py
+```
+*Downloads embedding model, fetches ~720 papers from OpenAlex, archives raw JSON to MinIO, and seeds PostgreSQL.*
+
+### Step 4: Run Graph Mining & Star Schema ELT (Stage 2)
+```powershell
+python data_pipeline/run_dw_elt.py
+```
+*Executes MinHash LSH deduplication, computes PageRank, clusters topics, and populates `dw.*` star schema tables.*
+
+### Step 5: Run Evaluation Suite
+```powershell
+python evaluation/evaluate_all.py
+```
+*Verifies all metrics and updates `evaluation/evaluation_results.json`.*
+
+### Step 6: Pull Ollama Model (Optional for RAG)
+```powershell
+docker exec -it crc_ollama ollama pull llama3.2:3b
+```
+
+### Step 7: Launch Backend API
+```powershell
+cd backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Step 8: Open Frontend
+- **Instant UI**: Open `frontend_static/index.html` in your browser.
+- **Next.js UI**: `cd frontend && npm install && npm run dev` (visit http://localhost:3000).
+
+---
+
+## 11. Environment Variables
+
+Configured in `.env`:
 
 ```env
 POSTGRES_USER=crc_admin
 POSTGRES_PASSWORD=crc_secure_pass
 POSTGRES_DB=chanakya_commons
-DATABASE_URL=postgresql://crc_admin:crc_secure_pass@localhost:5432/chanakya_commons
+DATABASE_URL=postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons
 
 MINIO_ROOT_USER=minioadmin
 MINIO_ROOT_PASSWORD=minioadmin_pass
@@ -318,63 +429,49 @@ OLLAMA_MODEL=llama3.2:3b
 
 ---
 
-## 9. Project Structure
+## 12. Project Structure
 
 ```
 Chanakya-Research-Commons/
-├── docker-compose.yml          # Infrastructure: Postgres, MinIO, Ollama
-├── .env                        # Environment variables (not committed)
-├── .gitignore
-├── README.md
+├── docker-compose.yml              # Multi-container orchestration (PostgreSQL 16, MinIO, Ollama)
+├── .env                            # Environment variables (DB URL port 5434)
+├── .gitignore                      # Excludes venv, node_modules, cache, model checkpoints
+├── README.md                       # Comprehensive course project documentation
 │
 ├── db/
-│   └── schema.sql              # Full DDL — both public (OLTP) and dw (OLAP) schemas
+│   └── schema.sql                  # Complete DDL: extensions, OLTP public schema, dw star schema
 │
 ├── data_pipeline/
-│   └── seed_database.py        # End-to-end data pipeline script
+│   ├── seed_database.py            # Stage 1: OpenAlex fetch, MinIO lake, vector embeddings, synthetic data
+│   └── run_dw_elt.py               # Stage 2: MinHash LSH deduplication, NetworkX PageRank, star schema ELT
 │
-├── evaluation/
-│   └── ground_truth.json       # Generated after seeding — duplicate pairs, spam IDs, spike topics
+├── backend/
+│   └── main.py                     # FastAPI REST API: RRF search, FP-growth, Isolation Forest, RAG, OLAP
 │
-├── backend/                    # (API layer — WIP)
-├── frontend/                   # (UI layer — WIP)
-└── docs/                       # (Additional documentation — WIP)
+├── frontend_static/
+│   └── index.html                  # Instant zero-build single-file React 18 + Tailwind UI
+│
+├── frontend/                       # Full-stack Next.js 14 App Router application
+│   ├── app/                        # Pages, layouts, and global styles
+│   ├── package.json
+│   └── tsconfig.json
+│
+└── evaluation/
+    ├── ground_truth.json           # Planted duplicates, spam account IDs, topic spikes
+    ├── predicted_duplicates.json   # MinHash LSH predicted duplicate pairs
+    ├── evaluate_all.py             # Quantitative benchmark evaluation script
+    └── evaluation_results.json     # Final benchmark scores (Precision, Recall, F1, MRR)
 ```
 
 ---
 
-## 10. Changelog
+## 13. Changelog
 
-| Date | Commit | What Changed |
+| Date | Milestone | Description |
 |---|---|---|
-| 2026-11-18 | `e3b16bf` | Initial commit — project scaffolded |
-| 2026-11-18 | `1a8af58` | Setup: Docker Compose, schema.sql, seed_database.py added |
-| 2026-11-18 | `1f5106a` | `.env` configured, README initialized |
-| 2026-11-18 | *(today)* | README fully rewritten — architecture, DB design, pipeline walkthrough, quick start |
-| 2026-11-19 | `chore` | `.gitignore` written from scratch; `.venv` (21,484 files) removed from git index; repo cleaned to 5 tracked source files |
-
-> [!NOTE]
-> This changelog is kept up to date automatically as the project progresses.
-
-## 9. Project Structure
-
-```
-Chanakya-Research-Commons/
-├── docker-compose.yml          # Infrastructure: Postgres, MinIO, Ollama
-├── .env                        # Environment variables (not committed)
-├── .gitignore
-├── README.md
-│
-├── db/
-│   └── schema.sql              # Full DDL — both public (OLTP) and dw (OLAP) schemas
-│
-├── data_pipeline/
-│   └── seed_database.py        # End-to-end data pipeline script
-│
-├── evaluation/
-│   └── ground_truth.json       # Generated after seeding — duplicate pairs, spam IDs, spike topics
-│
-├── backend/                    # (API layer — WIP)
-├── frontend/                   # (UI layer — WIP)
-└── docs/                       # (Additional documentation — WIP)
-```
+| 2026-11-18 | `e3b16bf` | Project initialized and repository scaffolded |
+| 2026-11-18 | `1a8af58` | Infrastructure added: `docker-compose.yml`, `db/schema.sql`, `data_pipeline/seed_database.py` |
+| 2026-11-18 | `1f5106a` | Environment variables configured; basic documentation initialized |
+| 2026-11-19 | `37ae9ac` | `.gitignore` rewritten; untracked 21,484 `.venv` files; repository pruned |
+| 2026-11-19 | `a62c851` | Updated README changelog and repository tracking |
+| 2026-11-20 | Current | Database seeded; `run_dw_elt.py` added for PageRank & Star Schema ELT; `backend/main.py` complete with FastAPI (RRF, FP-Growth, Isolation Forest, RAG, OLAP); `frontend_static/index.html` instant UI added; Next.js app scaffolded; full evaluation benchmark suite implemented and documented. |
