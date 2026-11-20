@@ -96,9 +96,9 @@ models/
 sentence_transformers/
 transformers_cache/
 
-# ── Evaluation outputs (generated, not source) ────────────────
-# Keep the directory but ignore generated files
-evaluation/*.json
+# ── Evaluation outputs ─────────────────────────────────────────
+# Track evaluation benchmark results and ground truth
+!evaluation/*.json
 
 # ── Logs ──────────────────────────────────────────────────────
 *.log
