@@ -129,7 +129,10 @@ The platform addresses core challenges in university research lifecycle manageme
 | **F5: Deduplication** | 128-permutation MinHash + LSH with Jaccard threshold = 0.65 | Dimensionality Reduction, Locality-Sensitive Hashing |
 | **F5: Authority Scoring** | Directed citation network analysis using NetworkX PageRank ($\alpha=0.85$) | Link Analysis, Web Mining, Graph Centrality |
 | **F5: Hybrid Search** | 4-panel RRF: $1/(60+s_{rank}) + 1/(60+k_{rank}) + 10 \times \text{PageRank}$ | Information Retrieval, Reciprocal Rank Fusion |
+| **F5: Search Expansion** | High-lift association rules (`lift >= 1.5`) recommend related query topics | Query Expansion & Association Mining |
 | **F6: "Also Saved" Rules** | Frequent itemset mining over library save baskets (`mlxtend`) | Association Rule Mining, FP-Growth Algorithm |
+| **F6: Topic Baskets & Bundles** | Subgroup-stratified FP-Growth & FP-Max (`len >= 2`) on `dw.vw_paper_topic_baskets` | Maximal Frequent Itemsets & Multi-Level Association Rules |
+| **F6: Researcher Clustering** | Ward Agglomerative Clustering + discretized tertile trait rules (FP-Growth) | Hierarchical Clustering & Profile Discovery |
 | **F7: Trend Detection** | 7-day sliding window counts compared to 30-day baseline average | Time-Series Stream Mining, Concept Drift |
 | **F7: Bot/Spam Filter** | Unsupervised Isolation Forest on post frequency, delta, upvotes | Outlier & Anomaly Detection |
 | **F8: Grounded RAG** | Abstract chunking (2 chunks/paper), vector cosine match, Ollama LLM | Retrieval-Augmented Generation, Dense Retrieval |
@@ -277,6 +280,8 @@ The API service is located at `backend/main.py`.
 | `GET` | `/api/trends-and-anomalies` | 7-day topic spike ratios + **Isolation Forest** bot/spam detection |
 | `POST` | `/api/assistant/ask` | **RAG Research Assistant** with passage retrieval & local Ollama response |
 | `GET` | `/api/analytics/overview` | **Star Schema OLAP Queries** for department activity, collaboration, and trends |
+| `GET` | `/api/analytics/topic-associations` | **Subgroup-Stratified FP-Growth & FP-Max** mining (Maximal bundles & high-lift rules) |
+| `GET` | `/api/analytics/researcher-archetypes` | **Ward Agglomerative Clustering** & discretized trait profile rules |
 
 ### Running the Backend
 
@@ -475,3 +480,4 @@ Chanakya-Research-Commons/
 | 2026-11-19 | `37ae9ac` | `.gitignore` rewritten; untracked 21,484 `.venv` files; repository pruned |
 | 2026-11-19 | `a62c851` | Updated README changelog and repository tracking |
 | 2026-11-20 | `57a430c` | Database seeded; `run_dw_elt.py` added for PageRank & Star Schema ELT; `backend/main.py` complete with FastAPI (RRF, FP-Growth, Isolation Forest, RAG, OLAP); `frontend_static/index.html` instant UI added; Next.js app scaffolded; full evaluation benchmark suite implemented and documented. |
+| 2026-11-20 | `mining` | Integrated Subgroup-Stratified FP-Growth & FP-Max mining (`dw.vw_paper_topic_baskets`), Ward Agglomerative Researcher Clustering & trait rules (`dw.vw_researcher_profiles`), search expansion hook, and editorial Next.js/React `TopicAssociationsCard`. |

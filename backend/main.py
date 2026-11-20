@@ -14,6 +14,19 @@ from sklearn.ensemble import IsolationForest
 from mlxtend.frequent_patterns import fpgrowth, association_rules
 from dotenv import load_dotenv
 
+try:
+    from backend.services.mining_service import (
+        get_topic_associations,
+        get_researcher_archetypes,
+        get_related_topics_for_query,
+    )
+except ImportError:
+    from services.mining_service import (
+        get_topic_associations,
+        get_researcher_archetypes,
+        get_related_topics_for_query,
+    )
+
 load_dotenv()
 
 DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
@@ -305,8 +318,12 @@ def unified_search(q: str = Query(..., min_length=2), limit: int = 8):
     cur.close()
     conn.close()
 
+    # Search Expansion Hook: Match query against antecedents in high-lift rules (lift >= 1.5)
+    related_topics = get_related_topics_for_query(q, min_lift=1.5)
+
     return {
         "query": q,
+        "related_topics": related_topics,
         "panels": {
             "external_sources": external_papers,
             "chanakya_library": library_papers,
@@ -613,3 +630,30 @@ def analytics_overview(department: Optional[str] = None):
         "cross_dept_collaboration": collaboration,
         "monthly_trends": monthly_trends,
     }
+
+
+# ==========================================
+# F9.2: Association Rule Mining & Researcher Archetypes
+# ==========================================
+@app.get("/api/analytics/topic-associations")
+def topic_associations(
+    school: Optional[str] = Query(None, description="Filter by school name (e.g. 'School of Technology & AI' or 'ALL')"),
+    min_support: float = Query(0.04, ge=0.001, le=1.0, description="Minimum support threshold"),
+    min_lift: float = Query(1.2, ge=0.1, description="Minimum lift threshold"),
+):
+    """
+    Subgroup-Stratified FP-Growth & FP-Max mining over publication topic baskets.
+    Extracts maximal thematic bundles (FP-Max) and high-lift association rules.
+    """
+    return get_topic_associations(school=school, min_support=min_support, min_lift=min_lift)
+
+
+@app.get("/api/analytics/researcher-archetypes")
+def researcher_archetypes(
+    n_clusters: int = Query(4, ge=2, le=10, description="Number of researcher archetype clusters"),
+):
+    """
+    Agglomerative Researcher Clustering (Ward linkage) on continuous metrics,
+    evaluated with silhouette score and profiled with discretized trait association rules (FP-Growth).
+    """
+    return get_researcher_archetypes(n_clusters=n_clusters)

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import TopicAssociationsCard from "@/components/TopicAssociationsCard";
 
 const API = "http://localhost:8000/api";
 
@@ -201,6 +202,26 @@ export default function ResearchCommonsApp() {
                 {searching ? "Searching..." : "Unified Search"}
               </button>
             </form>
+
+            {searchResults?.related_topics && searchResults.related_topics.length > 0 && (
+              <div className="bg-slate-900 border border-indigo-900/60 rounded-lg p-3 flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-indigo-400 font-semibold flex items-center gap-1.5">
+                  <span className="text-amber-400">💡</span> High-Lift Related Topics:
+                </span>
+                {searchResults.related_topics.map((t: string) => (
+                  <button
+                    key={t}
+                    onClick={() => {
+                      setQuery(t);
+                      runSearch(t);
+                    }}
+                    className="bg-indigo-950 hover:bg-indigo-800 text-indigo-300 hover:text-white px-2.5 py-1 rounded transition-colors text-xs border border-indigo-800/80"
+                  >
+                    {t} ↗
+                  </button>
+                ))}
+              </div>
+            )}
 
             {searchResults && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -429,6 +450,9 @@ export default function ResearchCommonsApp() {
         {/* ================= F7 & F9: TRENDS, ANOMALIES & ADMIN ANALYTICS ================= */}
         {activeTab === "analytics" && (
           <div className="space-y-6">
+            {/* Association Rule Mining (FP-Growth / FP-Max) & Researcher Archetypes */}
+            <TopicAssociationsCard apiUrl={API} />
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               {/* F7 Topic Spikes */}
               <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">

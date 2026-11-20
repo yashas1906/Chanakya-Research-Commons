@@ -44,6 +44,9 @@
       const [trendsData, setTrendsData] = useState(null);
       const [analyticsData, setAnalyticsData] = useState(null);
       const [deptFilter, setDeptFilter] = useState("");
+      const [assocData, setAssocData] = useState(null);
+      const [archetypeData, setArchetypeData] = useState(null);
+      const [assocSchool, setAssocSchool] = useState("ALL");
 
       useEffect(() => {
         fetch(`${API}/users?limit=60`)
@@ -127,13 +130,17 @@
         }
       };
 
-      const loadAdminViews = async (dept = "") => {
-        const [tRes, aRes] = await Promise.all([
+      const loadAdminViews = async (dept = "", school = "ALL") => {
+        const [tRes, aRes, asRes, arRes] = await Promise.all([
           fetch(`${API}/trends-and-anomalies`),
           fetch(`${API}/analytics/overview${dept ? `?department=${encodeURIComponent(dept)}` : ""}`),
+          fetch(`${API}/analytics/topic-associations?school=${encodeURIComponent(school)}`),
+          fetch(`${API}/analytics/researcher-archetypes?n_clusters=4`),
         ]);
         setTrendsData(await tRes.json());
         setAnalyticsData(await aRes.json());
+        setAssocData(await asRes.json());
+        setArchetypeData(await arRes.json());
       };
 
       return (
@@ -198,6 +205,26 @@
                     {searching ? "Searching..." : "Unified Search"}
                   </button>
                 </form>
+
+                {searchResults?.related_topics && searchResults.related_topics.length > 0 && (
+                  <div className="bg-slate-900 border border-indigo-900/60 rounded-lg p-3 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-indigo-400 font-semibold flex items-center gap-1.5">
+                      <span className="text-amber-400">💡</span> High-Lift Related Topics:
+                    </span>
+                    {searchResults.related_topics.map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => {
+                          setQuery(t);
+                          runSearch(t);
+                        }}
+                        className="bg-indigo-950 hover:bg-indigo-800 text-indigo-300 hover:text-white px-2.5 py-1 rounded transition-colors text-xs border border-indigo-800/80"
+                      >
+                        {t} ↗
+                      </button>
+                    ))}
+                  </div>
+                )}
 
                 {searchResults && (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -382,6 +409,89 @@
 
             {activeTab === "analytics" && (
               <div className="space-y-6">
+                {/* Light Editorial Card: Topic Associations (FP-Growth / FP-Max) & Archetypes */}
+                <div className="bg-[#FAF9F6] border border-stone-200 rounded-xl p-6 text-stone-900 font-sans shadow-sm">
+                  <div className="border-b border-stone-200 pb-3 mb-4 flex flex-wrap justify-between items-center gap-2">
+                    <div>
+                      <span className="text-[10px] font-mono uppercase tracking-widest text-stone-500 font-semibold block">DMW Advanced Data Mining</span>
+                      <h2 className="text-xl font-serif font-bold text-stone-900">Topic Associations (FP-Growth / FP-Max) & Archetypes</h2>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={assocSchool}
+                        onChange={(e) => {
+                          setAssocSchool(e.target.value);
+                          fetch(`${API}/analytics/topic-associations?school=${encodeURIComponent(e.target.value)}`).then(r => r.json()).then(setAssocData);
+                        }}
+                        className="bg-white border border-stone-300 rounded px-2.5 py-1 text-xs text-stone-800"
+                      >
+                        <option value="ALL">All University Schools</option>
+                        <option value="School of Technology & AI">School of Technology & AI</option>
+                        <option value="School of Biosciences">School of Biosciences</option>
+                        <option value="School of Management & Commerce">School of Management & Commerce</option>
+                        <option value="School of Law">School of Law</option>
+                        <option value="School of Liberal Arts & Humanities">School of Liberal Arts & Humanities</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* FP-Max Bundles */}
+                  <div className="mb-4">
+                    <h3 className="text-xs font-serif font-bold text-stone-900 mb-1 flex items-center gap-2">
+                      <span>Maximal Thematic Bundles (FP-Max, len ≥ 2)</span>
+                      <span className="text-[10px] font-mono text-stone-500 font-normal">({assocData?.maximal_bundles?.length ?? 0} bundles)</span>
+                    </h3>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                      {assocData?.maximal_bundles?.slice(0, 6).map((b, idx) => (
+                        <div key={idx} className="bg-white border border-stone-200 rounded p-2.5 text-xs">
+                          <div className="flex justify-between text-[10px] text-stone-500 font-mono mb-1">
+                            <span>Bundle #{idx + 1}</span>
+                            <span>{b.paper_count} papers ({b.support_pct}%)</span>
+                          </div>
+                          <div className="flex flex-wrap gap-1">
+                            {b.bundle.map((item, i) => (
+                              <span key={i} className="bg-stone-100 text-stone-800 border border-stone-200 rounded px-1.5 py-0.5 text-[11px] font-medium">{item}</span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* High-Lift Association Rules Table */}
+                  <div>
+                    <h3 className="text-xs font-serif font-bold text-stone-900 mb-1">High-Lift Topic Association Rules (FP-Growth, lift ≥ 1.2)</h3>
+                    <div className="overflow-x-auto bg-white border border-stone-200 rounded">
+                      <table className="w-full text-left text-xs border-collapse">
+                        <thead>
+                          <tr className="border-b border-stone-200 bg-stone-50 text-[10px] font-mono text-stone-500 uppercase">
+                            <th className="py-1.5 px-2.5">#</th>
+                            <th className="py-1.5 px-2.5">Antecedents</th>
+                            <th className="py-1.5 px-2.5 text-center">⇒</th>
+                            <th className="py-1.5 px-2.5">Consequents</th>
+                            <th className="py-1.5 px-2.5 text-right">Support</th>
+                            <th className="py-1.5 px-2.5 text-right">Conf %</th>
+                            <th className="py-1.5 px-2.5 text-right">Lift</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-stone-100">
+                          {assocData?.rules?.slice(0, 10).map((r, idx) => (
+                            <tr key={idx} className="hover:bg-stone-50/50">
+                              <td className="py-1.5 px-2.5 text-stone-400 font-mono">{idx + 1}</td>
+                              <td className="py-1.5 px-2.5 font-medium">{r.antecedents.join(", ")}</td>
+                              <td className="py-1.5 px-2.5 text-center text-stone-400">⇒</td>
+                              <td className="py-1.5 px-2.5 text-indigo-900 font-medium">{r.consequents.join(", ")}</td>
+                              <td className="py-1.5 px-2.5 text-right font-mono text-stone-600">{(r.support * 100).toFixed(1)}%</td>
+                              <td className="py-1.5 px-2.5 text-right font-mono font-medium">{r.confidence_pct}%</td>
+                              <td className="py-1.5 px-2.5 text-right font-mono font-bold text-emerald-800">{r.lift.toFixed(2)}x</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-3">
                     <h2 className="text-sm font-semibold text-rose-400">F7 Sliding-Window Topic Spike Alerts (7d vs 30d Baseline)</h2>

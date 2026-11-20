@@ -191,16 +191,133 @@ def build_star_schema(cur):
     print("    -> Star schema tables populated successfully.")
 
 
+def create_analytical_views(cur):
+    print("4/5 Creating and refreshing analytical views (dw.vw_paper_topic_baskets, dw.vw_researcher_profiles)...")
+    cur.execute("""
+        CREATE OR REPLACE VIEW dw.dim_researcher AS
+        SELECT member_key AS researcher_key, user_id AS researcher_id, full_name, role, department, is_active FROM dw.dim_member;
+
+        CREATE OR REPLACE VIEW dw.dim_keyword AS
+        SELECT topic_key AS keyword_key, topic_name AS keyword_name, parent_cluster AS domain_cluster FROM dw.dim_topic;
+
+        CREATE OR REPLACE VIEW dw.fact_publication AS
+        SELECT paper_key, paper_id, title, publication_year, primary_source, pagerank_tier FROM dw.dim_paper;
+
+        CREATE OR REPLACE VIEW dw.vw_paper_topic_baskets AS
+        WITH paper_topics_exploded AS (
+            SELECT 
+                p.paper_id::text AS tid,
+                p.paper_id,
+                dp.paper_key,
+                TRIM(t) AS item_label,
+                COALESCE(p.publication_year, dp.publication_year, 2024) AS pub_year
+            FROM papers p
+            LEFT JOIN dw.dim_paper dp ON p.paper_id = dp.paper_id
+            CROSS JOIN UNNEST(p.topics) AS t
+            WHERE TRIM(t) NOT IN (
+                'Computer Science & AI', 'Electronics & Communication', 'Biotechnology',
+                'Management & Commerce', 'School of Law', 'Liberal Arts & Humanities'
+            )
+            UNION
+            SELECT 
+                p.paper_id::text AS tid,
+                p.paper_id,
+                dp.paper_key,
+                TRIM(dt.topic_name) AS item_label,
+                COALESCE(p.publication_year, dp.publication_year, 2024) AS pub_year
+            FROM papers p
+            JOIN dw.dim_paper dp ON p.paper_id = dp.paper_id
+            JOIN dw.fact_research_activity fa ON dp.paper_key = fa.paper_key
+            JOIN dw.dim_topic dt ON fa.topic_key = dt.topic_key
+            WHERE dt.topic_name IS NOT NULL
+        ),
+        paper_meta AS (
+            SELECT 
+                p.paper_id,
+                COALESCE(
+                    (SELECT t FROM UNNEST(p.topics) t WHERE t IN (
+                        'Computer Science & AI', 'Electronics & Communication', 'Biotechnology',
+                        'Management & Commerce', 'School of Law', 'Liberal Arts & Humanities'
+                    ) LIMIT 1),
+                    'Computer Science & AI'
+                ) AS department_name
+            FROM papers p
+        )
+        SELECT DISTINCT
+            pte.tid,
+            pte.paper_key,
+            pte.paper_id,
+            pte.item_label,
+            CASE 
+                WHEN pm.department_name IN ('Computer Science & AI', 'Electronics & Communication') 
+                    THEN 'School of Technology & AI'
+                WHEN pm.department_name = 'Biotechnology' 
+                    THEN 'School of Biosciences'
+                WHEN pm.department_name = 'Management & Commerce' 
+                    THEN 'School of Management & Commerce'
+                WHEN pm.department_name = 'School of Law' 
+                    THEN 'School of Law'
+                WHEN pm.department_name = 'Liberal Arts & Humanities' 
+                    THEN 'School of Liberal Arts & Humanities'
+                ELSE 'School of Interdisciplinary Studies'
+            END AS school_name,
+            pm.department_name,
+            pte.pub_year
+        FROM paper_topics_exploded pte
+        JOIN paper_meta pm ON pte.paper_id = pm.paper_id
+        WHERE pte.item_label IS NOT NULL AND LENGTH(pte.item_label) > 1;
+
+        CREATE OR REPLACE VIEW dw.vw_researcher_profiles AS
+        SELECT 
+            u.user_id AS researcher_id,
+            u.full_name AS researcher_name,
+            u.role,
+            u.department,
+            CASE 
+                WHEN u.department IN ('Computer Science & AI', 'Electronics & Communication') 
+                    THEN 'School of Technology & AI'
+                WHEN u.department = 'Biotechnology' 
+                    THEN 'School of Biosciences'
+                WHEN u.department = 'Management & Commerce' 
+                    THEN 'School of Management & Commerce'
+                WHEN u.department = 'School of Law' 
+                    THEN 'School of Law'
+                WHEN u.department = 'Liberal Arts & Humanities' 
+                    THEN 'School of Liberal Arts & Humanities'
+                ELSE 'School of Interdisciplinary Studies'
+            END AS school_name,
+            COUNT(DISTINCT ls.paper_id)::INT AS total_publications,
+            COALESCE(COUNT(DISTINCT pc.citing_paper_id), 0)::INT AS total_citations,
+            ROUND(COALESCE(AVG(jsonb_array_length(COALESCE(p.authors, '[]'::jsonb))), 1.0)::NUMERIC, 2)::FLOAT AS avg_coauthors,
+            ROUND(COALESCE(AVG(p.pagerank_score), 0.001)::NUMERIC, 5)::FLOAT AS avg_pagerank,
+            GREATEST(
+                COALESCE(CARDINALITY(u.interest_tags), 0),
+                COUNT(DISTINCT fa.topic_key),
+                1
+            )::INT AS topic_breadth
+        FROM users u
+        LEFT JOIN library_saves ls ON u.user_id = ls.user_id
+        LEFT JOIN papers p ON ls.paper_id = p.paper_id
+        LEFT JOIN paper_citations pc ON p.paper_id = pc.cited_paper_id
+        LEFT JOIN dw.dim_member dm ON u.user_id = dm.user_id
+        LEFT JOIN dw.fact_research_activity fa ON dm.member_key = fa.member_key
+        WHERE u.is_flagged_spam = FALSE
+        GROUP BY u.user_id, u.full_name, u.role, u.department, u.interest_tags;
+    """)
+    print("    -> Analytical views created successfully.")
+
+
 def main():
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
     run_minhash_deduplication(cur)
     run_citation_pagerank(cur)
     build_star_schema(cur)
+    create_analytical_views(cur)
     conn.commit()
     cur.close()
     conn.close()
-    print("4/4 ELT & Graph Mining pipeline complete!")
+    print("5/5 ELT, Graph Mining & Views pipeline complete!")
 
 
 if __name__ == "__main__":
