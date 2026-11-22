@@ -164,6 +164,7 @@ CREATE TABLE system_alerts (
 
 -- Vector & Full-Text Indexes
 CREATE INDEX idx_papers_embedding ON papers USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX idx_papers_library_embedding ON papers USING hnsw (embedding vector_cosine_ops) WHERE in_chanakya_library = TRUE;
 CREATE INDEX idx_chunks_embedding ON paper_chunks USING hnsw (chunk_embedding vector_cosine_ops);
 CREATE INDEX idx_users_embedding  ON users USING hnsw (profile_embedding vector_cosine_ops);
 CREATE INDEX idx_posts_embedding  ON posts USING hnsw (post_embedding vector_cosine_ops);
@@ -171,6 +172,11 @@ CREATE INDEX idx_posts_embedding  ON posts USING hnsw (post_embedding vector_cos
 CREATE INDEX idx_papers_tsv ON papers USING GIN (search_tsv);
 CREATE INDEX idx_posts_tsv  ON posts USING GIN (search_tsv);
 CREATE INDEX idx_events_time ON activity_events (occurred_at DESC);
+CREATE INDEX idx_events_topic_tags ON activity_events USING GIN (topic_tags);
+CREATE INDEX idx_library_saves_user ON library_saves (user_id);
+CREATE INDEX idx_comments_post ON comments (post_id);
+CREATE INDEX idx_posts_created_at ON posts (created_at DESC);
+CREATE INDEX idx_system_alerts_unresolved ON system_alerts (alert_type, is_resolved) WHERE is_resolved = FALSE;
 
 -- ==========================================
 -- 3. STAR SCHEMA DATA WAREHOUSE (dw) - F9

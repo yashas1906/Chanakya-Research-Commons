@@ -35,6 +35,9 @@ except ImportError:
         warmup_submission_detector,
     )
 
+from contextlib import contextmanager
+from psycopg2 import pool
+
 load_dotenv()
 
 DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
@@ -43,13 +46,53 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 
 app = FastAPI(title="Chanakya Research Commons API", version="1.0.0")
 
+# Security: Configurable explicit CORS origins (avoid wildcards with credentials)
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080"
+    ).split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS else ["*"],
+    allow_credentials=True if ALLOWED_ORIGINS else False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Resilient connection pool
+try:
+    db_pool = pool.ThreadedConnectionPool(1, 20, DB_URL)
+except Exception as exc:
+    print(f"[DB Init] Notice initializing pool ({exc}). Direct connection fallback active.")
+    db_pool = None
+
+
+@contextmanager
+def get_db():
+    """Connection context manager with connection pooling and guaranteed return/closure."""
+    if db_pool:
+        conn = db_pool.getconn()
+        conn.cursor_factory = RealDictCursor
+        try:
+            yield conn
+        finally:
+            db_pool.putconn(conn)
+    else:
+        conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+
+def get_conn():
+    """Backward compatibility helper."""
+    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 
 
 @app.on_event("startup")
@@ -61,10 +104,6 @@ def startup_event():
 
 
 embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-
-
-def get_conn():
-    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 
 
 def vec_literal(text: str) -> str:
@@ -120,360 +159,372 @@ class AskAssistantRequest(BaseModel):
 # F1: Accounts & Profiles
 # ==========================================
 @app.get("/api/users")
-def list_users(department: Optional[str] = None, limit: int = 30):
-    conn = get_conn()
-    cur = conn.cursor()
-    if department:
-        cur.execute(
-            "SELECT user_id, university_id, full_name, email, role, department, bio, interest_tags, is_flagged_spam FROM users WHERE department = %s LIMIT %s",
-            (department, limit),
-        )
-    else:
-        cur.execute(
-            "SELECT user_id, university_id, full_name, email, role, department, bio, interest_tags, is_flagged_spam FROM users ORDER BY created_at DESC LIMIT %s",
-            (limit,),
-        )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+def list_users(department: Optional[str] = None, limit: int = Query(30, ge=1, le=100)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        if department:
+            cur.execute(
+                """
+                SELECT user_id, university_id, full_name, email, role, department, bio, interest_tags, is_flagged_spam
+                FROM users
+                WHERE department = %s
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (department, limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT user_id, university_id, full_name, email, role, department, bio, interest_tags, is_flagged_spam
+                FROM users
+                ORDER BY created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
 
 
 # ==========================================
 # F2: Posts, Feed & Upvotes
 # ==========================================
 @app.get("/api/feed")
-def get_feed(user_id: Optional[str] = None, limit: int = 25):
-    conn = get_conn()
-    cur = conn.cursor()
-    if user_id:
-        cur.execute(
-            """
-            SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
-                   u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
-                   pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
-                   CASE WHEN uf.followee_id IS NOT NULL THEN 2 ELSE 0 END +
-                   (1 - (p.post_embedding <=> u_me.profile_embedding)) AS relevance_score
-            FROM posts p
-            JOIN users u ON p.author_id = u.user_id
-            CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) u_me
-            LEFT JOIN user_follows uf ON uf.follower_id = %s::uuid AND uf.followee_id = p.author_id
-            LEFT JOIN papers pa ON p.attached_paper_id = pa.paper_id
-            WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
-            ORDER BY relevance_score DESC, p.created_at DESC
-            LIMIT %s
-            """,
-            (user_id, user_id, limit),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
-                   u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
-                   pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id
-            FROM posts p
-            JOIN users u ON p.author_id = u.user_id
-            LEFT JOIN papers pa ON p.attached_paper_id = pa.paper_id
-            WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
-            ORDER BY p.created_at DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+def get_feed(user_id: Optional[str] = None, limit: int = Query(25, ge=1, le=100)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        if user_id:
+            cur.execute(
+                """
+                SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+                       u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
+                       pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
+                       CASE WHEN uf.followee_id IS NOT NULL THEN 2 ELSE 0 END +
+                       (1 - (p.post_embedding <=> u_me.profile_embedding)) AS relevance_score
+                FROM posts p
+                JOIN users u ON p.author_id = u.user_id
+                CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) u_me
+                LEFT JOIN user_follows uf ON uf.follower_id = %s::uuid AND uf.followee_id = p.author_id
+                LEFT JOIN papers pa ON p.attached_paper_id = pa.paper_id
+                WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
+                ORDER BY relevance_score DESC, p.created_at DESC
+                LIMIT %s
+                """,
+                (user_id, user_id, limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+                       u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
+                       pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id
+                FROM posts p
+                JOIN users u ON p.author_id = u.user_id
+                LEFT JOIN papers pa ON p.attached_paper_id = pa.paper_id
+                WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
+                ORDER BY p.created_at DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
 
 
 @app.post("/api/posts")
 def create_post(payload: PostCreate):
-    conn = get_conn()
-    cur = conn.cursor()
-    q_vec = vec_literal(f"{payload.title} {payload.body}")
-    cur.execute(
-        """
-        INSERT INTO posts (author_id, attached_paper_id, title, body, tags, post_embedding)
-        VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s::vector)
-        RETURNING post_id, title, created_at
-        """,
-        (payload.author_id, payload.attached_paper_id, payload.title, payload.body, payload.tags, q_vec),
-    )
-    post = cur.fetchone()
-    cur.execute(
-        "INSERT INTO activity_events (user_id, event_type, target_id, topic_tags) VALUES (%s::uuid, 'create_post', %s::uuid, %s)",
-        (payload.author_id, post["post_id"], payload.tags),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-    return post
+    with get_db() as conn:
+        cur = conn.cursor()
+        q_vec = vec_literal(f"{payload.title} {payload.body}")
+        cur.execute(
+            """
+            INSERT INTO posts (author_id, attached_paper_id, title, body, tags, post_embedding)
+            VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s::vector)
+            RETURNING post_id, title, created_at
+            """,
+            (payload.author_id, payload.attached_paper_id, payload.title, payload.body, payload.tags, q_vec),
+        )
+        post = cur.fetchone()
+        cur.execute(
+            "INSERT INTO activity_events (user_id, event_type, target_id, topic_tags) VALUES (%s::uuid, 'create_post', %s::uuid, %s)",
+            (payload.author_id, post["post_id"], payload.tags),
+        )
+        conn.commit()
+        cur.close()
+        return post
 
 
 @app.post("/api/posts/{post_id}/upvote")
 def toggle_upvote(post_id: str, payload: UpvoteRequest):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        "SELECT 1 FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
-        (payload.user_id, post_id),
-    )
-    exists = cur.fetchone()
-    if exists:
+    with get_db() as conn:
+        cur = conn.cursor()
         cur.execute(
-            "DELETE FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
+            "SELECT 1 FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
             (payload.user_id, post_id),
         )
-        cur.execute(
-            "UPDATE posts SET upvote_count = GREATEST(upvote_count - 1, 0) WHERE post_id = %s::uuid RETURNING upvote_count",
-            (post_id,),
-        )
-    else:
-        cur.execute(
-            "INSERT INTO post_upvotes (user_id, post_id) VALUES (%s::uuid, %s::uuid) ON CONFLICT DO NOTHING",
-            (payload.user_id, post_id),
-        )
-        cur.execute(
-            "UPDATE posts SET upvote_count = upvote_count + 1 WHERE post_id = %s::uuid RETURNING upvote_count",
-            (post_id,),
-        )
-        cur.execute(
-            "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'upvote_post', %s::uuid)",
-            (payload.user_id, post_id),
-        )
-    row = cur.fetchone()
-    upvote_count = row["upvote_count"] if row else 0
-    conn.commit()
-    cur.close()
-    conn.close()
-    return {"upvote_count": upvote_count}
+        exists = cur.fetchone()
+        if exists:
+            cur.execute(
+                "DELETE FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
+                (payload.user_id, post_id),
+            )
+            cur.execute(
+                "UPDATE posts SET upvote_count = GREATEST(upvote_count - 1, 0) WHERE post_id = %s::uuid RETURNING upvote_count",
+                (post_id,),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO post_upvotes (user_id, post_id) VALUES (%s::uuid, %s::uuid) ON CONFLICT DO NOTHING",
+                (payload.user_id, post_id),
+            )
+            cur.execute(
+                "UPDATE posts SET upvote_count = upvote_count + 1 WHERE post_id = %s::uuid RETURNING upvote_count",
+                (post_id,),
+            )
+            cur.execute(
+                "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'upvote_post', %s::uuid)",
+                (payload.user_id, post_id),
+            )
+        row = cur.fetchone()
+        upvote_count = row["upvote_count"] if row else 0
+        conn.commit()
+        cur.close()
+        return {"upvote_count": upvote_count}
 
 
 @app.get("/api/posts/{post_id}/comments")
 def get_comments(post_id: str):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        SELECT c.comment_id, c.post_id, c.author_id, u.full_name AS author_name,
-               u.role AS author_role, u.department AS author_dept,
-               c.parent_comment_id, c.body, c.created_at
-        FROM comments c
-        JOIN users u ON c.author_id = u.user_id
-        WHERE c.post_id = %s::uuid
-        ORDER BY c.created_at ASC
-        """,
-        (post_id,),
-    )
-    comments = cur.fetchall()
-    cur.close()
-    conn.close()
-    return comments
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT c.comment_id, c.post_id, c.author_id, u.full_name AS author_name,
+                   u.role AS author_role, u.department AS author_dept,
+                   c.parent_comment_id, c.body, c.created_at
+            FROM comments c
+            JOIN users u ON c.author_id = u.user_id
+            WHERE c.post_id = %s::uuid
+            ORDER BY c.created_at ASC
+            """,
+            (post_id,),
+        )
+        comments = cur.fetchall()
+        cur.close()
+        return comments
 
 
 @app.post("/api/posts/{post_id}/comments")
 def add_comment(post_id: str, payload: CommentCreate):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO comments (post_id, author_id, parent_comment_id, body)
-        VALUES (%s::uuid, %s::uuid, %s::uuid, %s)
-        RETURNING comment_id, created_at
-        """,
-        (post_id, payload.author_id, payload.parent_comment_id, payload.body),
-    )
-    created = cur.fetchone()
-    cur.execute(
-        "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'add_comment', %s::uuid)",
-        (payload.author_id, created["comment_id"]),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-    return {"status": "created", "comment": created}
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO comments (post_id, author_id, parent_comment_id, body)
+            VALUES (%s::uuid, %s::uuid, %s::uuid, %s)
+            RETURNING comment_id, created_at
+            """,
+            (post_id, payload.author_id, payload.parent_comment_id, payload.body),
+        )
+        created = cur.fetchone()
+        cur.execute(
+            "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'add_comment', %s::uuid)",
+            (payload.author_id, created["comment_id"]),
+        )
+        conn.commit()
+        cur.close()
+        return {"status": "created", "comment": created}
 
 
 # ==========================================
 # F3: Shared Chanakya Library
 # ==========================================
 @app.get("/api/library")
-def get_library(user_id: Optional[str] = None, limit: int = 30):
-    conn = get_conn()
-    cur = conn.cursor()
-    if user_id:
-        cur.execute(
-            """
-            SELECT p.paper_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
-                   p.save_count, p.pagerank_score, ls.private_notes, ls.saved_at
-            FROM library_saves ls
-            JOIN papers p ON ls.paper_id = p.paper_id
-            WHERE ls.user_id = %s::uuid
-            ORDER BY ls.saved_at DESC
-            LIMIT %s
-            """,
-            (user_id, limit),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT paper_id, canonical_title, abstract, authors, publication_year, venue, topics, save_count, pagerank_score
-            FROM papers
-            WHERE in_chanakya_library = TRUE
-            ORDER BY save_count DESC, pagerank_score DESC
-            LIMIT %s
-            """,
-            (limit,),
-        )
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-    return rows
+def get_library(user_id: Optional[str] = None, limit: int = Query(30, ge=1, le=100)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        if user_id:
+            cur.execute(
+                """
+                SELECT p.paper_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
+                       p.save_count, p.pagerank_score, ls.private_notes, ls.saved_at
+                FROM library_saves ls
+                JOIN papers p ON ls.paper_id = p.paper_id
+                WHERE ls.user_id = %s::uuid
+                ORDER BY ls.saved_at DESC
+                LIMIT %s
+                """,
+                (user_id, limit),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT paper_id, canonical_title, abstract, authors, publication_year, venue, topics, save_count, pagerank_score
+                FROM papers
+                WHERE in_chanakya_library = TRUE
+                ORDER BY save_count DESC, pagerank_score DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+        rows = cur.fetchall()
+        cur.close()
+        return rows
 
 
 @app.post("/api/library/save")
 def save_to_library(req: SavePaperRequest):
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO library_saves (user_id, paper_id, private_notes)
-        VALUES (%s::uuid, %s::uuid, %s)
-        ON CONFLICT (user_id, paper_id) DO UPDATE SET private_notes = EXCLUDED.private_notes
-        """,
-        (req.user_id, req.paper_id, req.private_notes),
-    )
-    cur.execute(
-        """
-        UPDATE papers
-        SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid),
-            in_chanakya_library = TRUE
-        WHERE paper_id = %s::uuid
-        RETURNING paper_id, save_count
-        """,
-        (req.paper_id, req.paper_id),
-    )
-    updated = cur.fetchone()
-    cur.execute(
-        "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'save_paper', %s::uuid)",
-        (req.user_id, req.paper_id),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
-    return {"status": "saved", "paper": updated}
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO library_saves (user_id, paper_id, private_notes)
+            VALUES (%s::uuid, %s::uuid, %s)
+            ON CONFLICT (user_id, paper_id) DO UPDATE SET private_notes = EXCLUDED.private_notes
+            """,
+            (req.user_id, req.paper_id, req.private_notes),
+        )
+        cur.execute(
+            """
+            UPDATE papers
+            SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid),
+                in_chanakya_library = TRUE
+            WHERE paper_id = %s::uuid
+            RETURNING paper_id, save_count
+            """,
+            (req.paper_id, req.paper_id),
+        )
+        updated = cur.fetchone()
+        cur.execute(
+            "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'save_paper', %s::uuid)",
+            (req.user_id, req.paper_id),
+        )
+        conn.commit()
+        cur.close()
+        return {"status": "saved", "paper": updated}
 
 
 @app.get("/api/collections")
 def get_collections(user_id: Optional[str] = None):
-    conn = get_conn()
-    cur = conn.cursor()
-    if user_id:
-        cur.execute(
-            """
-            SELECT c.collection_id, c.name, c.description,
-                   COUNT(ls.paper_id) AS paper_count
-            FROM collections c
-            LEFT JOIN library_saves ls ON c.collection_id = ls.collection_id
-            WHERE c.user_id = %s::uuid
-            GROUP BY c.collection_id, c.name, c.description
-            ORDER BY c.created_at DESC
-            """,
-            (user_id,),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT c.collection_id, c.name, c.description,
-                   COUNT(ls.paper_id) AS paper_count
-            FROM collections c
-            LEFT JOIN library_saves ls ON c.collection_id = ls.collection_id
-            GROUP BY c.collection_id, c.name, c.description
-            ORDER BY c.created_at DESC
-            """
-        )
-    cols = cur.fetchall()
-    cur.close()
-    conn.close()
-    return cols
+    with get_db() as conn:
+        cur = conn.cursor()
+        if user_id:
+            cur.execute(
+                """
+                SELECT c.collection_id, c.name, c.description,
+                       COUNT(ls.paper_id) AS paper_count
+                FROM collections c
+                LEFT JOIN library_saves ls ON c.collection_id = ls.collection_id
+                WHERE c.user_id = %s::uuid
+                GROUP BY c.collection_id, c.name, c.description
+                ORDER BY c.created_at DESC
+                """,
+                (user_id,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT c.collection_id, c.name, c.description,
+                       COUNT(ls.paper_id) AS paper_count
+                FROM collections c
+                LEFT JOIN library_saves ls ON c.collection_id = ls.collection_id
+                GROUP BY c.collection_id, c.name, c.description
+                ORDER BY c.created_at DESC
+                """
+            )
+        cols = cur.fetchall()
+        cur.close()
+        return cols
 
 
 # ==========================================
 # F5: Unified 4-Panel Hybrid Search (RRF + PageRank)
 # ==========================================
 @app.get("/api/search")
-def unified_search(q: str = Query(..., min_length=2), limit: int = 8):
-    conn = get_conn()
-    cur = conn.cursor()
-    q_vec = vec_literal(q)
+def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1, le=50)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        q_vec = vec_literal(q)
 
-    # Panel 1 & 2: Hybrid RRF (Keyword ts_rank + Semantic pgvector + PageRank boost)
-    paper_sql = """
-        WITH semantic AS (
-            SELECT paper_id, ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS sem_rank
-            FROM papers
-            WHERE in_chanakya_library = %s
-            LIMIT 40
-        ),
-        keyword AS (
-            SELECT paper_id, ROW_NUMBER() OVER (ORDER BY ts_rank(search_tsv, plainto_tsquery('english', %s)) DESC) AS kw_rank
-            FROM papers
-            WHERE in_chanakya_library = %s AND search_tsv @@ plainto_tsquery('english', %s)
-            LIMIT 40
+        # Panel 1 & 2: True Index-Accelerated Hybrid RRF
+        # Direct ORDER BY ... LIMIT 40 in subqueries leverages pgvector HNSW & full-text GIN index scans
+        paper_sql = """
+            WITH semantic_knn AS (
+                SELECT paper_id, (embedding <=> %s::vector) AS dist
+                FROM papers
+                WHERE in_chanakya_library = %s
+                ORDER BY embedding <=> %s::vector
+                LIMIT 40
+            ),
+            semantic AS (
+                SELECT paper_id, ROW_NUMBER() OVER (ORDER BY dist ASC) AS sem_rank
+                FROM semantic_knn
+            ),
+            keyword_top AS (
+                SELECT paper_id, ts_rank(search_tsv, plainto_tsquery('english', %s)) AS kw_score
+                FROM papers
+                WHERE in_chanakya_library = %s AND search_tsv @@ plainto_tsquery('english', %s)
+                ORDER BY kw_score DESC
+                LIMIT 40
+            ),
+            keyword AS (
+                SELECT paper_id, ROW_NUMBER() OVER (ORDER BY kw_score DESC) AS kw_rank
+                FROM keyword_top
+            )
+            SELECT p.paper_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
+                   p.save_count, p.pagerank_score, p.in_chanakya_library,
+                   ARRAY_AGG(DISTINCT ps.source_name) AS sources,
+                   (COALESCE(1.0 / (60 + s.sem_rank), 0) + COALESCE(1.0 / (60 + k.kw_rank), 0) + (LEAST(p.pagerank_score * 50.0, 0.15))) AS rrf_score
+            FROM papers p
+            LEFT JOIN semantic s ON p.paper_id = s.paper_id
+            LEFT JOIN keyword k ON p.paper_id = k.paper_id
+            LEFT JOIN paper_sources ps ON p.paper_id = ps.paper_id
+            WHERE (s.paper_id IS NOT NULL OR k.paper_id IS NOT NULL)
+            GROUP BY p.paper_id, s.sem_rank, k.kw_rank
+            ORDER BY rrf_score DESC
+            LIMIT %s
+        """
+
+        cur.execute(paper_sql, (q_vec, False, q_vec, q, False, q, limit))
+        external_papers = cur.fetchall()
+
+        cur.execute(paper_sql, (q_vec, True, q_vec, q, True, q, limit))
+        library_papers = cur.fetchall()
+
+        # Panel 3: University Members working in that area
+        cur.execute(
+            """
+            SELECT user_id, full_name, role, department, bio, interest_tags,
+                   (1 - (profile_embedding <=> %s::vector)) AS similarity
+            FROM users
+            WHERE is_flagged_spam = FALSE
+            ORDER BY profile_embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (q_vec, q_vec, limit),
         )
-        SELECT p.paper_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
-               p.save_count, p.pagerank_score, p.in_chanakya_library,
-               ARRAY_AGG(DISTINCT ps.source_name) AS sources,
-               (COALESCE(1.0 / (60 + s.sem_rank), 0) + COALESCE(1.0 / (60 + k.kw_rank), 0) + (p.pagerank_score * 10)) AS rrf_score
-        FROM papers p
-        LEFT JOIN semantic s ON p.paper_id = s.paper_id
-        LEFT JOIN keyword k ON p.paper_id = k.paper_id
-        LEFT JOIN paper_sources ps ON p.paper_id = ps.paper_id
-        WHERE (s.paper_id IS NOT NULL OR k.paper_id IS NOT NULL)
-        GROUP BY p.paper_id, s.sem_rank, k.kw_rank
-        ORDER BY rrf_score DESC
-        LIMIT %s
-    """
+        people = cur.fetchall()
 
-    cur.execute(paper_sql, (q_vec, False, q, False, q, limit))
-    external_papers = cur.fetchall()
+        # Panel 4: Related Posts & Discussions
+        cur.execute(
+            """
+            SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, u.full_name AS author_name, u.department,
+                   (1 - (p.post_embedding <=> %s::vector)) AS similarity
+            FROM posts p
+            JOIN users u ON p.author_id = u.user_id
+            WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
+            ORDER BY p.post_embedding <=> %s::vector
+            LIMIT %s
+            """,
+            (q_vec, q_vec, limit),
+        )
+        posts = cur.fetchall()
 
-    cur.execute(paper_sql, (q_vec, True, q, True, q, limit))
-    library_papers = cur.fetchall()
-
-    # Panel 3: University Members working in that area
-    cur.execute(
-        """
-        SELECT user_id, full_name, role, department, bio, interest_tags,
-               (1 - (profile_embedding <=> %s::vector)) AS similarity
-        FROM users
-        WHERE is_flagged_spam = FALSE
-        ORDER BY profile_embedding <=> %s::vector
-        LIMIT %s
-        """,
-        (q_vec, q_vec, limit),
-    )
-    people = cur.fetchall()
-
-    # Panel 4: Related Posts & Discussions
-    cur.execute(
-        """
-        SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, u.full_name AS author_name, u.department,
-               (1 - (p.post_embedding <=> %s::vector)) AS similarity
-        FROM posts p
-        JOIN users u ON p.author_id = u.user_id
-        WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
-        ORDER BY p.post_embedding <=> %s::vector
-        LIMIT %s
-        """,
-        (q_vec, q_vec, limit),
-    )
-    posts = cur.fetchall()
-
-    cur.execute("INSERT INTO activity_events (event_type, search_query) VALUES ('search', %s)", (q,))
-    conn.commit()
-    cur.close()
-    conn.close()
+        cur.execute("INSERT INTO activity_events (event_type, search_query) VALUES ('search', %s)", (q,))
+        conn.commit()
+        cur.close()
 
     # Search Expansion Hook: Match query against antecedents in high-lift rules (lift >= 1.5)
     related_topics = get_related_topics_for_query(q, min_lift=1.5)
@@ -494,90 +545,86 @@ def unified_search(q: str = Query(..., min_length=2), limit: int = 8):
 # F6: Recommendations + FP-Growth "Also Saved"
 # ==========================================
 @app.get("/api/recommendations/{user_id}")
-def get_recommendations(user_id: str, limit: int = 6):
-    conn = get_conn()
-    cur = conn.cursor()
+def get_recommendations(user_id: str, limit: int = Query(6, ge=1, le=50)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id, department, profile_embedding FROM users WHERE user_id = %s::uuid", (user_id,))
+        user = cur.fetchone()
+        if not user:
+            cur.close()
+            raise HTTPException(status_code=404, detail="User not found")
 
-    cur.execute("SELECT user_id, department, profile_embedding FROM users WHERE user_id = %s::uuid", (user_id,))
-    user = cur.fetchone()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
+        # Recommended papers (excluding already saved)
+        cur.execute(
+            """
+            SELECT p.paper_id, p.canonical_title, p.publication_year, p.venue, p.topics, p.save_count, p.pagerank_score,
+                   (1 - (p.embedding <=> u.profile_embedding)) AS match_score
+            FROM papers p
+            CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) u
+            WHERE p.paper_id NOT IN (SELECT paper_id FROM library_saves WHERE user_id = %s::uuid)
+            ORDER BY match_score DESC, p.pagerank_score DESC
+            LIMIT %s
+            """,
+            (user_id, user_id, limit),
+        )
+        rec_papers = cur.fetchall()
 
-    # Recommended papers (excluding already saved)
-    cur.execute(
-        """
-        SELECT p.paper_id, p.canonical_title, p.publication_year, p.venue, p.topics, p.save_count, p.pagerank_score,
-               (1 - (p.embedding <=> u.profile_embedding)) AS match_score
-        FROM papers p
-        CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) u
-        WHERE p.paper_id NOT IN (SELECT paper_id FROM library_saves WHERE user_id = %s::uuid)
-        ORDER BY match_score DESC, p.pagerank_score DESC
-        LIMIT %s
-        """,
-        (user_id, user_id, limit),
-    )
-    rec_papers = cur.fetchall()
-
-    # Recommended collaborators (excluding already followed)
-    cur.execute(
-        """
-        SELECT other.user_id, other.full_name, other.role, other.department, other.interest_tags,
-               (1 - (other.profile_embedding <=> me.profile_embedding)) AS match_score
-        FROM users other
-        CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) me
-        WHERE other.user_id != %s::uuid
-          AND other.is_flagged_spam = FALSE
-          AND other.user_id NOT IN (SELECT followee_id FROM user_follows WHERE follower_id = %s::uuid)
-        ORDER BY match_score DESC
-        LIMIT %s
-        """,
-        (user_id, user_id, user_id, limit),
-    )
-    rec_people = cur.fetchall()
-
-    cur.close()
-    conn.close()
-    return {"recommended_papers": rec_papers, "recommended_people": rec_people}
+        # Recommended collaborators (excluding already followed)
+        cur.execute(
+            """
+            SELECT other.user_id, other.full_name, other.role, other.department, other.interest_tags,
+                   (1 - (other.profile_embedding <=> me.profile_embedding)) AS match_score
+            FROM users other
+            CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) me
+            WHERE other.user_id != %s::uuid
+              AND other.is_flagged_spam = FALSE
+              AND other.user_id NOT IN (SELECT followee_id FROM user_follows WHERE follower_id = %s::uuid)
+            ORDER BY match_score DESC
+            LIMIT %s
+            """,
+            (user_id, user_id, user_id, limit),
+        )
+        rec_people = cur.fetchall()
+        cur.close()
+        return {"recommended_papers": rec_papers, "recommended_people": rec_people}
 
 
 @app.get("/api/papers/{paper_id}/also-saved")
-def get_also_saved(paper_id: str, limit: int = 5):
+def get_also_saved(paper_id: str, limit: int = Query(5, ge=1, le=20)):
     """Association Rule Mining (FP-Growth) on user library baskets."""
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("SELECT user_id, paper_id::text FROM library_saves")
-    rows = cur.fetchall()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id, paper_id::text FROM library_saves")
+        rows = cur.fetchall()
 
-    if not rows:
+        if not rows:
+            cur.close()
+            return []
+
+        df = pd.DataFrame(rows)
+        basket = pd.crosstab(df["user_id"], df["paper_id"]).astype(bool)
+
+        recommendations = []
+        if paper_id in basket.columns and len(basket) >= 5:
+            freq_items = fpgrowth(basket, min_support=0.04, use_colnames=True)
+            if not freq_items.empty:
+                rules = association_rules(freq_items, metric="lift", min_threshold=1.1)
+                matched = rules[rules["antecedents"].apply(lambda x: paper_id in x)]
+                consequent_ids = []
+                for _, r in matched.sort_values("confidence", ascending=False).iterrows():
+                    for cid in r["consequents"]:
+                        if cid != paper_id and cid not in consequent_ids:
+                            consequent_ids.append(cid)
+
+                if consequent_ids:
+                    cur.execute(
+                        "SELECT paper_id, canonical_title, publication_year, save_count FROM papers WHERE paper_id = ANY(%s::uuid[]) LIMIT %s",
+                        (consequent_ids[:limit], limit),
+                    )
+                    recommendations = cur.fetchall()
+
         cur.close()
-        conn.close()
-        return []
-
-    df = pd.DataFrame(rows)
-    basket = pd.crosstab(df["user_id"], df["paper_id"]).astype(bool)
-
-    recommendations = []
-    if paper_id in basket.columns and len(basket) >= 5:
-        freq_items = fpgrowth(basket, min_support=0.04, use_colnames=True)
-        if not freq_items.empty:
-            rules = association_rules(freq_items, metric="lift", min_threshold=1.1)
-            matched = rules[rules["antecedents"].apply(lambda x: paper_id in x)]
-            consequent_ids = []
-            for _, r in matched.sort_values("confidence", ascending=False).iterrows():
-                for cid in r["consequents"]:
-                    if cid != paper_id and cid not in consequent_ids:
-                        consequent_ids.append(cid)
-
-            if consequent_ids:
-                cur.execute(
-                    "SELECT paper_id, canonical_title, publication_year, save_count FROM papers WHERE paper_id = ANY(%s::uuid[]) LIMIT %s",
-                    (consequent_ids[:limit], limit),
-                )
-                recommendations = cur.fetchall()
-
-    cur.close()
-    conn.close()
-    return recommendations
+        return recommendations
 
 
 # ==========================================
@@ -585,76 +632,152 @@ def get_also_saved(paper_id: str, limit: int = 5):
 # ==========================================
 @app.get("/api/trends-and-anomalies")
 def get_trends_and_anomalies():
-    conn = get_conn()
-    cur = conn.cursor()
+    """
+    Purely read-only endpoint: returns sliding window topic spike detection
+    and active flagged spam/anomaly alerts without modifying database state on GET.
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
 
-    # 1. Sliding window topic spike detection (Last 7 days vs previous 30-day daily average)
-    cur.execute(
-        """
-        WITH expanded AS (
-            SELECT UNNEST(topic_tags) AS topic, occurred_at
-            FROM activity_events
-            WHERE topic_tags IS NOT NULL AND occurred_at >= NOW() - INTERVAL '37 days'
-        ),
-        window_counts AS (
-            SELECT
-                topic,
-                COUNT(*) FILTER (WHERE occurred_at >= NOW() - INTERVAL '7 days') AS recent_7d,
-                COUNT(*) FILTER (WHERE occurred_at < NOW() - INTERVAL '7 days') / 4.28 AS baseline_weekly_avg
-            FROM expanded
-            GROUP BY topic
-        )
-        SELECT topic, recent_7d, ROUND(baseline_weekly_avg::numeric, 2) AS baseline_weekly_avg,
-               ROUND(((recent_7d - baseline_weekly_avg) / GREATEST(baseline_weekly_avg, 1.0))::numeric, 2) AS spike_ratio
-        FROM window_counts
-        ORDER BY spike_ratio DESC
-        LIMIT 10
-        """
-    )
-    trending_topics = cur.fetchall()
-
-    # 2. Isolation Forest Spam/Anomaly Detection on user behavior features
-    cur.execute(
-        """
-        SELECT
-            u.user_id::text,
-            u.full_name,
-            u.department,
-            COUNT(DISTINCT p.post_id) AS post_count,
-            COALESCE(EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / GREATEST(COUNT(p.post_id), 1), 999999) AS avg_seconds_between_posts,
-            COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes
-        FROM users u
-        LEFT JOIN posts p ON u.user_id = p.author_id
-        GROUP BY u.user_id, u.full_name, u.department
-        """
-    )
-    user_stats = pd.DataFrame(cur.fetchall())
-
-    flagged_accounts = []
-    if len(user_stats) >= 10:
-        features = user_stats[["post_count", "avg_seconds_between_posts", "avg_upvotes"]].fillna(0)
-        iso = IsolationForest(contamination=0.09, random_state=42)
-        user_stats["anomaly_label"] = iso.fit_predict(features)
-        user_stats["anomaly_score"] = -iso.decision_function(features)
-
-        anomalies = user_stats[user_stats["anomaly_label"] == -1].sort_values("anomaly_score", ascending=False)
-        for _, row in anomalies.iterrows():
-            cur.execute(
-                "UPDATE users SET is_flagged_spam = TRUE, spam_score = %s WHERE user_id = %s::uuid",
-                (float(row["anomaly_score"]), row["user_id"]),
+        # 1. Sliding window topic spike detection (Last 7 days vs previous 30-day baseline weekly average)
+        cur.execute(
+            """
+            WITH expanded AS (
+                SELECT UNNEST(topic_tags) AS topic, occurred_at
+                FROM activity_events
+                WHERE topic_tags IS NOT NULL AND occurred_at >= NOW() - INTERVAL '37 days'
+            ),
+            window_counts AS (
+                SELECT
+                    topic,
+                    COUNT(*) FILTER (WHERE occurred_at >= NOW() - INTERVAL '7 days') AS recent_7d,
+                    COUNT(*) FILTER (WHERE occurred_at < NOW() - INTERVAL '7 days') / 4.28 AS baseline_weekly_avg
+                FROM expanded
+                GROUP BY topic
             )
-            flagged_accounts.append({
-                "user_id": row["user_id"],
-                "full_name": row["full_name"],
-                "department": row["department"],
-                "post_count": int(row["post_count"]),
-                "anomaly_score": round(float(row["anomaly_score"]), 3),
-            })
-        conn.commit()
+            SELECT topic, recent_7d, ROUND(baseline_weekly_avg::numeric, 2) AS baseline_weekly_avg,
+                   ROUND(((recent_7d - baseline_weekly_avg) / GREATEST(baseline_weekly_avg, 1.0))::numeric, 2) AS spike_ratio
+            FROM window_counts
+            ORDER BY spike_ratio DESC
+            LIMIT 10
+            """
+        )
+        trending_topics = cur.fetchall()
 
-    cur.close()
-    conn.close()
-    return {"trending_topics": trending_topics, "flagged_spam_accounts": flagged_accounts}
+        # 2. Read flagged accounts without mutating user rows on GET
+        cur.execute(
+            """
+            SELECT u.user_id::text, u.full_name, u.department,
+                   COUNT(p.post_id) AS post_count,
+                   u.spam_score AS anomaly_score
+            FROM users u
+            LEFT JOIN posts p ON u.user_id = p.author_id
+            WHERE u.is_flagged_spam = TRUE
+            GROUP BY u.user_id, u.full_name, u.department, u.spam_score
+            ORDER BY u.spam_score DESC
+            LIMIT 20
+            """
+        )
+        flagged_accounts = cur.fetchall()
+        cur.close()
+        return {"trending_topics": trending_topics, "flagged_spam_accounts": flagged_accounts}
+
+
+@app.post("/api/analytics/run-spam-job")
+def run_spam_detection_job(threshold: float = Query(0.18, description="Minimum inverted anomaly score to flag an account")):
+    """
+    Scheduled / administrative batch anomaly detection job.
+    Uses Isolation Forest with an absolute score threshold rather than hardcoding contamination %,
+    and logs events to system_alerts with an actionable review state.
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+                u.user_id::text,
+                u.full_name,
+                u.department,
+                COUNT(DISTINCT p.post_id) AS post_count,
+                COALESCE(EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / GREATEST(COUNT(p.post_id), 1), 999999) AS avg_seconds_between_posts,
+                COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes
+            FROM users u
+            LEFT JOIN posts p ON u.user_id = p.author_id
+            GROUP BY u.user_id, u.full_name, u.department
+            """
+        )
+        user_stats = pd.DataFrame(cur.fetchall())
+
+        flagged = []
+        if len(user_stats) >= 10:
+            features = user_stats[["post_count", "avg_seconds_between_posts", "avg_upvotes"]].fillna(0)
+            iso = IsolationForest(contamination=0.08, random_state=42)
+            iso.fit(features)
+            user_stats["anomaly_score"] = -iso.decision_function(features)
+
+            # Strictly filter by score threshold rather than blind contamination
+            outliers = user_stats[user_stats["anomaly_score"] >= threshold].sort_values("anomaly_score", ascending=False)
+            for _, row in outliers.iterrows():
+                score = round(float(row["anomaly_score"]), 4)
+                user_id = row["user_id"]
+                cur.execute(
+                    """
+                    INSERT INTO system_alerts (alert_type, entity_ref, severity_score, details, is_resolved)
+                    VALUES ('USER_SPAM', %s, %s, %s::jsonb, FALSE)
+                    """,
+                    (
+                        user_id,
+                        score,
+                        json.dumps({
+                            "full_name": row["full_name"],
+                            "department": row["department"],
+                            "post_count": int(row["post_count"]),
+                            "avg_upvotes": float(row["avg_upvotes"]),
+                            "score": score
+                        })
+                    )
+                )
+                cur.execute(
+                    "UPDATE users SET is_flagged_spam = TRUE, spam_score = %s WHERE user_id = %s::uuid",
+                    (score, user_id),
+                )
+                flagged.append({
+                    "user_id": user_id,
+                    "full_name": row["full_name"],
+                    "department": row["department"],
+                    "anomaly_score": score
+                })
+            conn.commit()
+
+        cur.close()
+        return {"status": "completed", "evaluated_users": len(user_stats), "flagged_count": len(flagged), "flagged": flagged}
+
+
+@app.post("/api/alerts/{alert_id}/resolve")
+def resolve_alert(alert_id: str):
+    """Admin endpoint to resolve an anomaly alert and unflag false positives."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE system_alerts
+            SET is_resolved = TRUE
+            WHERE alert_id = %s::uuid
+            RETURNING alert_id, alert_type, entity_ref
+            """,
+            (alert_id,)
+        )
+        alert = cur.fetchone()
+        if not alert:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Alert not found")
+
+        if alert["alert_type"] == "USER_SPAM":
+            cur.execute("UPDATE users SET is_flagged_spam = FALSE WHERE user_id = %s::uuid", (alert["entity_ref"],))
+
+        conn.commit()
+        cur.close()
+        return {"status": "resolved", "alert": alert}
 
 
 # ==========================================
@@ -662,32 +785,58 @@ def get_trends_and_anomalies():
 # ==========================================
 @app.post("/api/assistant/ask")
 def ask_research_assistant(req: AskAssistantRequest):
-    conn = get_conn()
-    cur = conn.cursor()
+    """
+    Grounded Question Answering: enforces a similarity floor to prevent hallucinated answers
+    when retrieval confidence is insufficient.
+    """
     q_vec = vec_literal(req.question)
 
-    filter_clause = "WHERE p.in_chanakya_library = TRUE" if req.library_only else ""
-    cur.execute(
-        f"""
-        SELECT pc.chunk_id, pc.chunk_text, p.paper_id, p.canonical_title, p.publication_year,
-               (1 - (pc.chunk_embedding <=> %s::vector)) AS similarity
-        FROM paper_chunks pc
-        JOIN papers p ON pc.paper_id = p.paper_id
-        {filter_clause}
-        ORDER BY pc.chunk_embedding <=> %s::vector
-        LIMIT 4
-        """,
-        (q_vec, q_vec),
-    )
-    passages = cur.fetchall()
-    cur.close()
-    conn.close()
+    with get_db() as conn:
+        cur = conn.cursor()
+        filter_clause = "WHERE p.in_chanakya_library = TRUE" if req.library_only else ""
+        cur.execute(
+            f"""
+            SELECT pc.chunk_id, pc.chunk_text, p.paper_id, p.canonical_title, p.publication_year,
+                   (1 - (pc.chunk_embedding <=> %s::vector)) AS similarity
+            FROM paper_chunks pc
+            JOIN papers p ON pc.paper_id = p.paper_id
+            {filter_clause}
+            ORDER BY pc.chunk_embedding <=> %s::vector
+            LIMIT 4
+            """,
+            (q_vec, q_vec),
+        )
+        passages = cur.fetchall()
+        cur.close()
 
     if not passages:
-        return {"answer": "No relevant passages found in the corpus.", "citations": []}
+        return {
+            "question": req.question,
+            "answer": "No relevant passages found in the research corpus.",
+            "citations": []
+        }
+
+    # Similarity floor: decline to hallucinate if confidence is low (< 0.28)
+    relevant_passages = [p for p in passages if float(p.get("similarity", 0.0)) >= 0.28]
+    if not relevant_passages:
+        return {
+            "question": req.question,
+            "answer": "Insufficient evidence found in the research library to reliably answer this question. Please try refining your query or broadening topic keywords.",
+            "citations": [
+                {
+                    "ref_index": idx,
+                    "paper_id": str(psg["paper_id"]),
+                    "title": psg["canonical_title"],
+                    "year": psg["publication_year"],
+                    "passage": psg["chunk_text"][:200] + "...",
+                    "similarity": round(float(psg["similarity"]), 3),
+                }
+                for idx, psg in enumerate(passages[:2], start=1)
+            ]
+        }
 
     context_blocks = []
-    for idx, psg in enumerate(passages, start=1):
+    for idx, psg in enumerate(relevant_passages, start=1):
         context_blocks.append(f"[{idx}] {psg['canonical_title']} ({psg['publication_year']}): {psg['chunk_text']}")
 
     prompt = (
@@ -718,7 +867,7 @@ def ask_research_assistant(req: AskAssistantRequest):
                 "passage": psg["chunk_text"],
                 "similarity": round(float(psg["similarity"]), 3),
             }
-            for idx, psg in enumerate(passages, start=1)
+            for idx, psg in enumerate(relevant_passages, start=1)
         ],
     }
 
@@ -728,65 +877,98 @@ def ask_research_assistant(req: AskAssistantRequest):
 # ==========================================
 @app.get("/api/analytics/overview")
 def analytics_overview(department: Optional[str] = None):
-    conn = get_conn()
-    cur = conn.cursor()
+    """
+    Institutional dimensional analytics from dw Star Schema.
+    Department filter faithfully applies across Topic Breakdown, Collaboration Matrix, and Monthly Trends.
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
 
-    # 1. Research activity by department & topic cluster
-    dept_filter = "WHERE dm.department = %s" if department else ""
-    params = (department,) if department else ()
+        # 1. Research activity by department & topic cluster
+        dept_filter = "WHERE dm.department = %s" if department else ""
+        params = (department,) if department else ()
 
-    cur.execute(
-        f"""
-        SELECT dm.department, dt.parent_cluster, dt.topic_name,
-               SUM(f.saves_count) AS total_saves,
-               SUM(f.posts_count) AS total_posts,
-               SUM(f.views_count) AS total_views
-        FROM dw.fact_research_activity f
-        JOIN dw.dim_member dm ON f.member_key = dm.member_key
-        LEFT JOIN dw.dim_topic dt ON f.topic_key = dt.topic_key
-        {dept_filter}
-        GROUP BY dm.department, dt.parent_cluster, dt.topic_name
-        ORDER BY total_saves DESC, total_views DESC
-        LIMIT 25
-        """,
-        params,
-    )
-    topic_breakdown = cur.fetchall()
+        cur.execute(
+            f"""
+            SELECT dm.department, dt.parent_cluster, dt.topic_name,
+                   SUM(f.saves_count) AS total_saves,
+                   SUM(f.posts_count) AS total_posts,
+                   SUM(f.views_count) AS total_views
+            FROM dw.fact_research_activity f
+            JOIN dw.dim_member dm ON f.member_key = dm.member_key
+            LEFT JOIN dw.dim_topic dt ON f.topic_key = dt.topic_key
+            {dept_filter}
+            GROUP BY dm.department, dt.parent_cluster, dt.topic_name
+            ORDER BY total_saves DESC, total_views DESC
+            LIMIT 25
+            """,
+            params,
+        )
+        topic_breakdown = cur.fetchall()
 
-    # 2. Cross-department collaboration matrix
-    cur.execute(
-        """
-        SELECT source_department, target_department, SUM(interaction_count) AS interactions
-        FROM dw.fact_dept_collaboration
-        GROUP BY source_department, target_department
-        ORDER BY interactions DESC
-        LIMIT 20
-        """
-    )
-    collaboration = cur.fetchall()
+        # 2. Cross-department collaboration matrix (filtered if department specified)
+        if department:
+            cur.execute(
+                """
+                SELECT source_department, target_department, SUM(interaction_count) AS interactions
+                FROM dw.fact_dept_collaboration
+                WHERE source_department = %s OR target_department = %s
+                GROUP BY source_department, target_department
+                ORDER BY interactions DESC
+                LIMIT 20
+                """,
+                (department, department),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT source_department, target_department, SUM(interaction_count) AS interactions
+                FROM dw.fact_dept_collaboration
+                GROUP BY source_department, target_department
+                ORDER BY interactions DESC
+                LIMIT 20
+                """
+            )
+        collaboration = cur.fetchall()
 
-    # 3. Monthly engagement trend
-    cur.execute(
-        """
-        SELECT dd.year, dd.month, dd.month_name,
-               SUM(f.saves_count) AS saves,
-               SUM(f.posts_count) AS posts,
-               SUM(f.views_count) AS views
-        FROM dw.fact_research_activity f
-        JOIN dw.dim_date dd ON f.date_key = dd.date_key
-        GROUP BY dd.year, dd.month, dd.month_name
-        ORDER BY dd.year, dd.month
-        """
-    )
-    monthly_trends = cur.fetchall()
+        # 3. Monthly engagement trend (filtered if department specified)
+        if department:
+            cur.execute(
+                """
+                SELECT dd.year, dd.month, dd.month_name,
+                       SUM(f.saves_count) AS saves,
+                       SUM(f.posts_count) AS posts,
+                       SUM(f.views_count) AS views
+                FROM dw.fact_research_activity f
+                JOIN dw.dim_date dd ON f.date_key = dd.date_key
+                JOIN dw.dim_member dm ON f.member_key = dm.member_key
+                WHERE dm.department = %s
+                GROUP BY dd.year, dd.month, dd.month_name
+                ORDER BY dd.year, dd.month
+                """,
+                (department,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT dd.year, dd.month, dd.month_name,
+                       SUM(f.saves_count) AS saves,
+                       SUM(f.posts_count) AS posts,
+                       SUM(f.views_count) AS views
+                FROM dw.fact_research_activity f
+                JOIN dw.dim_date dd ON f.date_key = dd.date_key
+                GROUP BY dd.year, dd.month, dd.month_name
+                ORDER BY dd.year, dd.month
+                """
+            )
+        monthly_trends = cur.fetchall()
+        cur.close()
 
-    cur.close()
-    conn.close()
-    return {
-        "topic_breakdown": topic_breakdown,
-        "cross_dept_collaboration": collaboration,
-        "monthly_trends": monthly_trends,
-    }
+        return {
+            "topic_breakdown": topic_breakdown,
+            "cross_dept_collaboration": collaboration,
+            "monthly_trends": monthly_trends,
+        }
 
 
 # ==========================================
@@ -827,25 +1009,24 @@ def get_anomalies():
     suspicious velocity/metadata anomalies (INTEGRITY_REVIEW).
     """
     try:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT 
-                researcher_id::text,
-                researcher_name,
-                role,
-                department,
-                school_name,
-                total_publications,
-                total_citations,
-                avg_coauthors,
-                avg_pagerank,
-                topic_breadth
-            FROM dw.vw_researcher_profiles
-        """)
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT 
+                    researcher_id::text,
+                    researcher_name,
+                    role,
+                    department,
+                    school_name,
+                    total_publications,
+                    total_citations,
+                    avg_coauthors,
+                    avg_pagerank,
+                    topic_breadth
+                FROM dw.vw_researcher_profiles
+            """)
+            rows = cur.fetchall()
+            cur.close()
 
         if rows and len(rows) >= 5:
             df = pd.DataFrame(rows)
