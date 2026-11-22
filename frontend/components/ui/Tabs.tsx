@@ -32,12 +32,12 @@ export function Tabs<T extends string>({
             aria-selected={active}
             onClick={() => onChange(t.id)}
             className={cx(
-              "relative -mb-px pb-2.5 pt-1 text-[13.5px] font-medium transition-colors duration-150",
+              "relative -mb-px pb-2.5 pt-1 text-meta font-medium transition-colors duration-150",
               active ? "text-ink" : "text-stone-500 hover:text-stone-800",
             )}
           >
             {t.label}
-            {t.count !== undefined && <span className="num ml-1.5 text-[11px] text-stone-400">{t.count}</span>}
+            {t.count !== undefined && <span className="num ml-1.5 text-meta text-stone-400">{t.count}</span>}
             <span
               className={cx(
                 "absolute inset-x-0 -bottom-px h-0.5 origin-left rounded-full bg-ink transition-transform duration-200",

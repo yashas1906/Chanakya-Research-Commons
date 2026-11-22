@@ -29,7 +29,7 @@
 
 @layer components {
   .eyebrow {
-    @apply font-sans text-[11px] font-medium uppercase tracking-eyebrow text-stone-500;
+    @apply font-sans text-label font-medium uppercase tracking-eyebrow text-stone-500;
   }
   .hairline {
     @apply border border-stone-200/90;
@@ -45,13 +45,13 @@
     @apply border-stone-300;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-stone-200/90 bg-paper px-3 py-1.5 text-[13px] font-medium text-stone-700 transition-colors duration-150 hover:border-stone-300 hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200/90 bg-paper px-3 text-ui font-medium text-stone-700 transition-colors duration-150 hover:border-stone-300 hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-ink bg-ink px-3.5 py-1.5 text-[13px] font-medium text-white transition-colors duration-150 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-ink bg-ink px-3.5 text-ui font-medium text-white transition-colors duration-150 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .input {
-    @apply w-full rounded-lg border border-stone-200/90 bg-paper px-3 py-2 text-sm text-ink placeholder:text-stone-400 transition-colors duration-150 hover:border-stone-300 focus:border-stone-400 focus:outline-none;
+    @apply min-h-10 w-full rounded-lg border border-stone-200/90 bg-paper px-3 py-2 text-ui text-ink placeholder:text-stone-400 transition-colors duration-150 hover:border-stone-300 focus:border-stone-400 focus:outline-none;
   }
   .skeleton {
     @apply relative overflow-hidden rounded-md bg-stone-200/60;

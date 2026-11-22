@@ -1,162 +1,191 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { CornerDownRight, Loader2, Send } from "lucide-react";
 import { Avatar } from "@/components/ui/Section";
+import { RoleBadge } from "@/components/ui/RoleBadge";
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { SkeletonLines } from "@/components/ui/Skeleton";
+import { ShareButton } from "@/components/feed/ShareButton";
 import { addComment, describeError, getComments } from "@/lib/api";
-import { relTime, shortSchool } from "@/lib/format";
+import { relTime } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
-import { useMember } from "@/lib/member-context";
+import { useAuth } from "@/context/AuthContext";
 import type { Comment } from "@/types/crc";
 
-interface Node extends Comment {
-  children: Node[];
-}
+interface Node extends Comment { children: Node[] }
+type SortMode = "best" | "newest" | "oldest";
 
-function buildTree(list: Comment[]): Node[] {
-  const byId = new Map<string, Node>(list.map((c) => [c.comment_id, { ...c, children: [] }]));
-  const roots: Node[] = [];
-  for (const n of byId.values()) {
-    const parent = n.parent_comment_id ? byId.get(n.parent_comment_id) : undefined;
-    (parent ? parent.children : roots).push(n);
-  }
-  const byTime = (a: Node, b: Node) => a.created_at.localeCompare(b.created_at);
-  const sortAll = (ns: Node[]) => {
-    ns.sort(byTime);
-    ns.forEach((n) => sortAll(n.children));
+function buildTree(comments: Comment[]): Node[] {
+  const nodes = new Map(comments.map((comment) => [comment.comment_id, { ...comment, children: [] as Node[] }]));
+  const hasCycle = (start: Node) => {
+    const seen = new Set<string>();
+    let current: Node | undefined = start;
+    while (current?.parent_comment_id) {
+      if (seen.has(current.comment_id)) return true;
+      seen.add(current.comment_id);
+      current = nodes.get(current.parent_comment_id);
+    }
+    return false;
   };
-  sortAll(roots);
+  const roots: Node[] = [];
+  nodes.forEach((node) => {
+    const parent = node.parent_comment_id ? nodes.get(node.parent_comment_id) : undefined;
+    if (parent && parent.post_id === node.post_id && !hasCycle(node)) parent.children.push(node);
+    else roots.push(node);
+  });
+  const sort = (items: Node[]) => {
+    items.sort((a, b) => a.created_at.localeCompare(b.created_at));
+    items.forEach((node) => sort(node.children));
+  };
+  sort(roots);
   return roots;
 }
 
-function Reply({ onSubmit, onCancel, placeholder }: { onSubmit: (body: string) => Promise<void>; onCancel?: () => void; placeholder: string }) {
+function countReplies(node: Node): number {
+  return node.children.reduce((sum, child) => sum + 1 + countReplies(child), 0);
+}
+
+function filterTree(nodes: Node[], query: string): Node[] {
+  if (!query) return nodes;
+  return nodes.flatMap((node) => {
+    const children = filterTree(node.children, query);
+    return node.body.toLowerCase().includes(query) || children.length ? [{ ...node, children }] : [];
+  });
+}
+
+function Reply({
+  onSubmit,
+  placeholder,
+  onCancel,
+  expanded = true,
+}: {
+  onSubmit: (body: string) => Promise<void>;
+  placeholder: string;
+  onCancel?: () => void;
+  expanded?: boolean;
+}) {
+  const { user, promptLogin } = useAuth();
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const { current } = useMember();
+  const [error, setError] = useState<string | null>(null);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!user) {
+      promptLogin();
+      return;
+    }
     if (!body.trim() || busy) return;
     setBusy(true);
-    setErr(null);
+    setError(null);
     try {
       await onSubmit(body.trim());
       setBody("");
       onCancel?.();
-    } catch (e2) {
-      setErr(describeError(e2));
+    } catch (reason) {
+      setError(describeError(reason));
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <form onSubmit={submit} className="space-y-1.5">
-      <div className="flex items-start gap-2">
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={1}
-          placeholder={placeholder}
-          aria-label={placeholder}
-          className="input min-h-[38px] resize-y py-2 text-[13.5px]"
-        />
-        <button type="submit" disabled={!body.trim() || busy || !current} className="btn-primary h-[38px] shrink-0 px-3" aria-label="Post comment">
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-        </button>
-      </div>
-      {err && (
-        <p role="alert" className="text-[12px] text-terracotta-600">
-          {err}
-        </p>
-      )}
+    <form onSubmit={submit} className="space-y-2">
+      <textarea value={body} onChange={(event) => setBody(event.target.value)} rows={expanded ? 3 : 1} placeholder={placeholder} aria-label={placeholder} className="input resize-y leading-relaxed" />
+      {expanded && <div className="flex justify-end gap-2"><button type="button" className="btn" onClick={onCancel}>Cancel</button><button type="submit" disabled={!body.trim() || busy} className="btn-primary">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}Comment</button></div>}
+      {!expanded && <button type="submit" disabled={!body.trim() || busy} className="btn-primary h-9 px-3">{busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</button>}
+      {error && <p role="alert" className="text-meta text-terracotta-700">{error}</p>}
     </form>
   );
 }
 
-function CommentItem({ node, depth, onReply }: { node: Node; depth: number; onReply: (body: string, parentId: string) => Promise<void> }) {
+function CommentItem({ node, postId, depth, onReply }: { node: Node; postId: string; depth: number; onReply: (body: string, parentId: string) => Promise<void> }) {
   const [replying, setReplying] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const visualDepth = Math.min(depth, 5);
+  const children = collapsed ? null : node.children;
   return (
-    <li className="space-y-2.5">
-      <div className="flex gap-2.5">
-        <Avatar name={node.author_name} size={24} />
+    <li id={`c-${node.comment_id}`} className="min-w-0 scroll-mt-24 space-y-3">
+      <div className="flex min-w-0 gap-3">
+        <Avatar name={node.author_name} size={32} />
         <div className="min-w-0 flex-1">
-          <p className="text-[12.5px]">
-            <span className="font-medium text-ink">{node.author_name}</span>
-            <span className="text-stone-400">
-              {node.author_dept ? ` · ${shortSchool(node.author_dept)}` : ""} · {relTime(node.created_at)}
-            </span>
-          </p>
-          <p className="mt-0.5 whitespace-pre-line text-[13.5px] leading-relaxed text-stone-700">{node.body}</p>
-          {depth < 3 && (
-            <button
-              type="button"
-              onClick={() => setReplying((r) => !r)}
-              className="mt-1 inline-flex items-center gap-1 text-[12px] font-medium text-stone-500 hover:text-ink"
-            >
-              <CornerDownRight className="h-3 w-3" /> Reply
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="text-ui font-medium text-ink">{node.author_name}</span>
+            {node.author_role && <RoleBadge role={node.author_role} />}
+            <span className="text-meta text-stone-500">{relTime(node.created_at)}</span>
+          </div>
+          <p className="mt-1 whitespace-pre-wrap text-body leading-relaxed text-stone-700">{node.body}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <button type="button" onClick={() => setReplying((value) => !value)} className="inline-flex items-center gap-1 text-meta font-medium text-stone-600 hover:text-ink"><CornerDownRight className="h-4 w-4" />Reply</button>
+            <ShareButton url={`/feed/${postId}#c-${node.comment_id}`} />
+            {node.children.length > 0 && <button type="button" onClick={() => setCollapsed((value) => !value)} className="text-meta text-stone-500 hover:text-ink">{collapsed ? `[+] ${countReplies(node)} replies` : "Collapse thread"}</button>}
+          </div>
         </div>
       </div>
-      {replying && (
-        <div className="ml-8">
-          <Reply
-            placeholder={`Reply to ${node.author_name}…`}
-            onSubmit={(b) => onReply(b, node.comment_id)}
-            onCancel={() => setReplying(false)}
-          />
-        </div>
-      )}
-      {node.children.length > 0 && (
-        <ul className="ml-3 space-y-3 border-l border-stone-100 pl-5">
-          {node.children.map((c) => (
-            <CommentItem key={c.comment_id} node={c} depth={depth + 1} onReply={onReply} />
-          ))}
-        </ul>
-      )}
+      {replying && <div className="ml-10"><Reply placeholder={`Reply to ${node.author_name}…`} onSubmit={(body) => onReply(body, node.comment_id)} onCancel={() => setReplying(false)} /></div>}
+      {children && children.length > 0 && <ul className={`ml-4 space-y-4 pl-4 ${visualDepth < 5 ? "border-l border-stone-200" : ""}`}>{children.map((child) => <CommentItem key={child.comment_id} node={child} postId={postId} depth={visualDepth + 1} onReply={onReply} />)}</ul>}
+      {depth >= 5 && node.children.length > 0 && collapsed && <button type="button" onClick={() => setCollapsed(false)} className="ml-10 text-meta font-medium text-stone-600">Continue thread ({countReplies(node)} replies)</button>}
     </li>
   );
 }
 
-/** Lazily loaded, threaded comments for one post. */
-export function CommentThread({ postId, onCountKnown }: { postId: string; onCountKnown?: (n: number) => void }) {
-  const { current } = useMember();
-  const { data, error, loading, reload } = useAsync(
-    async (s) => {
-      const list = await getComments(postId, s);
-      onCountKnown?.(list.length);
-      return list;
-    },
-    [postId],
-  );
-  const tree = useMemo(() => buildTree(data ?? []), [data]);
+export function CommentThread({ postId, onCountKnown }: { postId: string; onCountKnown?: (count: number) => void }) {
+  const { user, promptLogin } = useAuth();
+  const [sortMode, setSortMode] = useState<SortMode>("best");
+  const [filter, setFilter] = useState("");
+  const { data, error, loading, reload } = useAsync(async (signal) => {
+    const list = await getComments(postId, signal);
+    onCountKnown?.(list.length);
+    return list;
+  }, [postId]);
+  const tree = useMemo(() => {
+    const roots = buildTree(data ?? []);
+    const direction = sortMode === "newest" ? -1 : 1;
+    const sort = (nodes: Node[]) => {
+      nodes.sort((a, b) => direction * a.created_at.localeCompare(b.created_at));
+      nodes.forEach((node) => sort(node.children));
+    };
+    sort(roots);
+    return filterTree(roots, filter.trim().toLowerCase());
+  }, [data, sortMode, filter]);
 
-  const post = async (body: string, parentId: string | null) => {
-    if (!current) throw new Error("Choose a member to comment as.");
-    await addComment(postId, { author_id: current.user_id, body, parent_comment_id: parentId });
+  useEffect(() => {
+    if (!data || !window.location.hash.startsWith("#c-")) return;
+    const timer = window.setTimeout(() => {
+      const target = document.getElementById(decodeURIComponent(window.location.hash.slice(1)));
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      target?.classList.add("rounded-lg", "bg-sunken");
+      window.setTimeout(() => target?.classList.remove("bg-sunken"), 1800);
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [data]);
+
+  const submit = async (body: string, parentId: string | null) => {
+    if (!user) {
+      promptLogin();
+      throw new Error("Sign in to join the conversation.");
+    }
+    await addComment(postId, { author_id: user.user_id, body, parent_comment_id: parentId });
     reload();
   };
 
   return (
-    <div className="space-y-4 border-t border-stone-100 bg-canvas/60 px-5 py-4">
-      {loading && !data ? (
-        <SkeletonLines lines={3} />
-      ) : error ? (
-        <ErrorState compact error={error} onRetry={reload} />
-      ) : tree.length === 0 ? (
-        <EmptyState className="py-3" title="No replies yet" hint="Start the conversation below." />
-      ) : (
-        <ul className="space-y-4">
-          {tree.map((n) => (
-            <CommentItem key={n.comment_id} node={n} depth={0} onReply={post} />
-          ))}
-        </ul>
-      )}
-      {!error && <Reply placeholder="Add to the discussion…" onSubmit={(b) => post(b, null)} />}
-    </div>
+    <section id="comments" className="scroll-mt-24 space-y-5 border-t border-stone-200 pt-6">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div><p className="eyebrow">Community</p><h2 className="mt-1 font-serif text-h2 text-ink">Join the conversation</h2></div>
+        <label className="text-meta text-stone-600">Sort
+          <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="ml-2 rounded-lg border border-stone-200 bg-paper px-2 py-2 text-meta">
+            <option value="best">Top-level first</option><option value="newest">Newest</option><option value="oldest">Oldest</option>
+          </select>
+        </label>
+      </div>
+      <Reply placeholder={user ? "Add a thoughtful comment…" : "Sign in to join the conversation"} onSubmit={(body) => submit(body, null)} />
+      <input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Search comments…" aria-label="Search comments" className="input" />
+      {loading && !data ? <SkeletonLines lines={4} />
+        : error ? <ErrorState compact error={error} onRetry={reload} />
+          : tree.length === 0 ? <EmptyState className="py-6" title={filter ? "No comments match" : "No replies yet"} hint={filter ? "Try a different search term." : "Be the first to respond."} />
+            : <ul className="space-y-6">{tree.map((node) => <CommentItem key={node.comment_id} node={node} postId={postId} depth={0} onReply={(body, parent) => submit(body, parent)} />)}</ul>}
+    </section>
   );
 }

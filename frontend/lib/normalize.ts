@@ -143,6 +143,8 @@ export function normalizePaper(raw: unknown): Paper {
     topics: Array.isArray(o.topics) ? strList(o.topics) : null,
     save_count: num(o.save_count),
     pagerank_score: num(o.pagerank_score),
+    pagerank_percentile: numOrNull(o.pagerank_percentile),
+    school: strOrNull(o.school),
     in_chanakya_library: typeof o.in_chanakya_library === "boolean" ? o.in_chanakya_library : undefined,
     sources: Array.isArray(o.sources) ? strList(o.sources) : null,
     rrf_score: o.rrf_score === undefined ? undefined : num(o.rrf_score),
@@ -244,6 +246,7 @@ export function normalizeFeed(raw: unknown): FeedPost[] {
     const u = isRecord(r) ? r : {};
     return {
       post_id: str(u.post_id),
+      author_id: str(u.author_id),
       title: str(u.title),
       body: str(u.body),
       tags: Array.isArray(u.tags) ? strList(u.tags) : null,
@@ -252,6 +255,8 @@ export function normalizeFeed(raw: unknown): FeedPost[] {
       author_name: str(u.author_name, "Unknown"),
       author_dept: str(u.author_dept),
       author_role: str(u.author_role, "student") as FeedPost["author_role"],
+      comment_count: num(u.comment_count),
+      my_vote: ([-1, 0, 1].includes(num(u.my_vote)) ? num(u.my_vote) : 0) as FeedPost["my_vote"],
       attached_paper_title: strOrNull(u.attached_paper_title),
       attached_paper_id: strOrNull(u.attached_paper_id),
       relevance_score: u.relevance_score === undefined ? undefined : num(u.relevance_score),
@@ -268,6 +273,7 @@ export function normalizeComments(raw: unknown, postId: string): Comment[] {
       post_id: str(u.post_id, postId),
       author_id: strOrNull(u.author_id) ?? undefined,
       author_name: str(pick(u, "author_name", "full_name", "author"), "Member"),
+      author_role: str(u.author_role, "student") as Comment["author_role"],
       author_dept: strOrNull(pick(u, "author_dept", "department")) ?? undefined,
       parent_comment_id: strOrNull(u.parent_comment_id),
       body: str(u.body),

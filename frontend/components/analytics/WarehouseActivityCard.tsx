@@ -10,6 +10,7 @@ import { getOverview } from "@/lib/api";
 import { cx, fmtInt, shortSchool } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { SCHOOLS } from "@/types/crc";
+import { useAuth } from "@/context/AuthContext";
 
 function pctDelta(points: { value: number }[]): { text: string; up: boolean } | null {
   if (points.length < 2) return null;
@@ -39,6 +40,8 @@ function Skel() {
 
 /** dw.fact_research_activity trends + dw.fact_dept_collaboration matrix. */
 export function WarehouseActivityCard() {
+  const { can } = useAuth();
+  const canFilterDepartment = can("faculty");
   const [school, setSchool] = useState<string>("ALL");
   const [mode, setMode] = useState<"bars" | "table">("bars");
   const { data, error, loading, reload } = useAsync((s) => getOverview(school === "ALL" ? null : school, s), [school]);
@@ -84,10 +87,10 @@ export function WarehouseActivityCard() {
     <Panel
       eyebrow="Data warehouse"
       title="Research activity & cross-school collaboration"
-      actions={
-        <label className="flex items-center gap-2 text-[12.5px] text-stone-500">
+      actions={canFilterDepartment ? (
+        <label className="flex items-center gap-2 text-meta text-stone-500">
           School
-          <select value={school} onChange={(e) => setSchool(e.target.value)} className="input w-auto py-1.5 pr-8 text-[13px]" aria-label="Filter topic activity by school">
+          <select value={school} onChange={(e) => setSchool(e.target.value)} className="input w-auto py-1.5 pr-8 text-meta" aria-label="Filter topic activity by school">
             <option value="ALL">All schools</option>
             {SCHOOLS.map((s) => (
               <option key={s} value={s}>
@@ -96,7 +99,7 @@ export function WarehouseActivityCard() {
             ))}
           </select>
         </label>
-      }
+      ) : undefined}
     >
       {loading && !data ? (
         <Skel />
@@ -117,9 +120,9 @@ export function WarehouseActivityCard() {
                   const total = pts.reduce((s, p) => s + p.value, 0);
                   return (
                     <div key={m.key}>
-                      <p className="text-[12.5px] text-stone-500">{m.label}</p>
+                      <p className="text-meta text-stone-500">{m.label}</p>
                       <p className="num font-serif text-[28px] leading-tight text-ink">{fmtInt(total)}</p>
-                      <p className="num mb-2 h-4 text-[11.5px] text-stone-500">{delta?.text ?? ""}</p>
+                      <p className="num mb-2 h-4 text-meta text-stone-500">{delta?.text ?? ""}</p>
                       <Sparkline points={pts} name={m.label} />
                     </div>
                   );
@@ -133,7 +136,7 @@ export function WarehouseActivityCard() {
             <section className="min-w-0">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="eyebrow">Topic activity {school !== "ALL" && `· ${shortSchool(school)}`}</h3>
-                <div role="group" aria-label="View as" className="flex rounded-md border border-stone-200/90 p-0.5 text-[11.5px]">
+                <div role="group" aria-label="View as" className="flex rounded-md border border-stone-200/90 p-0.5 text-meta">
                   {(["bars", "table"] as const).map((m) => (
                     <button
                       key={m}
@@ -153,7 +156,7 @@ export function WarehouseActivityCard() {
                 <ul className="space-y-2.5">
                   {topics.map((t) => (
                     <li key={t.topic} title={`${t.topic}: ${fmtInt(t.saves)} saves · ${fmtInt(t.posts)} posts · ${fmtInt(t.views)} views`}>
-                      <div className="mb-1 flex items-baseline justify-between gap-3 text-[13px]">
+                      <div className="mb-1 flex items-baseline justify-between gap-3 text-meta">
                         <span className="truncate text-stone-800">{t.topic}</span>
                         <span className="num shrink-0 text-stone-500">{fmtInt(t.saves)} saves</span>
                       </div>
@@ -162,9 +165,9 @@ export function WarehouseActivityCard() {
                   ))}
                 </ul>
               ) : (
-                <table className="w-full text-[13px]">
+                <table className="w-full text-meta">
                   <thead>
-                    <tr className="border-b border-stone-200/90 text-left text-[11px] uppercase tracking-eyebrow text-stone-500">
+                    <tr className="border-b border-stone-200/90 text-left text-meta uppercase tracking-eyebrow text-stone-500">
                       <th className="pb-1.5 font-medium">Topic</th>
                       <th className="pb-1.5 text-right font-medium">Saves</th>
                       <th className="pb-1.5 text-right font-medium">Posts</th>

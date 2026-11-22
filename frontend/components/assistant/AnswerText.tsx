@@ -19,7 +19,7 @@ export function CitationPill({
   if (!citation) {
     return (
       <span
-        className="mx-0.5 inline-flex h-[18px] min-w-[18px] -translate-y-px items-center justify-center rounded-full border border-dashed border-stone-300 px-1 align-middle text-[10.5px] font-semibold text-stone-400"
+        className="mx-0.5 inline-flex h-[18px] min-w-[18px] -translate-y-px items-center justify-center rounded-full border border-dashed border-stone-300 px-1 align-middle text-meta font-semibold text-stone-400"
         title="No retrieved passage backs this reference"
       >
         {n}
@@ -34,7 +34,7 @@ export function CitationPill({
       aria-label={`Citation ${n}: ${citation.title}`}
       aria-pressed={active}
       className={cx(
-        "num mx-0.5 inline-flex h-[18px] min-w-[18px] -translate-y-px items-center justify-center rounded-full border px-1 align-middle text-[10.5px] font-semibold transition-colors duration-150",
+        "num mx-0.5 inline-flex h-[18px] min-w-[18px] -translate-y-px items-center justify-center rounded-full border px-1 align-middle text-meta font-semibold transition-colors duration-150",
         active ? "border-ink bg-ink text-white" : "border-stone-300 bg-paper text-stone-600 hover:border-ink hover:text-ink",
       )}
     >

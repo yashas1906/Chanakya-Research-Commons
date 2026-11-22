@@ -3,11 +3,11 @@
 import { useState } from "react";
 import { Bookmark, BookmarkCheck, Loader2 } from "lucide-react";
 import { describeError } from "@/lib/api";
-import { useMember } from "@/lib/member-context";
+import { useAuth } from "@/context/AuthContext";
 import { useSaves } from "@/lib/saves-context";
 import { cx } from "@/lib/format";
 
-/** One-click save to the acting member's Chanakya library. */
+/** One-click save to the signed-in member's Chanakya library. */
 export function SaveButton({
   paperId,
   size = "sm",
@@ -17,13 +17,17 @@ export function SaveButton({
   size?: "sm" | "md";
   className?: string;
 }) {
-  const { current } = useMember();
+  const { user, promptLogin } = useAuth();
   const { savedIds, save } = useSaves();
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const saved = savedIds.has(paperId);
 
   const onClick = async () => {
+    if (!user) {
+      promptLogin();
+      return;
+    }
     if (saved || busy) return;
     setBusy(true);
     setErr(null);
@@ -42,12 +46,12 @@ export function SaveButton({
       <button
         type="button"
         onClick={onClick}
-        disabled={!current || busy}
+        disabled={busy}
         aria-pressed={saved}
-        title={!current ? "Choose a member to save as" : saved ? "In your library" : "Save to your library"}
+        title={saved ? "In your library" : "Save to your library"}
         className={cx(
           "inline-flex items-center gap-1.5 rounded-lg border font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
-          size === "sm" ? "px-2.5 py-1 text-[12px]" : "px-3 py-1.5 text-[13px]",
+          size === "sm" ? "px-2.5 py-1 text-meta" : "px-3 py-1.5 text-meta",
           saved
             ? "border-sage-200 bg-sage-50 text-sage-700"
             : "border-stone-200/90 bg-paper text-stone-700 hover:border-stone-300 hover:bg-sunken",
@@ -57,7 +61,7 @@ export function SaveButton({
         {saved ? "Saved" : "Save"}
       </button>
       {err && (
-        <span role="alert" className="max-w-[220px] text-right text-[11px] leading-snug text-terracotta-600">
+        <span role="alert" className="max-w-[220px] text-right text-meta leading-snug text-terracotta-600">
           {err}
         </span>
       )}

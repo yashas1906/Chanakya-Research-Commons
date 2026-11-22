@@ -60,6 +60,7 @@ CREATE TABLE papers (
     ) STORED,
     pagerank_score FLOAT DEFAULT 0.0,
     save_count INT DEFAULT 0,
+    sources JSONB DEFAULT '["openalex"]'::jsonb,
     in_chanakya_library BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -137,9 +138,12 @@ CREATE TABLE comments (
 CREATE TABLE post_upvotes (
     user_id UUID REFERENCES users(user_id) ON DELETE CASCADE,
     post_id UUID REFERENCES posts(post_id) ON DELETE CASCADE,
+    value SMALLINT NOT NULL DEFAULT 1 CHECK (value IN (-1, 1)),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (user_id, post_id)
 );
+
+CREATE INDEX idx_comments_post ON comments(post_id, created_at);
 
 -- F6, F7, F9: Event Stream & Anomaly Alerts
 CREATE TABLE activity_events (

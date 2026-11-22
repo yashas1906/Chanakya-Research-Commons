@@ -39,7 +39,7 @@ function TraitChip({ trait }: { trait: string }) {
   const { name, level } = splitTrait(trait);
   const tone = level === "High" ? "bg-ink text-white" : level === "Low" ? "bg-stone-200 text-stone-700" : "bg-sunken text-stone-700 border border-stone-200/90";
   return (
-    <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] leading-4 ${tone}`} title={trait}>
+    <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta leading-4 ${tone}`} title={trait}>
       {name}
       {level && <span className="font-semibold opacity-80">· {level}</span>}
     </span>
@@ -58,7 +58,7 @@ function ClusterCard({ c, total, maxima, rules }: { c: ClusterSummary; total: nu
         </div>
         <div className="text-right">
           <p className="num font-serif text-[22px] leading-none text-ink">{fmtInt(c.size)}</p>
-          <p className="num mt-0.5 text-[11px] text-stone-500">{fmtPct(share)} of cohort</p>
+          <p className="num mt-0.5 text-meta text-stone-500">{fmtPct(share)} of cohort</p>
         </div>
       </div>
       <Meter value={share} tone="ink" className="mt-3" label={`Cluster ${c.cluster_id} share`} />
@@ -66,7 +66,7 @@ function ClusterCard({ c, total, maxima, rules }: { c: ClusterSummary; total: nu
       {metrics.length > 0 && (
         <dl className="mt-4 space-y-1.5">
           {metrics.map(([name, v]) => (
-            <div key={name} className="grid grid-cols-[7.5rem_1fr_3rem] items-center gap-2 text-[12px]">
+            <div key={name} className="grid grid-cols-[7.5rem_1fr_3rem] items-center gap-2 text-meta">
               <dt className="truncate text-stone-500" title={name}>
                 {name}
               </dt>
@@ -94,14 +94,14 @@ function ClusterCard({ c, total, maxima, rules }: { c: ClusterSummary; total: nu
               <div className="flex flex-wrap items-center gap-1.5">
                 {r.traits.map((t, j) => (
                   <span key={t} className="inline-flex items-center gap-1.5">
-                    {j > 0 && <span className="text-[11px] text-stone-300">+</span>}
+                    {j > 0 && <span className="text-meta text-stone-300">+</span>}
                     <TraitChip trait={t} />
                   </span>
                 ))}
                 <ArrowRight className="h-3 w-3 text-stone-300" />
                 <Pill tone="ink">Cluster {r.cluster_id}</Pill>
               </div>
-              <p className="text-[12.5px] leading-relaxed text-stone-600">
+              <p className="text-meta leading-relaxed text-stone-600">
                 {ruleSentence(r)}
                 {(r.confidence !== null || r.lift !== null) && (
                   <span className="num text-stone-400">
@@ -145,7 +145,7 @@ function Body({ data }: { data: ResearcherArchetypes }) {
           <h3 className="eyebrow mb-2">Defining rules</h3>
           <ul className="space-y-2">
             {orphanRules.map((r, i) => (
-              <li key={i} className="flex flex-wrap items-center gap-1.5 text-[12.5px]">
+              <li key={i} className="flex flex-wrap items-center gap-1.5 text-meta">
                 {r.traits.map((t, j) => (
                   <span key={t} className="inline-flex items-center gap-1.5">
                     {j > 0 && <span className="text-stone-300">+</span>}
@@ -175,7 +175,7 @@ export function ResearcherArchetypesCard() {
       actions={
         data && (
           <div className="flex items-center gap-2">
-            {data.total_researchers != null && <span className="num text-[12px] text-stone-500">{fmtInt(data.total_researchers)} researchers</span>}
+            {data.total_researchers != null && <span className="num text-meta text-stone-500">{fmtInt(data.total_researchers)} researchers</span>}
             {sil && data.silhouette_score != null && (
               <Pill tone={sil.tone} title="Silhouette score: −1 (mis-assigned) to 1 (cleanly separated)">
                 <span className="num">Silhouette {data.silhouette_score.toFixed(2)}</span> · {sil.label}

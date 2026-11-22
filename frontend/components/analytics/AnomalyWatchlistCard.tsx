@@ -10,6 +10,7 @@ import { getAnomalies } from "@/lib/api";
 import { cx, relTime } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import type { AnomalyItem, Severity } from "@/types/crc";
+import { useAuth } from "@/context/AuthContext";
 
 const SEVERITY: Record<Severity, { label: string; cls: string }> = {
   high: { label: "High", cls: "border-terracotta-500 bg-terracotta-500 text-white" },
@@ -48,9 +49,9 @@ function Ledger({
         </p>
         <h3 className="flex items-baseline justify-between gap-3 font-serif text-[18px] leading-snug text-ink">
           {title}
-          <span className="num font-sans text-[12px] font-normal text-stone-500">{items.length}</span>
+          <span className="num font-sans text-meta font-normal text-stone-500">{items.length}</span>
         </h3>
-        <p className="mt-0.5 text-[12px] leading-relaxed text-stone-600">{blurb}</p>
+        <p className="mt-0.5 text-meta leading-relaxed text-stone-600">{blurb}</p>
       </header>
       {items.length === 0 ? (
         <EmptyState className="py-10" title={empty} />
@@ -63,7 +64,7 @@ function Ledger({
                 <h4 className="font-serif text-[16px] leading-snug text-ink">{it.title}</h4>
                 {showSeverity ? (
                   <span
-                    className={cx("inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold leading-4", SEVERITY[it.severity].cls)}
+                    className={cx("inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-meta font-semibold leading-4", SEVERITY[it.severity].cls)}
                     title={`Severity score ${it.score.toFixed(3)}`}
                   >
                     {it.severity === "high" && <AlertTriangle className="h-3 w-3" />}
@@ -75,18 +76,18 @@ function Ledger({
                   </Pill>
                 )}
               </div>
-              {it.title !== it.entity_ref && <p className="mt-0.5 truncate font-mono text-[10.5px] text-stone-400">{it.entity_ref}</p>}
-              {it.reason && <p className="mt-1.5 text-[13px] leading-relaxed text-stone-600">{it.reason}</p>}
+              {it.title !== it.entity_ref && <p className="mt-0.5 truncate font-mono text-meta text-stone-400">{it.entity_ref}</p>}
+              {it.reason && <p className="mt-1.5 text-meta leading-relaxed text-stone-600">{it.reason}</p>}
               {(it.facts.length > 0 || it.detected_at) && (
                 <dl className="mt-2.5 flex flex-wrap gap-x-5 gap-y-1.5">
                   {it.facts.map((f) => (
-                    <div key={f.label} className="flex items-baseline gap-1.5 text-[12px]">
+                    <div key={f.label} className="flex items-baseline gap-1.5 text-meta">
                       <dt className="text-stone-400">{f.label}</dt>
                       <dd className="num font-medium text-stone-700">{f.value}</dd>
                     </div>
                   ))}
                   {it.detected_at && (
-                    <div className="flex items-baseline gap-1.5 text-[12px]">
+                    <div className="flex items-baseline gap-1.5 text-meta">
                       <dt className="text-stone-400">Detected</dt>
                       <dd className="text-stone-700">{relTime(it.detected_at)}</dd>
                     </div>
@@ -103,6 +104,8 @@ function Ledger({
 
 /** Split ledger: breakout impact on the left, integrity / metadata watchlist on the right, plus the live gatekeeper. */
 export function AnomalyWatchlistCard() {
+  const { can } = useAuth();
+  const isAdmin = can("admin");
   const { data, error, loading, reload } = useAsync((s) => getAnomalies(s), []);
 
   return (
@@ -126,7 +129,7 @@ export function AnomalyWatchlistCard() {
               items={data.spotlights}
               empty="No breakout works detected"
             />
-            <Ledger
+            {isAdmin && <Ledger
               tone="terracotta"
               eyebrow="Integrity review"
               title="Integrity & metadata watchlist"
@@ -135,10 +138,10 @@ export function AnomalyWatchlistCard() {
               items={data.integrity}
               empty="Nothing flagged for review"
               showSeverity
-            />
+            />}
           </div>
         ) : null}
-        <GatekeeperTester />
+        {isAdmin && <GatekeeperTester />}
       </div>
     </Panel>
   );

@@ -28,6 +28,10 @@ export interface Member {
   is_flagged_spam: boolean;
 }
 
+export interface AuthUser extends Omit<Member, "email"> {
+  email?: string;
+}
+
 /** Chanakya University schools, as seeded in data_pipeline/seed_database.py. */
 export const SCHOOLS = [
   "Computer Science & AI",
@@ -62,6 +66,34 @@ export interface Paper {
   rrf_score?: number;
   /** Not returned by main.py today; rendered when a backend provides it. */
   doi?: string | null;
+  pagerank_percentile?: number | null;
+  school?: string | null;
+}
+
+export interface PaperDetail extends Paper {
+  arxiv_id: string | null;
+  in_chanakya_library: boolean;
+  pagerank_percentile: number | null;
+  cites_count: number;
+  cited_by_count: number;
+  references: Array<{ paper_id: string; canonical_title: string; publication_year: number | null }>;
+  cited_by: Array<{ paper_id: string; canonical_title: string; publication_year: number | null }>;
+  related_posts: Array<{
+    post_id: string;
+    title: string;
+    author_name: string;
+    upvote_count: number;
+    comment_count: number;
+    created_at: string;
+  }>;
+  is_saved: boolean;
+  collection_id: string | null;
+}
+
+export interface HomePayload {
+  stats: { papers: number; scholars: number; clusters: number; posts: number };
+  featured_papers: Paper[];
+  recent_posts: FeedPost[];
 }
 
 export interface SavedPaper extends Paper {
@@ -122,6 +154,7 @@ export interface RecommendedPerson {
 
 export interface FeedPost {
   post_id: string;
+  author_id: string;
   title: string;
   body: string;
   tags: string[] | null;
@@ -130,9 +163,31 @@ export interface FeedPost {
   author_name: string;
   author_dept: string;
   author_role: Role;
+  comment_count: number;
+  my_vote: -1 | 0 | 1;
   attached_paper_title: string | null;
   attached_paper_id: string | null;
   relevance_score?: number;
+}
+
+export interface PostDetail extends FeedPost {
+  author: {
+    user_id: string;
+    full_name: string;
+    role: Role;
+    department: string;
+    bio: string | null;
+    interest_tags: string[] | null;
+    post_count: number;
+  };
+  attached_paper: {
+    paper_id: string;
+    canonical_title: string;
+    authors: RawAuthor[] | null;
+    venue: string | null;
+    publication_year: number | null;
+    pagerank_percentile: number | null;
+  } | null;
 }
 
 export interface PostHit {
@@ -151,6 +206,7 @@ export interface Comment {
   post_id: string;
   author_id?: string;
   author_name: string;
+  author_role?: Role;
   author_dept?: string;
   parent_comment_id: string | null;
   body: string;

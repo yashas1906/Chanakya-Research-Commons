@@ -80,12 +80,12 @@ export function SearchBar({
             Search <CornerDownLeft className="h-3 w-3 opacity-70" />
           </button>
         ) : (
-          <kbd className="hidden shrink-0 rounded-md border border-stone-200 bg-sunken px-1.5 py-0.5 font-sans text-[11px] font-medium text-stone-500 sm:block">
+          <kbd className="hidden shrink-0 rounded-md border border-stone-200 bg-sunken px-1.5 py-0.5 font-sans text-meta font-medium text-stone-500 sm:block">
             /
           </kbd>
         )}
       </div>
-      {tooShort && <p className="mt-2 text-center text-[12px] text-stone-500">Type at least two characters to search.</p>}
+      {tooShort && <p className="mt-2 text-center text-meta text-stone-500">Type at least two characters to search.</p>}
     </form>
   );
 }

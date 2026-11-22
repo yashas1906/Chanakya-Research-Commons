@@ -24,7 +24,7 @@ export function Pill({
     <span
       title={title}
       className={cx(
-        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium leading-4",
+        "inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-meta font-medium leading-4",
         TONES[tone],
         className,
       )}
@@ -37,7 +37,7 @@ export function Pill({
 /** Quiet inline topic tag. */
 export function Tag({ children }: { children: React.ReactNode }) {
   return (
-    <span className="inline-block rounded-md bg-sunken px-1.5 py-0.5 text-[11px] leading-4 text-stone-500">{children}</span>
+    <span className="inline-block rounded-md bg-sunken px-1.5 py-0.5 text-meta leading-4 text-stone-500">{children}</span>
   );
 }
 
@@ -59,7 +59,7 @@ export function Chip({
       onClick={onClick}
       aria-pressed={active}
       className={cx(
-        "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-[12.5px] font-medium transition-colors duration-150",
+        "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1 text-meta font-medium transition-colors duration-150",
         active
           ? "border-ink bg-ink text-white"
           : "border-stone-200/90 bg-paper text-stone-600 hover:border-stone-300 hover:bg-sunken",
@@ -67,7 +67,7 @@ export function Chip({
     >
       {children}
       {count !== undefined && (
-        <span className={cx("num text-[11px]", active ? "text-stone-300" : "text-stone-400")}>{count}</span>
+        <span className={cx("num text-meta", active ? "text-stone-300" : "text-stone-400")}>{count}</span>
       )}
     </button>
   );

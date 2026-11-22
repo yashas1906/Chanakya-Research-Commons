@@ -64,7 +64,7 @@ export function Avatar({ name, size = 28 }: { name: string; size?: number }) {
   return (
     <span
       aria-hidden
-      className="inline-flex shrink-0 items-center justify-center rounded-full border border-stone-200/90 bg-sunken font-sans text-[10.5px] font-semibold tracking-wide text-stone-600"
+      className="inline-flex shrink-0 items-center justify-center rounded-full border border-stone-200/90 bg-sunken font-sans text-meta font-semibold tracking-wide text-stone-600"
       style={{ width: size, height: size }}
     >
       {initials(name)}

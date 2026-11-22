@@ -20,13 +20,13 @@ export function RelatedTopics({
   if (topics.length === 0) return null;
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-center gap-x-2 gap-y-2" aria-label="Related topics">
-      <span className="mr-1 inline-flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-eyebrow text-stone-500">
+      <span className="mr-1 inline-flex items-center gap-1.5 text-meta font-medium uppercase tracking-eyebrow text-stone-500">
         <Sparkles className="h-3 w-3" strokeWidth={1.75} /> Often studied with
       </span>
       {topics.map((t) => (
         <span
           key={t.topic}
-          className="inline-flex items-stretch overflow-hidden rounded-full border border-stone-200/90 bg-paper text-[12.5px] transition-colors duration-150 hover:border-stone-300"
+          className="inline-flex items-stretch overflow-hidden rounded-full border border-stone-200/90 bg-paper text-meta transition-colors duration-150 hover:border-stone-300"
         >
           <button
             type="button"
@@ -35,7 +35,7 @@ export function RelatedTopics({
             className="inline-flex items-center gap-1.5 py-1 pl-3 pr-2 font-medium text-stone-700 transition-colors hover:bg-sunken hover:text-ink"
           >
             {t.topic}
-            {t.lift !== null && <span className="num text-[11px] font-normal text-stone-400">{fmtLift(t.lift)}</span>}
+            {t.lift !== null && <span className="num text-meta font-normal text-stone-400">{fmtLift(t.lift)}</span>}
           </button>
           <button
             type="button"

@@ -1,20 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { ArrowUp, Square, TriangleAlert } from "lucide-react";
 import { AnswerText } from "@/components/assistant/AnswerText";
 import { EvidenceInspector } from "@/components/assistant/EvidenceInspector";
 import { PageHeader } from "@/components/ui/Section";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/States";
-import { askAssistant, isAbort } from "@/lib/api";
+import { askAssistant, getPaper, isAbort } from "@/lib/api";
 import { cx } from "@/lib/format";
+import { useAsync } from "@/lib/hooks";
+import { useAuth } from "@/context/AuthContext";
 import type { AssistantAnswer } from "@/types/crc";
 
 interface Turn {
   id: number;
   question: string;
   libraryOnly: boolean;
+  paperId: string | null;
   status: "pending" | "done" | "error";
   result?: AssistantAnswer;
   error?: unknown;
@@ -27,8 +32,12 @@ const SUGGESTIONS = [
 ];
 
 export function AssistantWorkspace() {
+  const searchParams = useSearchParams();
+  const { user, promptLogin } = useAuth();
+  const [paperScope, setPaperScope] = useState<string | null>(searchParams.get("paper"));
+  const scopedPaper = useAsync((signal) => getPaper(paperScope!, signal), [paperScope], !!paperScope);
   const [turns, setTurns] = useState<Turn[]>([]);
-  const [question, setQuestion] = useState("");
+  const [question, setQuestion] = useState(searchParams.get("q") ?? "");
   const [libraryOnly, setLibraryOnly] = useState(false);
   const [activeTurn, setActiveTurn] = useState<number | null>(null);
   const [activeRef, setActiveRef] = useState<number | null>(null);
@@ -38,6 +47,11 @@ export function AssistantWorkspace() {
   const endRef = useRef<HTMLDivElement>(null);
 
   const pendingTurn = turns.find((t) => t.status === "pending");
+
+  useEffect(() => {
+    setPaperScope(searchParams.get("paper"));
+    setQuestion(searchParams.get("q") ?? "");
+  }, [searchParams]);
 
   // Elapsed timer while the local model is working.
   useEffect(() => {
@@ -56,15 +70,19 @@ export function AssistantWorkspace() {
     async (q: string) => {
       const text = q.trim();
       if (!text || abortRef.current) return;
+      if (!user) {
+        promptLogin();
+        return;
+      }
       const id = ++idRef.current;
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-      setTurns((prev) => [...prev, { id, question: text, libraryOnly, status: "pending" }]);
+      setTurns((prev) => [...prev, { id, question: text, libraryOnly, paperId: paperScope, status: "pending" }]);
       setActiveTurn(id);
       setActiveRef(null);
       setQuestion("");
       try {
-        const result = await askAssistant(text, libraryOnly, ctrl.signal);
+        const result = await askAssistant(text, libraryOnly, ctrl.signal, paperScope);
         setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, status: "done", result } : t)));
       } catch (e) {
         if (isAbort(e)) {
@@ -76,7 +94,7 @@ export function AssistantWorkspace() {
         abortRef.current = null;
       }
     },
-    [libraryOnly],
+    [libraryOnly, paperScope, user, promptLogin],
   );
 
   useEffect(() => {
@@ -92,6 +110,11 @@ export function AssistantWorkspace() {
         title="Ask the library"
         description="Answers are written by a local model using only passages retrieved from Chanakya's papers. Every claim carries a citation you can inspect."
       />
+
+      {paperScope && <div className="flex items-center justify-between gap-3 rounded-xl border border-stone-200 bg-paper px-4 py-3">
+        <p className="min-w-0 truncate text-ui text-stone-700">Scoped to: <Link href={`/papers/${paperScope}`} className="font-medium text-ink hover:underline">{scopedPaper.data?.canonical_title ?? paperScope}</Link></p>
+        <button type="button" onClick={() => setPaperScope(null)} className="btn h-9">Remove scope</button>
+      </div>}
 
       <div className="grid gap-6 lg:grid-cols-12">
         {/* ----------------------------- thread ----------------------------- */}
@@ -134,10 +157,11 @@ export function AssistantWorkspace() {
                 >
                   <h2 className="font-serif text-[24px] leading-snug tracking-tight text-ink">{t.question}</h2>
                   {t.libraryOnly && <p className="eyebrow">Restricted to Chanakya Library</p>}
+                  {t.paperId && <p className="eyebrow">Scoped to a paper</p>}
 
                   {t.status === "pending" && (
                     <div className="space-y-3" role="status" aria-live="polite">
-                      <p className="text-[13px] text-stone-500">
+                      <p className="text-meta text-stone-500">
                         Retrieving passages and writing an answer
                         <span className="num"> · {elapsed}s</span>
                         {elapsed > 15 && <span> — local models can take up to a minute.</span>}
@@ -159,7 +183,7 @@ export function AssistantWorkspace() {
                   {t.status === "done" && t.result && (
                     <>
                       {t.result.degraded && (
-                        <div role="alert" className="flex items-start gap-2.5 rounded-lg border border-terracotta-200 bg-terracotta-50 px-3.5 py-2.5 text-[13px] leading-relaxed text-terracotta-700">
+                        <div role="alert" className="flex items-start gap-2.5 rounded-lg border border-terracotta-200 bg-terracotta-50 px-3.5 py-2.5 text-meta leading-relaxed text-terracotta-700">
                           <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                           <span>
                             {t.result.answer || "The local model returned nothing."}{" "}
@@ -209,7 +233,7 @@ export function AssistantWorkspace() {
               className="w-full resize-none border-0 bg-transparent px-2 py-1 text-[15.5px] leading-relaxed text-ink placeholder:text-stone-400 focus:outline-none"
             />
             <div className="flex items-center justify-between gap-3 border-t border-stone-100 pt-2.5">
-              <label className="flex cursor-pointer items-center gap-2 text-[12.5px] text-stone-600">
+              <label className="flex cursor-pointer items-center gap-2 text-meta text-stone-600">
                 <input
                   type="checkbox"
                   checked={libraryOnly}

@@ -1,20 +1,50 @@
 import os
 import json
+import argparse
+from datetime import datetime, timedelta, timezone
 import numpy as np
 import pandas as pd
 import networkx as nx
+import scipy.stats as stats
 import psycopg2
 from psycopg2.extras import execute_values
 from datasketch import MinHash, MinHashLSH
 from sklearn.cluster import AgglomerativeClustering
+from sklearn.ensemble import IsolationForest
+from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
 
+embed_model = None
+
+
+def get_embed_model():
+    global embed_model
+    if embed_model is None:
+        embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+    return embed_model
+
+
+def get_anchor_date(cur, as_of_arg: str = None) -> datetime:
+    if as_of_arg:
+        try:
+            dt = datetime.fromisoformat(as_of_arg)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        except Exception:
+            pass
+    cur.execute("SELECT MAX(occurred_at) FROM public.activity_events")
+    row = cur.fetchone()
+    if row and row[0]:
+        return row[0]
+    return datetime.now(timezone.utc)
+
 
 def run_minhash_deduplication(cur):
-    print("1/4 Running MinHash + LSH near-duplicate detection (F4/F5)...")
+    print("1/5 Running MinHash + LSH near-duplicate detection (F4/F5)...")
     cur.execute("SELECT paper_id, canonical_title, minhash_signature FROM papers WHERE minhash_signature IS NOT NULL")
     rows = cur.fetchall()
 
@@ -43,7 +73,7 @@ def run_minhash_deduplication(cur):
 
 
 def run_citation_pagerank(cur):
-    print("2/4 Computing PageRank on paper citation graph via NetworkX (F5)...")
+    print("2/5 Computing PageRank on paper citation graph via NetworkX & validating calibration (F5)...")
     cur.execute("SELECT paper_id FROM papers")
     all_pids = [str(r[0]) for r in cur.fetchall()]
 
@@ -55,8 +85,19 @@ def run_citation_pagerank(cur):
     G.add_edges_from(edges)
 
     pr_scores = nx.pagerank(G, alpha=0.85)
-    update_rows = [(float(score), pid) for pid, score in pr_scores.items()]
+    in_degrees = dict(G.in_degree())
 
+    # PageRank validation: compute Spearman rank correlation with in-degree citation count
+    pr_vals = [pr_scores[pid] for pid in all_pids]
+    deg_vals = [in_degrees[pid] for pid in all_pids]
+
+    if len(set(deg_vals)) > 1:
+        corr, p_val = stats.spearmanr(pr_vals, deg_vals)
+        print(f"    -> PageRank validation: Spearman rank correlation with citation in-degree = {corr:.4f} (p={p_val:.4e})")
+    else:
+        print("    -> PageRank validation: Uniform citation distribution across corpus.")
+
+    update_rows = [(float(score), pid) for pid, score in pr_scores.items()]
     execute_values(
         cur,
         "UPDATE papers AS p SET pagerank_score = v.score FROM (VALUES %s) AS v(score, id) WHERE p.paper_id = v.id::uuid",
@@ -66,10 +107,10 @@ def run_citation_pagerank(cur):
 
 
 def build_star_schema(cur):
-    print("3/4 Populating Star Schema dimensions & facts (dw.*) for F9 Analytics...")
+    print("3/5 Populating Star Schema dimensions & facts (dw.*) with semantic centroid topic clustering (F9)...")
     cur.execute("TRUNCATE dw.fact_research_activity, dw.fact_dept_collaboration, dw.dim_date, dw.dim_member, dw.dim_topic, dw.dim_paper RESTART IDENTITY CASCADE")
 
-    # dim_date from all activity timestamps
+    # 1. dim_date from all activity timestamps
     cur.execute("""
         INSERT INTO dw.dim_date (date_key, full_date, year, quarter, month, month_name, week_of_year, academic_semester)
         SELECT DISTINCT
@@ -89,21 +130,21 @@ def build_star_schema(cur):
         ON CONFLICT (date_key) DO NOTHING
     """)
 
-    # dim_member
+    # 2. dim_member
     cur.execute("""
         INSERT INTO dw.dim_member (user_id, full_name, role, department, is_active)
         SELECT user_id, full_name, role, department, NOT is_flagged_spam
         FROM users
     """)
 
-    # dim_paper with PageRank tier
+    # 3. dim_paper with PageRank tier
     cur.execute("""
         INSERT INTO dw.dim_paper (paper_id, title, publication_year, primary_source, pagerank_tier)
         SELECT
             paper_id,
             canonical_title,
             publication_year,
-            'openalex',
+            COALESCE(sources->>0, 'openalex'),
             CASE
                 WHEN pagerank_score >= (SELECT PERCENTILE_CONT(0.8) WITHIN GROUP (ORDER BY pagerank_score) FROM papers) THEN 'High'
                 WHEN pagerank_score >= (SELECT PERCENTILE_CONT(0.4) WITHIN GROUP (ORDER BY pagerank_score) FROM papers) THEN 'Medium'
@@ -112,35 +153,64 @@ def build_star_schema(cur):
         FROM papers
     """)
 
-    # dim_topic with hierarchical clustering (AgglomerativeClustering on topic embeddings)
-    cur.execute("SELECT DISTINCT UNNEST(topics) FROM papers WHERE topics IS NOT NULL")
-    topics = sorted([r[0] for r in cur.fetchall() if r[0]])
+    # 4. dim_topic with Semantic Centroid Clustering (Replace character n-gram index hardcoding)
+    cur.execute("""
+        SELECT DISTINCT UNNEST(topics) AS topic, COUNT(*) as paper_count
+        FROM papers
+        WHERE topics IS NOT NULL
+        GROUP BY 1
+    """)
+    topic_counts = {r[0]: r[1] for r in cur.fetchall() if r[0]}
+    topics = sorted(topic_counts.keys())
 
     cluster_map = {}
     if len(topics) >= 4:
-        # Group topics into 4 broad research clusters using TF-IDF / character n-grams + AgglomerativeClustering
-        from sklearn.feature_extraction.text import TfidfVectorizer
-        vec = TfidfVectorizer(analyzer="char_wb", ngram_range=(3, 4)).fit_transform(topics).toarray()
-        labels = AgglomerativeClustering(n_clusters=4).fit_predict(vec)
-        cluster_names = {
-            0: "Cluster A: Intelligent Systems & Computing",
-            1: "Cluster B: Life Sciences & Bio-Engineering",
-            2: "Cluster C: Policy, Governance & Society",
-            3: "Cluster D: Applied Analytics & Hardware",
-        }
-        for t, lbl in zip(topics, labels):
-            cluster_map[t] = cluster_names[int(lbl)]
+        # Compute each topic's centroid from its associated papers' 384-d embeddings
+        centroids = []
+        valid_topics = []
+        for t in topics:
+            cur.execute("SELECT embedding FROM papers WHERE %s = ANY(topics) AND embedding IS NOT NULL LIMIT 50", (t,))
+            emb_rows = cur.fetchall()
+            if emb_rows:
+                vecs = [np.array(json.loads(r[0]) if isinstance(r[0], str) else r[0], dtype=float) for r in emb_rows]
+                centroid = np.mean(vecs, axis=0)
+            else:
+                centroid = np.array(get_embed_model().encode(t), dtype=float)
+            centroids.append(centroid)
+            valid_topics.append(t)
+
+        centroids_arr = np.array(centroids)
+        # Run Agglomerative Clustering on 384-d semantic centroids with ward linkage
+        n_clusters = min(4, len(valid_topics))
+        clustering = AgglomerativeClustering(n_clusters=n_clusters, linkage="ward")
+        cluster_labels = clustering.fit_predict(centroids_arr)
+
+        # Dynamically name each cluster from its top-3 highest-frequency member topics
+        clusters_by_label = {}
+        for t, lbl in zip(valid_topics, cluster_labels):
+            clusters_by_label.setdefault(int(lbl), []).append(t)
+
+        cluster_names = {}
+        for lbl, members in clusters_by_label.items():
+            # Sort by paper count descending
+            sorted_members = sorted(members, key=lambda m: topic_counts.get(m, 0), reverse=True)
+            top_3 = [m.title() for m in sorted_members[:3]]
+            cluster_name = f"Cluster {chr(65 + lbl)}: " + " & ".join(top_3)
+            cluster_names[lbl] = cluster_name
+            for m in members:
+                cluster_map[m] = cluster_name
     else:
         for t in topics:
-            cluster_map[t] = "General Research"
+            cluster_map[t] = "General Research Commons"
 
     execute_values(
         cur,
         "INSERT INTO dw.dim_topic (topic_name, parent_cluster) VALUES %s ON CONFLICT DO NOTHING",
-        [(t, cluster_map[t]) for t in topics],
+        [(t, cluster_map.get(t, "Interdisciplinary Commons")) for t in topics],
     )
+    print(f"    -> Clustered {len(topics)} topics into dynamic semantic centroid clusters.")
 
-    # Populate fact_research_activity from activity_events
+    # 5. Populate fact_research_activity with accurate comments_count measure
     cur.execute("""
         INSERT INTO dw.fact_research_activity (date_key, member_key, topic_key, paper_key, saves_count, posts_count, comments_count, upvotes_count, views_count)
         SELECT
@@ -150,8 +220,8 @@ def build_star_schema(cur):
             dp.paper_key,
             CASE WHEN e.event_type = 'save_paper' THEN 1 ELSE 0 END,
             CASE WHEN e.event_type = 'create_post' THEN 1 ELSE 0 END,
-            0,
-            CASE WHEN e.event_type = 'upvote' THEN 1 ELSE 0 END,
+            CASE WHEN e.event_type = 'add_comment' THEN 1 ELSE 0 END,
+            CASE WHEN e.event_type = 'upvote' OR e.event_type = 'vote_post' THEN 1 ELSE 0 END,
             CASE WHEN e.event_type = 'view_paper' THEN 1 ELSE 0 END
         FROM activity_events e
         JOIN dw.dim_member dm ON e.user_id = dm.user_id
@@ -159,7 +229,7 @@ def build_star_schema(cur):
         LEFT JOIN dw.dim_paper dp ON dp.paper_id = e.target_id
     """)
 
-    # Populate fact_dept_collaboration (follows + cross-dept comments)
+    # 6. Populate fact_dept_collaboration
     cur.execute("""
         INSERT INTO dw.fact_dept_collaboration (date_key, source_department, target_department, interaction_type, interaction_count)
         SELECT
@@ -188,11 +258,131 @@ def build_star_schema(cur):
         JOIN users u_author ON p.author_id = u_author.user_id
         GROUP BY 1, 2, 3
     """)
-    print("    -> Star schema tables populated successfully.")
+    print("    -> Star schema facts and dimensions populated successfully.")
+
+
+def persist_system_alerts(cur, anchor_dt: datetime):
+    print("4/5 Computing and persisting date-anchored topic spikes & Isolation Forest spam alerts to public.system_alerts (F7)...")
+
+    # Clear previously generated automated unresolved alerts to keep alerts fresh
+    cur.execute("DELETE FROM public.system_alerts WHERE is_resolved = FALSE AND alert_type IN ('topic_spike', 'spam_account')")
+
+    # A. Date-anchored Topic Spike Alerts (Anchored strictly to anchor_dt)
+    cur.execute(
+        """
+        WITH expanded AS (
+            SELECT UNNEST(topic_tags) AS topic, occurred_at
+            FROM activity_events
+            WHERE topic_tags IS NOT NULL
+              AND occurred_at >= %s - INTERVAL '37 days'
+              AND occurred_at <= %s
+        ),
+        window_counts AS (
+            SELECT
+                topic,
+                COUNT(*) FILTER (WHERE occurred_at >= %s - INTERVAL '7 days') AS recent_7d,
+                COUNT(*) FILTER (WHERE occurred_at < %s - INTERVAL '7 days') / 4.28 AS baseline_weekly_avg
+            FROM expanded
+            GROUP BY topic
+        )
+        SELECT topic, recent_7d, ROUND(baseline_weekly_avg::numeric, 2) AS baseline_weekly_avg,
+               ROUND(((recent_7d - baseline_weekly_avg) / GREATEST(baseline_weekly_avg, 1.0))::numeric, 2) AS spike_ratio
+        FROM window_counts
+        WHERE ((recent_7d - baseline_weekly_avg) / GREATEST(baseline_weekly_avg, 1.0)) >= 1.5
+        ORDER BY spike_ratio DESC
+        """,
+        (anchor_dt, anchor_dt, anchor_dt, anchor_dt),
+    )
+    spikes = cur.fetchall()
+
+    spike_alert_rows = []
+    for topic, rec_7d, base_avg, s_ratio in spikes:
+        details = {
+            "recent_7d": int(rec_7d),
+            "baseline_weekly_avg": float(base_avg),
+            "spike_ratio": float(s_ratio),
+            "anchor_date": anchor_dt.isoformat(),
+        }
+        spike_alert_rows.append((
+            "topic_spike",
+            topic,
+            float(s_ratio),
+            json.dumps(details),
+            anchor_dt,
+        ))
+
+    if spike_alert_rows:
+        execute_values(
+            cur,
+            """
+            INSERT INTO public.system_alerts (alert_type, entity_ref, severity_score, details, detected_at)
+            VALUES %s
+            """,
+            spike_alert_rows,
+        )
+    print(f"    -> Persisted {len(spike_alert_rows)} topic spike alerts.")
+
+    # B. Isolation Forest Spam Detection & Flagging
+    cur.execute(
+        """
+        SELECT
+            u.user_id::text,
+            u.full_name,
+            u.department,
+            COUNT(DISTINCT p.post_id) AS post_count,
+            COALESCE(EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / GREATEST(COUNT(p.post_id), 1), 999999) AS avg_seconds_between_posts,
+            COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes
+        FROM users u
+        LEFT JOIN posts p ON u.user_id = p.author_id
+        GROUP BY u.user_id, u.full_name, u.department
+        """
+    )
+    df = pd.DataFrame(cur.fetchall(), columns=["user_id", "full_name", "department", "post_count", "avg_seconds_between_posts", "avg_upvotes"])
+
+    if len(df) >= 20:
+        features = df[["post_count", "avg_seconds_between_posts", "avg_upvotes"]].fillna(0)
+        iso = IsolationForest(n_estimators=150, random_state=42)
+        iso.fit(features)
+        # Inverted score: higher is more anomalous
+        scores = -iso.decision_function(features)
+        df["anomaly_score"] = scores
+        # Absolute threshold for anomaly
+        flagged = df[df["anomaly_score"] >= 0.15]
+
+        spam_alert_rows = []
+        for _, row in flagged.iterrows():
+            cur.execute(
+                "UPDATE users SET is_flagged_spam = TRUE, spam_score = %s WHERE user_id = %s::uuid",
+                (float(row["anomaly_score"]), row["user_id"]),
+            )
+            details = {
+                "full_name": row["full_name"],
+                "department": row["department"],
+                "post_count": int(row["post_count"]),
+                "anomaly_score": round(float(row["anomaly_score"]), 4),
+            }
+            spam_alert_rows.append((
+                "spam_account",
+                row["user_id"],
+                round(float(row["anomaly_score"]), 4),
+                json.dumps(details),
+                anchor_dt,
+            ))
+
+        if spam_alert_rows:
+            execute_values(
+                cur,
+                """
+                INSERT INTO public.system_alerts (alert_type, entity_ref, severity_score, details, detected_at)
+                VALUES %s
+                """,
+                spam_alert_rows,
+            )
+        print(f"    -> Flagged and persisted {len(spam_alert_rows)} Isolation Forest spam account alerts.")
 
 
 def create_analytical_views(cur):
-    print("4/5 Creating and refreshing analytical views (dw.vw_paper_topic_baskets, dw.vw_researcher_profiles)...")
+    print("5/5 Refreshing analytical views (dw.vw_paper_topic_baskets, dw.vw_researcher_profiles)...")
     cur.execute("""
         CREATE OR REPLACE VIEW dw.dim_researcher AS
         SELECT member_key AS researcher_key, user_id AS researcher_id, full_name, role, department, is_active FROM dw.dim_member;
@@ -304,20 +494,30 @@ def create_analytical_views(cur):
         WHERE u.is_flagged_spam = FALSE
         GROUP BY u.user_id, u.full_name, u.role, u.department, u.interest_tags;
     """)
-    print("    -> Analytical views created successfully.")
+    print("    -> Analytical views refreshed successfully.")
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Run Star Schema ELT, Graph Mining & Alerts for Chanakya Research Commons")
+    parser.add_argument("--as-of", type=str, default=None, help="Anchor date (YYYY-MM-DD) for trends and spike detection")
+    args = parser.parse_args()
+
     conn = psycopg2.connect(DB_URL)
     cur = conn.cursor()
+
+    anchor_dt = get_anchor_date(cur, args.as_of)
+    print(f"[ELT Pipeline] Running with temporal anchor date: {anchor_dt.isoformat()}")
+
     run_minhash_deduplication(cur)
     run_citation_pagerank(cur)
     build_star_schema(cur)
+    persist_system_alerts(cur, anchor_dt)
     create_analytical_views(cur)
+
     conn.commit()
     cur.close()
     conn.close()
-    print("5/5 ELT, Graph Mining & Views pipeline complete!")
+    print("[ELT Pipeline] ELT, Graph Mining & Views pipeline complete!")
 
 
 if __name__ == "__main__":

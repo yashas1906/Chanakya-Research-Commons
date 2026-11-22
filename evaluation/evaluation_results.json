@@ -1,56 +1,142 @@
 {
-  "F4_F5_deduplication": {
+  "F4_F5_deduplication_and_author_matching": {
     "method": "MinHash + LSH (128 permutations, threshold=0.65)",
-    "baseline_exact_title_f1": 0.0,
-    "true_positives": 30,
-    "false_positives": 11,
-    "false_negatives": 0,
-    "precision": 0.7317,
-    "recall": 1.0,
-    "f1_score": 0.8451
-  },
-  "F5_unified_search": {
-    "queries_evaluated": 6,
-    "baseline_sql_ilike": {
-      "precision_at_5": 0.2,
-      "mrr": 0.3333
+    "baseline_exact_title_match": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1_score": 0.0
     },
-    "hybrid_rrf_pgvector_pagerank": {
-      "precision_at_5": 0.8333,
-      "mrr": 0.8333
+    "minhash_lsh_system": {
+      "true_positives": 8,
+      "false_positives": 33,
+      "false_negatives": 12,
+      "precision": 0.1951,
+      "recall": 0.4,
+      "f1_score": 0.2623
+    },
+    "author_name_variant_resolution": {
+      "pairs_evaluated": 15,
+      "accuracy": 0.9333,
+      "true_positives": 9,
+      "true_negatives": 5
     }
   },
-  "F6_recommendations": {
-    "users_evaluated": 20,
-    "baseline_global_popularity_relevance_at_5": 0.16,
-    "content_based_pgvector_relevance_at_5": 0.97
+  "F5_unified_search_benchmark": {
+    "benchmark_queries_count": 51,
+    "lexical_only": {
+      "ndcg_at_10_mean": 0.3922,
+      "ndcg_at_10_95_ci": [
+        0.2549,
+        0.5294
+      ],
+      "mrr_mean": 0.3922,
+      "mrr_95_ci": [
+        0.2549,
+        0.5294
+      ]
+    },
+    "semantic_only": {
+      "ndcg_at_10_mean": 0.8049,
+      "ndcg_at_10_95_ci": [
+        0.7155,
+        0.8814
+      ],
+      "mrr_mean": 0.8012,
+      "mrr_95_ci": [
+        0.6961,
+        0.8938
+      ]
+    },
+    "hybrid_rrf_no_pagerank": {
+      "ndcg_at_10_mean": 0.7905,
+      "ndcg_at_10_95_ci": [
+        0.7005,
+        0.8668
+      ],
+      "mrr_mean": 0.7767,
+      "mrr_95_ci": [
+        0.6748,
+        0.8709
+      ]
+    },
+    "hybrid_rrf_full": {
+      "ndcg_at_10_mean": 0.6966,
+      "ndcg_at_10_95_ci": [
+        0.6046,
+        0.7797
+      ],
+      "mrr_mean": 0.6469,
+      "mrr_95_ci": [
+        0.5343,
+        0.7541
+      ]
+    }
   },
-  "F7_trends_and_anomalies": {
-    "topic_spike_detection": {
+  "F6_recommendations_temporal_holdout": {
+    "users_evaluated_temporal_holdout": 40,
+    "baseline_global_popularity": {
+      "recall_at_5": 0.0,
+      "ndcg_at_5": 0.0
+    },
+    "baseline_item_collaborative_filtering": {
+      "recall_at_5": 0.075,
+      "ndcg_at_5": 0.0347
+    },
+    "crc_personalized_hybrid": {
+      "recall_at_5": 0.05,
+      "ndcg_at_5": 0.0408
+    }
+  },
+  "F7_trends_and_spam_detection": {
+    "date_anchored_topic_spikes": {
+      "temporal_anchor": "2026-11-22T16:40:16.127776+00:00",
       "planted_spikes": [
+        "graph neural networks",
         "CRISPR gene editing",
-        "data privacy law",
-        "graph neural networks"
+        "data privacy law"
       ],
       "detected_top_3": [
+        "graph neural networks",
         "CRISPR gene editing",
-        "data privacy law",
-        "graph neural networks"
+        "data privacy law"
       ],
       "recall_at_3": 1.0
     },
-    "spam_detection_isolation_forest": {
-      "true_positives": 5,
-      "false_positives": 1,
-      "false_negatives": 0,
-      "precision": 0.8333,
-      "recall": 1.0,
-      "f1_score": 0.9091
+    "threshold_free_spam_detection": {
+      "pr_auc": 0.81,
+      "roc_auc": 0.9855,
+      "multi_threshold_performance": {
+        "threshold_0.1": {
+          "precision": 0.7143,
+          "recall": 1.0,
+          "f1": 0.8333
+        },
+        "threshold_0.15": {
+          "precision": 0.6667,
+          "recall": 0.4,
+          "f1": 0.5
+        },
+        "threshold_0.2": {
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        }
+      }
     }
   },
-  "F8_rag_retrieval": {
-    "questions_tested": 3,
-    "avg_retrieval_latency_ms": 18.63,
-    "avg_top1_passage_cosine_sim": 0.7335
+  "F8_rag_retrieval_and_refusal_gate": {
+    "in_corpus_eval": {
+      "questions_evaluated": 15,
+      "hit_at_4": 0.9333,
+      "avg_top1_similarity": 0.6912,
+      "lexical_citation_support_overlap": 0.7197,
+      "avg_latency_ms": 11.08
+    },
+    "out_of_corpus_refusal_gate": {
+      "trap_questions_evaluated": 5,
+      "similarity_refusal_threshold": 0.32,
+      "avg_out_of_corpus_top1_sim": 0.2312,
+      "refusal_rate": 0.8
+    }
   }
 }

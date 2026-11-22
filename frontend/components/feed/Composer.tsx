@@ -4,11 +4,11 @@ import { useState } from "react";
 import { Loader2, PenLine } from "lucide-react";
 import { Avatar } from "@/components/ui/Section";
 import { createPost, describeError } from "@/lib/api";
-import { useMember } from "@/lib/member-context";
+import { useAuth } from "@/context/AuthContext";
 
 /** Inline composer: collapsed prompt that opens into title / body / tags. */
 export function Composer({ onPosted }: { onPosted: () => void }) {
-  const { current } = useMember();
+  const { user, promptLogin } = useAuth();
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -26,12 +26,12 @@ export function Composer({ onPosted }: { onPosted: () => void }) {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!current || !title.trim() || !body.trim() || busy) return;
+    if (!user || !title.trim() || !body.trim() || busy) return;
     setBusy(true);
     setErr(null);
     try {
       await createPost({
-        author_id: current.user_id,
+        author_id: user.user_id,
         title: title.trim(),
         body: body.trim(),
         tags: tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
@@ -49,12 +49,11 @@ export function Composer({ onPosted }: { onPosted: () => void }) {
     return (
       <button
         type="button"
-        onClick={() => setOpen(true)}
-        disabled={!current}
-        className="card card-hover flex w-full items-center gap-3 px-4 py-3.5 text-left disabled:opacity-60"
+        onClick={() => user ? setOpen(true) : promptLogin()}
+        className="card card-hover flex w-full items-center gap-3 px-4 py-3.5 text-left"
       >
-        <Avatar name={current?.full_name ?? "?"} size={32} />
-        <span className="flex-1 text-[14.5px] text-stone-400">Share a finding, a question or a paper worth reading…</span>
+        <Avatar name={user?.full_name ?? "?"} size={36} />
+        <span className="flex-1 text-ui text-stone-500">{user ? "Share a finding, a question or a paper worth reading…" : "Sign in to start a discussion"}</span>
         <PenLine className="h-4 w-4 text-stone-400" strokeWidth={1.5} />
       </button>
     );
@@ -63,9 +62,9 @@ export function Composer({ onPosted }: { onPosted: () => void }) {
   return (
     <form onSubmit={submit} className="card animate-rise space-y-3 p-4">
       <div className="flex items-center gap-3">
-        <Avatar name={current?.full_name ?? "?"} size={32} />
-        <p className="text-[13px] text-stone-500">
-          Posting as <span className="font-medium text-ink">{current?.full_name}</span>
+        <Avatar name={user?.full_name ?? "?"} size={32} />
+        <p className="text-ui text-stone-500">
+          Posting as <span className="font-medium text-ink">{user?.full_name}</span>
         </p>
       </div>
       <input
@@ -90,10 +89,10 @@ export function Composer({ onPosted }: { onPosted: () => void }) {
         onChange={(e) => setTags(e.target.value)}
         placeholder="Tags, comma-separated — e.g. data mining, graph neural networks"
         aria-label="Tags"
-        className="input text-[13px]"
+        className="input text-meta"
       />
       {err && (
-        <p role="alert" className="text-[12.5px] text-terracotta-600">
+        <p role="alert" className="text-meta text-terracotta-600">
           {err}
         </p>
       )}

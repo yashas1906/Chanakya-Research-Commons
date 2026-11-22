@@ -1,0 +1,21 @@
+import os
+import psycopg2
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
+
+def main():
+    conn = psycopg2.connect(DB_URL)
+    cur = conn.cursor()
+    cur.execute("ALTER TABLE post_upvotes ADD COLUMN IF NOT EXISTS value SMALLINT NOT NULL DEFAULT 1;")
+    cur.execute("ALTER TABLE papers ADD COLUMN IF NOT EXISTS sources JSONB DEFAULT '[\"openalex\"]'::jsonb;")
+    cur.execute("ALTER TABLE papers ADD COLUMN IF NOT EXISTS arxiv_id VARCHAR(50);")
+    conn.commit()
+    cur.close()
+    conn.close()
+    print("Migrations applied successfully!")
+
+if __name__ == "__main__":
+    main()

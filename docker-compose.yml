@@ -1,24 +1,29 @@
-﻿services:
+services:
   postgres:
     image: pgvector/pgvector:pg16
     container_name: crc_postgres
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-crc_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crc_secure_pass}
+      POSTGRES_DB: ${POSTGRES_DB:-chanakya_commons}
     ports:
       - "5434:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
       - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-crc_admin} -d ${POSTGRES_DB:-chanakya_commons}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   minio:
     image: minio/minio:latest
     container_name: crc_minio
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_pass}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -32,6 +37,41 @@
       - "11434:11434"
     volumes:
       - ollama_data:/root/.ollama
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: crc_backend
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-crc_admin}:${POSTGRES_PASSWORD:-crc_secure_pass}@postgres:5432/${POSTGRES_DB:-chanakya_commons}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_pass}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
+      CRC_AUTH_SECRET: ${CRC_AUTH_SECRET:-chanakya_secure_dev_jwt_secret_key_2026_super_hardened}
+      CRC_DEMO_PASSCODE: ${CRC_DEMO_PASSCODE:-chanakya-demo}
+      CRC_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: crc_frontend
+    environment:
+      NEXT_PUBLIC_API_ORIGIN: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
 
 volumes:
   pg_data:

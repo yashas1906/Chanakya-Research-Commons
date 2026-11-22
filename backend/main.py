@@ -1,14 +1,26 @@
 import os
+import re
 import json
+import uuid
+import base64
+import hashlib
+import hmac
+import secrets
+import threading
+import time
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from uuid import UUID
+import jwt
+import bcrypt
 import numpy as np
 import pandas as pd
 import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, Header, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 from sklearn.ensemble import IsolationForest
 from mlxtend.frequent_patterns import fpgrowth, association_rules
@@ -43,6 +55,11 @@ load_dotenv()
 DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+AUTH_SECRET = os.getenv("CRC_AUTH_SECRET")
+if not AUTH_SECRET:
+    AUTH_SECRET = secrets.token_urlsafe(48)
+    print("[Auth] CRC_AUTH_SECRET unset; using an ephemeral development secret.")
+DEMO_PASSCODE = os.getenv("CRC_DEMO_PASSCODE", "chanakya-demo")
 
 app = FastAPI(title="Chanakya Research Commons API", version="1.0.0")
 
@@ -50,8 +67,8 @@ app = FastAPI(title="Chanakya Research Commons API", version="1.0.0")
 ALLOWED_ORIGINS = [
     origin.strip()
     for origin in os.getenv(
-        "CORS_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:8080,http://127.0.0.1:8080"
+        "CRC_CORS_ORIGINS",
+        "http://localhost:3000"
     ).split(",")
     if origin.strip()
 ]
@@ -80,12 +97,18 @@ def get_db():
         conn.cursor_factory = RealDictCursor
         try:
             yield conn
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             db_pool.putconn(conn)
     else:
         conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
         try:
             yield conn
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -97,6 +120,11 @@ def get_conn():
 
 @app.on_event("startup")
 def startup_event():
+    if not os.getenv("CRC_AUTH_SECRET") and os.getenv("ENVIRONMENT", "development").lower() not in ("development", "dev", "test"):
+        raise RuntimeError("CRC_AUTH_SECRET must be configured outside development.")
+    if not os.getenv("CRC_AUTH_SECRET"):
+        print("[Auth] Development sign-in tokens will expire when the backend restarts.")
+    print("[Auth] Legacy demo credentials enabled; seeded accounts use CRC_DEMO_PASSCODE.")
     try:
         warmup_submission_detector()
     except Exception as exc:
@@ -115,7 +143,7 @@ def vec_literal(text: str) -> str:
 # Pydantic Schemas
 # ==========================================
 class PostCreate(BaseModel):
-    author_id: str
+    author_id: Optional[str] = None
     title: str
     body: str
     tags: list[str] = []
@@ -123,13 +151,17 @@ class PostCreate(BaseModel):
 
 
 class UpvoteRequest(BaseModel):
-    user_id: str
+    user_id: Optional[str] = None
 
 
 class CommentCreate(BaseModel):
-    author_id: str
-    body: str
-    parent_comment_id: Optional[str] = None
+    author_id: Optional[str] = None
+    body: str = Field(..., min_length=1, max_length=5000)
+    parent_comment_id: Optional[UUID] = None
+
+
+class VoteRequest(BaseModel):
+    value: int = Field(..., ge=-1, le=1)
 
 
 class GatekeeperPayload(BaseModel):
@@ -145,19 +177,356 @@ class GatekeeperPayload(BaseModel):
 
 
 class SavePaperRequest(BaseModel):
-    user_id: str
-    paper_id: str
+    user_id: Optional[str] = None
+    paper_id: UUID
     private_notes: Optional[str] = ""
+    collection_id: Optional[UUID] = None
 
 
 class AskAssistantRequest(BaseModel):
     question: str
     library_only: bool = False
+    paper_id: Optional[UUID] = None
+
+
+class RegisterRequest(BaseModel):
+    university_id: str = Field(..., min_length=3, max_length=30)
+    full_name: str = Field(..., min_length=2, max_length=120)
+    email: str = Field(..., min_length=5, max_length=150)
+    password: str = Field(..., min_length=6, max_length=100)
+    role: str = Field("student", pattern="^(student|faculty|researcher|admin)$")
+    department: str = Field(..., min_length=2, max_length=100)
+    bio: Optional[str] = ""
+    interest_tags: Optional[list[str]] = []
+
+
+class LoginRequest(BaseModel):
+    identifier: str = Field(..., min_length=1, max_length=150)
+    passcode: str = Field(..., min_length=1, max_length=256)
+
+
+class CollectionCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    description: Optional[str] = None
+
+
+class SaveByIdentifierRequest(BaseModel):
+    identifier: str = Field(..., min_length=3, max_length=500)
+    collection_id: Optional[UUID] = None
+    private_notes: Optional[str] = ""
+
+
+class AddPaperToCollectionRequest(BaseModel):
+    paper_id: UUID
+    private_notes: Optional[str] = ""
+
+
+ROLE_RANK = {"student": 1, "faculty": 2, "researcher": 2, "admin": 3}
+_login_attempts: dict[str, list[float]] = {}
+_login_attempts_lock = threading.Lock()
+
+
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _issue_token(user_id: str, role: str) -> tuple[str, str]:
+    expires = datetime.now(timezone.utc) + timedelta(hours=8)
+    claims = {
+        "sub": str(user_id),
+        "role": role,
+        "exp": int(expires.timestamp()),
+        "iat": int(datetime.now(timezone.utc).timestamp())
+    }
+    token = jwt.encode(claims, AUTH_SECRET, algorithm="HS256")
+    return token, expires.isoformat()
+
+
+def _decode_token(token: str) -> str:
+    try:
+        claims = jwt.decode(token, AUTH_SECRET, algorithms=["HS256"])
+        return str(UUID(claims["sub"]))
+    except Exception:
+        # Fallback for legacy base64 format tokens if present
+        try:
+            payload, signature = token.split(".", 1)
+            expected = hmac.new(AUTH_SECRET.encode("utf-8"), payload.encode("ascii"), hashlib.sha256).digest()
+            supplied = base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4))
+            if not hmac.compare_digest(expected, supplied):
+                raise ValueError("invalid signature")
+            raw = base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4))
+            claims = json.loads(raw.decode("utf-8"))
+            if not isinstance(claims, dict) or int(claims.get("exp", 0)) <= int(time.time()):
+                raise ValueError("expired token")
+            return str(UUID(claims["sub"]))
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+
+def _verify_password(stored: str, submitted: str) -> bool:
+    if stored == "hashed_demo_pass":
+        hashlib.pbkdf2_hmac("sha256", submitted.encode("utf-8"), b"crc-demo-timing-salt", 200_000)
+        return hmac.compare_digest(submitted.encode("utf-8"), DEMO_PASSCODE.encode("utf-8"))
+    if stored.startswith("bcrypt$"):
+        try:
+            raw_hash = stored[len("bcrypt$"):].encode("utf-8")
+            return bcrypt.checkpw(submitted.encode("utf-8"), raw_hash)
+        except Exception:
+            return False
+    if stored.startswith("$2b$") or stored.startswith("$2a$"):
+        try:
+            return bcrypt.checkpw(submitted.encode("utf-8"), stored.encode("utf-8"))
+        except Exception:
+            return False
+    try:
+        scheme, iterations, salt_hex, digest_hex = stored.split("$", 3)
+        if scheme != "pbkdf2":
+            return False
+        calculated = hashlib.pbkdf2_hmac(
+            "sha256", submitted.encode("utf-8"), bytes.fromhex(salt_hex), int(iterations)
+        )
+        return hmac.compare_digest(calculated, bytes.fromhex(digest_hex))
+    except (ValueError, TypeError):
+        return False
+
+
+def _safe_user(row: dict) -> dict:
+    return {
+        "user_id": str(row["user_id"]),
+        "university_id": row["university_id"],
+        "full_name": row["full_name"],
+        "role": row["role"],
+        "department": row["department"],
+        "bio": row.get("bio"),
+        "interest_tags": row.get("interest_tags"),
+        "is_flagged_spam": bool(row.get("is_flagged_spam", False)),
+        **({"email": row["email"]} if row.get("email") else {}),
+    }
+
+
+def current_user_optional(authorization: Optional[str] = Header(None)):
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        raise HTTPException(status_code=401, detail="Invalid authorization header")
+    user_id = _decode_token(token)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT user_id, university_id, full_name, email, role, department, bio, interest_tags, is_flagged_spam FROM users WHERE user_id = %s::uuid",
+            (user_id,),
+        )
+        user = cur.fetchone()
+        cur.close()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+    return user
+
+
+def current_user(user=Depends(current_user_optional)):
+    if not user:
+        raise HTTPException(status_code=401, detail="Sign in required")
+    return user
+
+
+def require_role(min_role: str):
+    def dependency(user=Depends(current_user)):
+        if ROLE_RANK.get(user["role"], 0) < ROLE_RANK[min_role]:
+            raise HTTPException(status_code=403, detail="Insufficient role")
+        return user
+    return dependency
+
+
+def _login_is_throttled(identifier: str) -> bool:
+    now = time.time()
+    key = identifier.strip().lower()
+    with _login_attempts_lock:
+        attempts = [stamp for stamp in _login_attempts.get(key, []) if now - stamp < 60]
+        _login_attempts[key] = attempts
+        return len(attempts) >= 5
+
+
+def _record_login_failure(identifier: str) -> None:
+    key = identifier.strip().lower()
+    with _login_attempts_lock:
+        _login_attempts.setdefault(key, []).append(time.time())
 
 
 # ==========================================
-# F1: Accounts & Profiles
+# F1: Accounts, Profiles & Following
 # ==========================================
+@app.post("/api/auth/register")
+def register(payload: RegisterRequest):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM users WHERE lower(email) = lower(%s) OR university_id = %s",
+            (payload.email.strip(), payload.university_id.strip()),
+        )
+        if cur.fetchone():
+            cur.close()
+            raise HTTPException(status_code=400, detail="User with this email or university ID already exists")
+
+        # Bcrypt password hashing
+        salt = bcrypt.gensalt()
+        pw_hash = "bcrypt$" + bcrypt.hashpw(payload.password.encode("utf-8"), salt).decode("utf-8")
+
+        # Initial profile embedding computed from role, department, tags & bio
+        bio_text = f"{payload.role.title()} in {payload.department}. {payload.bio or ''}"
+        emb = embed_model.encode(bio_text).tolist()
+
+        cur.execute(
+            """
+            INSERT INTO users (university_id, full_name, email, password_hash, role, department, bio, interest_tags, profile_embedding)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::vector)
+            RETURNING user_id, university_id, full_name, email, role, department, bio, interest_tags, is_flagged_spam
+            """,
+            (
+                payload.university_id.strip(),
+                payload.full_name.strip(),
+                payload.email.strip(),
+                pw_hash,
+                payload.role,
+                payload.department.strip(),
+                payload.bio or "",
+                payload.interest_tags or [],
+                emb,
+            ),
+        )
+        new_user = cur.fetchone()
+        conn.commit()
+        cur.close()
+
+    token, expires_at = _issue_token(str(new_user["user_id"]), new_user["role"])
+    return {
+        "access_token": token,
+        "token": token,
+        "token_type": "bearer",
+        "expires_at": expires_at,
+        "user": _safe_user(new_user),
+    }
+
+
+@app.post("/api/auth/login")
+def login(payload: LoginRequest):
+    identifier = payload.identifier.strip()
+    if _login_is_throttled(identifier):
+        raise HTTPException(status_code=429, detail="Too many failed sign-in attempts. Try again in a minute.")
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT user_id, university_id, full_name, email, password_hash, role, department, bio, interest_tags,
+                   is_flagged_spam
+            FROM users
+            WHERE lower(email) = lower(%s) OR university_id = %s
+            LIMIT 1
+            """,
+            (identifier, identifier),
+        )
+        user = cur.fetchone()
+        cur.close()
+
+    # Perform a PBKDF2 operation for unknown accounts too, avoiding a cheap timing oracle.
+    password_ok = _verify_password(user["password_hash"] if user else "pbkdf2$200000$" + "00" * 16 + "$" + "00" * 32, payload.passcode)
+    if not user or not password_ok:
+        _record_login_failure(identifier)
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    with _login_attempts_lock:
+        _login_attempts.pop(identifier.lower(), None)
+    token, expires_at = _issue_token(str(user["user_id"]), user["role"])
+    return {
+        "access_token": token,
+        "token": token,
+        "token_type": "bearer",
+        "expires_at": expires_at,
+        "user": _safe_user(user),
+    }
+
+
+@app.get("/api/auth/me")
+def auth_me(user=Depends(current_user)):
+    return _safe_user(user)
+
+
+@app.post("/api/topics/{topic}/follow")
+def follow_topic(topic: str, user=Depends(current_user)):
+    cleaned_topic = topic.strip()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO topic_follows (user_id, topic_tag) VALUES (%s::uuid, %s) ON CONFLICT DO NOTHING",
+            (user["user_id"], cleaned_topic),
+        )
+        conn.commit()
+        cur.close()
+    return {"status": "following", "topic": cleaned_topic}
+
+
+@app.delete("/api/topics/{topic}/follow")
+def unfollow_topic(topic: str, user=Depends(current_user)):
+    cleaned_topic = topic.strip()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM topic_follows WHERE user_id = %s::uuid AND topic_tag = %s",
+            (user["user_id"], cleaned_topic),
+        )
+        conn.commit()
+        cur.close()
+    return {"status": "unfollowed", "topic": cleaned_topic}
+
+
+@app.post("/api/users/{user_id}/follow")
+def follow_user(user_id: UUID, user=Depends(current_user)):
+    if str(user["user_id"]) == str(user_id):
+        raise HTTPException(status_code=400, detail="Cannot follow yourself")
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO user_follows (follower_id, followee_id) VALUES (%s::uuid, %s::uuid) ON CONFLICT DO NOTHING",
+            (user["user_id"], user_id),
+        )
+        conn.commit()
+        cur.close()
+    return {"status": "following", "user_id": str(user_id)}
+
+
+@app.delete("/api/users/{user_id}/follow")
+def unfollow_user(user_id: UUID, user=Depends(current_user)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "DELETE FROM user_follows WHERE follower_id = %s::uuid AND followee_id = %s::uuid",
+            (user["user_id"], user_id),
+        )
+        conn.commit()
+        cur.close()
+    return {"status": "unfollowed", "user_id": str(user_id)}
+
+
+@app.get("/api/users/me/follows")
+def get_my_follows(user=Depends(current_user)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT topic_tag FROM topic_follows WHERE user_id = %s::uuid ORDER BY created_at DESC", (user["user_id"],))
+        topics = [r["topic_tag"] for r in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT u.user_id, u.full_name, u.role, u.department
+            FROM user_follows uf
+            JOIN users u ON uf.followee_id = u.user_id
+            WHERE uf.follower_id = %s::uuid
+            ORDER BY uf.created_at DESC
+            """,
+            (user["user_id"],),
+        )
+        followed_users = cur.fetchall()
+        cur.close()
+    return {"followed_topics": topics, "followed_users": followed_users}
+
+
 @app.get("/api/users")
 def list_users(department: Optional[str] = None, limit: int = Query(30, ge=1, le=100)):
     with get_db() as conn:
@@ -165,7 +534,7 @@ def list_users(department: Optional[str] = None, limit: int = Query(30, ge=1, le
         if department:
             cur.execute(
                 """
-                SELECT user_id, university_id, full_name, email, role, department, bio, interest_tags, is_flagged_spam
+                SELECT user_id, university_id, full_name, role, department, bio, interest_tags, is_flagged_spam
                 FROM users
                 WHERE department = %s
                 ORDER BY created_at DESC
@@ -176,7 +545,7 @@ def list_users(department: Optional[str] = None, limit: int = Query(30, ge=1, le
         else:
             cur.execute(
                 """
-                SELECT user_id, university_id, full_name, email, role, department, bio, interest_tags, is_flagged_spam
+                SELECT user_id, university_id, full_name, role, department, bio, interest_tags, is_flagged_spam
                 FROM users
                 ORDER BY created_at DESC
                 LIMIT %s
@@ -192,50 +561,53 @@ def list_users(department: Optional[str] = None, limit: int = Query(30, ge=1, le
 # F2: Posts, Feed & Upvotes
 # ==========================================
 @app.get("/api/feed")
-def get_feed(user_id: Optional[str] = None, limit: int = Query(25, ge=1, le=100)):
+def get_feed(
+    user_id: Optional[str] = None,
+    limit: int = Query(25, ge=1, le=100),
+    sort: str = Query("best", pattern="^(best|new|top)$"),
+    user=Depends(current_user_optional),
+):
+    acting_id = str(user["user_id"]) if user else None
     with get_db() as conn:
         cur = conn.cursor()
-        if user_id:
-            cur.execute(
-                """
-                SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
-                       u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
-                       pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
-                       CASE WHEN uf.followee_id IS NOT NULL THEN 2 ELSE 0 END +
-                       (1 - (p.post_embedding <=> u_me.profile_embedding)) AS relevance_score
-                FROM posts p
-                JOIN users u ON p.author_id = u.user_id
-                CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) u_me
-                LEFT JOIN user_follows uf ON uf.follower_id = %s::uuid AND uf.followee_id = p.author_id
-                LEFT JOIN papers pa ON p.attached_paper_id = pa.paper_id
-                WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
-                ORDER BY relevance_score DESC, p.created_at DESC
-                LIMIT %s
-                """,
-                (user_id, user_id, limit),
-            )
-        else:
-            cur.execute(
-                """
-                SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
-                       u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
-                       pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id
-                FROM posts p
-                JOIN users u ON p.author_id = u.user_id
-                LEFT JOIN papers pa ON p.attached_paper_id = pa.paper_id
-                WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
-                ORDER BY p.created_at DESC
-                LIMIT %s
-                """,
-                (limit,),
-            )
+        cur.execute(
+            """
+            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+                   u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
+                   pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
+                   COALESCE(mine.value, 0) AS my_vote,
+                   CASE WHEN followed.followee_id IS NOT NULL THEN 2.0 ELSE 0.0 END +
+                     CASE WHEN EXISTS (SELECT 1 FROM topic_follows tf WHERE tf.user_id = %s::uuid AND tf.topic_tag = ANY(p.tags)) THEN 1.5 ELSE 0.0 END +
+                     CASE WHEN me.profile_embedding IS NOT NULL AND p.post_embedding IS NOT NULL
+                       THEN (1 - (p.post_embedding <=> me.profile_embedding)) ELSE 0.0 END AS relevance_score
+            FROM posts p
+            JOIN users u ON p.author_id = u.user_id
+            LEFT JOIN papers pa ON p.attached_paper_id = pa.paper_id
+            LEFT JOIN users me ON me.user_id = %s::uuid
+            LEFT JOIN user_follows followed ON followed.follower_id = %s::uuid AND followed.followee_id = p.author_id
+            LEFT JOIN post_upvotes mine ON mine.post_id = p.post_id AND mine.user_id = %s::uuid
+            WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
+            ORDER BY
+              CASE WHEN %s = 'top' THEN p.upvote_count END DESC,
+              CASE WHEN %s = 'best' AND %s::uuid IS NOT NULL THEN
+                CASE WHEN followed.followee_id IS NOT NULL THEN 2.0 ELSE 0.0 END +
+                  CASE WHEN EXISTS (SELECT 1 FROM topic_follows tf WHERE tf.user_id = %s::uuid AND tf.topic_tag = ANY(p.tags)) THEN 1.5 ELSE 0.0 END +
+                  CASE WHEN me.profile_embedding IS NOT NULL AND p.post_embedding IS NOT NULL
+                    THEN (1 - (p.post_embedding <=> me.profile_embedding)) ELSE 0.0 END
+              END DESC,
+              p.created_at DESC
+            LIMIT %s
+            """,
+            (acting_id, acting_id, acting_id, acting_id, sort, sort, acting_id, acting_id, limit),
+        )
         rows = cur.fetchall()
         cur.close()
         return rows
 
 
 @app.post("/api/posts")
-def create_post(payload: PostCreate):
+def create_post(payload: PostCreate, user=Depends(current_user)):
     with get_db() as conn:
         cur = conn.cursor()
         q_vec = vec_literal(f"{payload.title} {payload.body}")
@@ -245,60 +617,148 @@ def create_post(payload: PostCreate):
             VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s::vector)
             RETURNING post_id, title, created_at
             """,
-            (payload.author_id, payload.attached_paper_id, payload.title, payload.body, payload.tags, q_vec),
+            (user["user_id"], payload.attached_paper_id, payload.title, payload.body, payload.tags, q_vec),
         )
         post = cur.fetchone()
         cur.execute(
             "INSERT INTO activity_events (user_id, event_type, target_id, topic_tags) VALUES (%s::uuid, 'create_post', %s::uuid, %s)",
-            (payload.author_id, post["post_id"], payload.tags),
+            (user["user_id"], post["post_id"], payload.tags),
         )
         conn.commit()
         cur.close()
         return post
 
 
-@app.post("/api/posts/{post_id}/upvote")
-def toggle_upvote(post_id: str, payload: UpvoteRequest):
+def _set_post_vote(post_id: UUID, user_id: str, value: int):
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            "SELECT 1 FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
-            (payload.user_id, post_id),
-        )
-        exists = cur.fetchone()
-        if exists:
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
+        if not cur.fetchone():
+            cur.close()
+            raise HTTPException(status_code=404, detail="Post not found")
+        if value == 0:
             cur.execute(
-                "DELETE FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
-                (payload.user_id, post_id),
-            )
-            cur.execute(
-                "UPDATE posts SET upvote_count = GREATEST(upvote_count - 1, 0) WHERE post_id = %s::uuid RETURNING upvote_count",
-                (post_id,),
+                "DELETE FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
+                (user_id, post_id),
             )
         else:
             cur.execute(
-                "INSERT INTO post_upvotes (user_id, post_id) VALUES (%s::uuid, %s::uuid) ON CONFLICT DO NOTHING",
-                (payload.user_id, post_id),
+                """
+                INSERT INTO post_upvotes (user_id, post_id, value) VALUES (%s::uuid, %s, %s)
+                ON CONFLICT (user_id, post_id) DO UPDATE SET value = EXCLUDED.value
+                """,
+                (user_id, post_id, value),
             )
             cur.execute(
-                "UPDATE posts SET upvote_count = upvote_count + 1 WHERE post_id = %s::uuid RETURNING upvote_count",
-                (post_id,),
+                "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'vote_post', %s)",
+                (user_id, post_id),
             )
-            cur.execute(
-                "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'upvote_post', %s::uuid)",
-                (payload.user_id, post_id),
-            )
-        row = cur.fetchone()
-        upvote_count = row["upvote_count"] if row else 0
+        cur.execute(
+            """
+            UPDATE posts SET upvote_count = COALESCE(
+              (SELECT SUM(value) FROM post_upvotes WHERE post_id = %s), 0
+            ) WHERE post_id = %s RETURNING upvote_count
+            """,
+            (post_id, post_id),
+        )
+        score = cur.fetchone()["upvote_count"]
+        cur.execute(
+            "SELECT COALESCE(value, 0) AS my_vote FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
+            (user_id, post_id),
+        )
+        vote = cur.fetchone()
         conn.commit()
         cur.close()
-        return {"upvote_count": upvote_count}
+        return {"upvote_count": score, "my_vote": vote["my_vote"] if vote else 0}
+
+
+@app.post("/api/posts/{post_id}/vote")
+def vote_post(post_id: UUID, payload: VoteRequest, user=Depends(current_user)):
+    return _set_post_vote(post_id, str(user["user_id"]), payload.value)
+
+
+@app.post("/api/posts/{post_id}/upvote")
+def toggle_upvote(post_id: UUID, payload: UpvoteRequest, user=Depends(current_user)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT value FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
+            (user["user_id"], post_id),
+        )
+        existing = cur.fetchone()
+        cur.close()
+    return _set_post_vote(post_id, str(user["user_id"]), 0 if existing and existing["value"] == 1 else 1)
+
+
+@app.get("/api/posts/{post_id}")
+def get_post(post_id: UUID, user=Depends(current_user_optional)):
+    user_id = str(user["user_id"]) if user else None
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+                   u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
+                   pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
+                   COALESCE(mine.value, 0) AS my_vote,
+                   (SELECT COUNT(*) FROM posts authored WHERE authored.author_id = u.user_id) AS post_count,
+                   u.bio AS author_bio, u.interest_tags AS author_interest_tags,
+                   pa.authors AS attached_paper_authors, pa.venue AS attached_paper_venue,
+                   pa.publication_year AS attached_paper_year,
+                   (SELECT ranked.pagerank_percentile FROM (
+                      SELECT paper_id, percent_rank() OVER (ORDER BY pagerank_score) AS pagerank_percentile
+                      FROM papers
+                    ) ranked WHERE ranked.paper_id = pa.paper_id) AS attached_paper_percentile
+            FROM posts p
+            JOIN users u ON u.user_id = p.author_id
+            LEFT JOIN papers pa ON pa.paper_id = p.attached_paper_id
+            LEFT JOIN post_upvotes mine ON mine.post_id = p.post_id AND mine.user_id = %s::uuid
+            WHERE p.post_id = %s AND p.is_flagged_spam = FALSE
+            """,
+            (user_id, post_id),
+        )
+        post = cur.fetchone()
+        cur.close()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    post["author"] = {
+        "user_id": str(post.pop("author_id")),
+        "full_name": post.pop("author_name"),
+        "role": post.pop("author_role"),
+        "department": post.pop("author_dept"),
+        "bio": post.pop("author_bio"),
+        "interest_tags": post.pop("author_interest_tags"),
+        "post_count": post.pop("post_count"),
+    }
+    if post.get("attached_paper_id"):
+        post["attached_paper"] = {
+            "paper_id": str(post["attached_paper_id"]),
+            "canonical_title": post["attached_paper_title"],
+            "authors": post.pop("attached_paper_authors"),
+            "venue": post.pop("attached_paper_venue"),
+            "publication_year": post.pop("attached_paper_year"),
+            "pagerank_percentile": post.pop("attached_paper_percentile"),
+        }
+    else:
+        post["attached_paper"] = None
+        for key in ("attached_paper_authors", "attached_paper_venue", "attached_paper_year", "attached_paper_percentile"):
+            post.pop(key, None)
+    post["post_id"] = str(post["post_id"])
+    if post.get("attached_paper_id"):
+        post["attached_paper_id"] = str(post["attached_paper_id"])
+    post["created_at"] = post["created_at"].isoformat()
+    return post
 
 
 @app.get("/api/posts/{post_id}/comments")
-def get_comments(post_id: str):
+def get_comments(post_id: UUID):
     with get_db() as conn:
         cur = conn.cursor()
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
+        if not cur.fetchone():
+            cur.close()
+            raise HTTPException(status_code=404, detail="Post not found")
         cur.execute(
             """
             SELECT c.comment_id, c.post_id, c.author_id, u.full_name AS author_name,
@@ -317,52 +777,103 @@ def get_comments(post_id: str):
 
 
 @app.post("/api/posts/{post_id}/comments")
-def add_comment(post_id: str, payload: CommentCreate):
+def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user)):
     with get_db() as conn:
         cur = conn.cursor()
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
+        if not cur.fetchone():
+            cur.close()
+            raise HTTPException(status_code=404, detail="Post not found")
+        if payload.parent_comment_id:
+            cur.execute(
+                "SELECT 1 FROM comments WHERE comment_id = %s AND post_id = %s",
+                (payload.parent_comment_id, post_id),
+            )
+            if not cur.fetchone():
+                cur.close()
+                raise HTTPException(status_code=400, detail="Parent comment belongs to another discussion")
         cur.execute(
             """
             INSERT INTO comments (post_id, author_id, parent_comment_id, body)
             VALUES (%s::uuid, %s::uuid, %s::uuid, %s)
             RETURNING comment_id, created_at
             """,
-            (post_id, payload.author_id, payload.parent_comment_id, payload.body),
+            (post_id, user["user_id"], payload.parent_comment_id, payload.body),
         )
         created = cur.fetchone()
         cur.execute(
             "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'add_comment', %s::uuid)",
-            (payload.author_id, created["comment_id"]),
+            (user["user_id"], created["comment_id"]),
         )
+        cur.execute(
+            """
+            SELECT c.comment_id, c.post_id, c.author_id, u.full_name AS author_name,
+                   u.role AS author_role, u.department AS author_dept,
+                   c.parent_comment_id, c.body, c.created_at
+            FROM comments c JOIN users u ON u.user_id = c.author_id
+            WHERE c.comment_id = %s
+            """,
+            (created["comment_id"],),
+        )
+        comment = cur.fetchone()
         conn.commit()
         cur.close()
-        return {"status": "created", "comment": created}
+        return comment
 
 
 # ==========================================
 # F3: Shared Chanakya Library
 # ==========================================
 @app.get("/api/library")
-def get_library(user_id: Optional[str] = None, limit: int = Query(30, ge=1, le=100)):
+def get_library(
+    user_id: Optional[str] = None,
+    limit: int = Query(30, ge=1, le=100),
+    user=Depends(current_user_optional),
+):
     with get_db() as conn:
         cur = conn.cursor()
         if user_id:
+            if not user:
+                cur.close()
+                raise HTTPException(status_code=401, detail="Sign in required")
             cur.execute(
                 """
                 SELECT p.paper_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
-                       p.save_count, p.pagerank_score, ls.private_notes, ls.saved_at
+                       p.save_count, p.pagerank_score, ls.private_notes, ls.saved_at, ls.collection_id,
+                       c.name AS collection_name,
+                       CASE
+                         WHEN 'Computer Science & AI' = ANY(p.topics) THEN 'Computer Science & AI'
+                         WHEN 'Electronics & Communication' = ANY(p.topics) THEN 'Electronics & Communication'
+                         WHEN 'Biotechnology' = ANY(p.topics) THEN 'Biotechnology'
+                         WHEN 'Management & Commerce' = ANY(p.topics) THEN 'Management & Commerce'
+                         WHEN 'School of Law' = ANY(p.topics) THEN 'School of Law'
+                         WHEN 'Liberal Arts & Humanities' = ANY(p.topics) THEN 'Liberal Arts & Humanities'
+                         ELSE NULL
+                       END AS school
                 FROM library_saves ls
                 JOIN papers p ON ls.paper_id = p.paper_id
+                LEFT JOIN collections c ON c.collection_id = ls.collection_id
                 WHERE ls.user_id = %s::uuid
                 ORDER BY ls.saved_at DESC
                 LIMIT %s
                 """,
-                (user_id, limit),
+                (user["user_id"], limit),
             )
         else:
             cur.execute(
                 """
-                SELECT paper_id, canonical_title, abstract, authors, publication_year, venue, topics, save_count, pagerank_score
-                FROM papers
+                SELECT p.paper_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
+                       p.save_count, p.pagerank_score,
+                       CASE
+                         WHEN 'Computer Science & AI' = ANY(p.topics) THEN 'Computer Science & AI'
+                         WHEN 'Electronics & Communication' = ANY(p.topics) THEN 'Electronics & Communication'
+                         WHEN 'Biotechnology' = ANY(p.topics) THEN 'Biotechnology'
+                         WHEN 'Management & Commerce' = ANY(p.topics) THEN 'Management & Commerce'
+                         WHEN 'School of Law' = ANY(p.topics) THEN 'School of Law'
+                         WHEN 'Liberal Arts & Humanities' = ANY(p.topics) THEN 'Liberal Arts & Humanities'
+                         ELSE NULL
+                       END AS school
+                FROM papers p
                 WHERE in_chanakya_library = TRUE
                 ORDER BY save_count DESC, pagerank_score DESC
                 LIMIT %s
@@ -375,16 +886,25 @@ def get_library(user_id: Optional[str] = None, limit: int = Query(30, ge=1, le=1
 
 
 @app.post("/api/library/save")
-def save_to_library(req: SavePaperRequest):
+def save_to_library(req: SavePaperRequest, user=Depends(current_user)):
     with get_db() as conn:
         cur = conn.cursor()
+        if req.collection_id:
+            cur.execute(
+                "SELECT 1 FROM collections WHERE collection_id = %s::uuid AND user_id = %s::uuid",
+                (req.collection_id, user["user_id"]),
+            )
+            if not cur.fetchone():
+                cur.close()
+                raise HTTPException(status_code=404, detail="Collection not found")
         cur.execute(
             """
-            INSERT INTO library_saves (user_id, paper_id, private_notes)
-            VALUES (%s::uuid, %s::uuid, %s)
-            ON CONFLICT (user_id, paper_id) DO UPDATE SET private_notes = EXCLUDED.private_notes
+            INSERT INTO library_saves (user_id, paper_id, private_notes, collection_id)
+            VALUES (%s::uuid, %s::uuid, %s, %s::uuid)
+            ON CONFLICT (user_id, paper_id) DO UPDATE
+              SET private_notes = EXCLUDED.private_notes, collection_id = EXCLUDED.collection_id
             """,
-            (req.user_id, req.paper_id, req.private_notes),
+            (user["user_id"], req.paper_id, req.private_notes, req.collection_id),
         )
         cur.execute(
             """
@@ -399,44 +919,287 @@ def save_to_library(req: SavePaperRequest):
         updated = cur.fetchone()
         cur.execute(
             "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'save_paper', %s::uuid)",
-            (req.user_id, req.paper_id),
+            (user["user_id"], req.paper_id),
         )
         conn.commit()
         cur.close()
         return {"status": "saved", "paper": updated}
 
 
-@app.get("/api/collections")
-def get_collections(user_id: Optional[str] = None):
+@app.delete("/api/library/save/{paper_id}")
+def remove_from_library(paper_id: UUID, user=Depends(current_user)):
     with get_db() as conn:
         cur = conn.cursor()
-        if user_id:
+        cur.execute(
+            "DELETE FROM library_saves WHERE user_id = %s::uuid AND paper_id = %s",
+            (user["user_id"], paper_id),
+        )
+        removed = cur.rowcount > 0
+        if removed:
             cur.execute(
-                """
-                SELECT c.collection_id, c.name, c.description,
-                       COUNT(ls.paper_id) AS paper_count
-                FROM collections c
-                LEFT JOIN library_saves ls ON c.collection_id = ls.collection_id
-                WHERE c.user_id = %s::uuid
-                GROUP BY c.collection_id, c.name, c.description
-                ORDER BY c.created_at DESC
-                """,
-                (user_id,),
+                "UPDATE papers SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s) WHERE paper_id = %s",
+                (paper_id, paper_id),
             )
-        else:
-            cur.execute(
-                """
-                SELECT c.collection_id, c.name, c.description,
-                       COUNT(ls.paper_id) AS paper_count
-                FROM collections c
-                LEFT JOIN library_saves ls ON c.collection_id = ls.collection_id
-                GROUP BY c.collection_id, c.name, c.description
-                ORDER BY c.created_at DESC
-                """
-            )
+            conn.commit()
+        cur.close()
+    return {"status": "removed" if removed else "not_saved"}
+
+
+@app.get("/api/collections")
+def get_collections(user_id: Optional[str] = None, user=Depends(current_user)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT c.collection_id, c.name, c.description, COUNT(ls.paper_id) AS paper_count
+            FROM collections c
+            LEFT JOIN library_saves ls ON c.collection_id = ls.collection_id
+            WHERE c.user_id = %s::uuid
+            GROUP BY c.collection_id, c.name, c.description
+            ORDER BY c.created_at DESC
+            """,
+            (user["user_id"],),
+        )
         cols = cur.fetchall()
         cur.close()
         return cols
+
+
+@app.post("/api/collections")
+def create_collection(payload: CollectionCreate, user=Depends(current_user)):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Collection name cannot be blank")
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO collections (user_id, name, description)
+            VALUES (%s::uuid, %s, %s)
+            RETURNING collection_id, name, description
+            """,
+            (user["user_id"], name, payload.description),
+        )
+        collection = cur.fetchone()
+        conn.commit()
+        cur.close()
+        collection["paper_count"] = 0
+        return collection
+
+
+@app.post("/api/collections/{collection_id}/papers")
+def add_paper_to_collection(collection_id: UUID, payload: AddPaperToCollectionRequest, user=Depends(current_user)):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT 1 FROM collections WHERE collection_id = %s::uuid AND user_id = %s::uuid",
+            (collection_id, user["user_id"]),
+        )
+        if not cur.fetchone():
+            cur.close()
+            raise HTTPException(status_code=404, detail="Collection not found")
+        cur.execute(
+            """
+            INSERT INTO library_saves (user_id, paper_id, collection_id, private_notes)
+            VALUES (%s::uuid, %s::uuid, %s::uuid, %s)
+            ON CONFLICT (user_id, paper_id) DO UPDATE
+              SET collection_id = EXCLUDED.collection_id,
+                  private_notes = COALESCE(NULLIF(EXCLUDED.private_notes, ''), library_saves.private_notes)
+            RETURNING save_id
+            """,
+            (user["user_id"], payload.paper_id, collection_id, payload.private_notes),
+        )
+        cur.execute(
+            "UPDATE papers SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid), in_chanakya_library = TRUE WHERE paper_id = %s::uuid",
+            (payload.paper_id, payload.paper_id),
+        )
+        conn.commit()
+        cur.close()
+    return {"status": "added_to_collection", "collection_id": str(collection_id), "paper_id": str(payload.paper_id)}
+
+
+@app.post("/api/library/save-by-identifier")
+def save_by_identifier(payload: SaveByIdentifierRequest, user=Depends(current_user)):
+    raw_id = payload.identifier.strip()
+    doi = None
+    arxiv_id = None
+
+    if "doi.org/" in raw_id:
+        doi = raw_id.split("doi.org/")[-1].strip()
+    elif "10." in raw_id and "/" in raw_id:
+        doi = raw_id.strip()
+    elif "arxiv.org/abs/" in raw_id:
+        arxiv_id = raw_id.split("arxiv.org/abs/")[-1].split("v")[0].strip()
+    elif "arxiv:" in raw_id.lower():
+        arxiv_id = raw_id.lower().replace("arxiv:", "").strip()
+    elif re.match(r"^\d{4}\.\d{4,5}$", raw_id):
+        arxiv_id = raw_id
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        existing = None
+        if doi:
+            cur.execute("SELECT paper_id, canonical_title FROM papers WHERE doi = %s", (doi,))
+            existing = cur.fetchone()
+        if not existing and arxiv_id:
+            cur.execute("SELECT paper_id, canonical_title FROM papers WHERE arxiv_id = %s", (arxiv_id,))
+            existing = cur.fetchone()
+
+        if existing:
+            paper_id = existing["paper_id"]
+        else:
+            fetched = None
+            if doi:
+                try:
+                    r = requests.get(f"https://api.crossref.org/works/{doi}", headers={"User-Agent": "chanakya-commons/1.0"}, timeout=10)
+                    if r.status_code == 200:
+                        msg = r.json().get("message", {})
+                        title = " ".join(msg.get("title", [])) or "Crossref Paper"
+                        abstract = msg.get("abstract", "") or f"Research article retrieved via Crossref DOI {doi}."
+                        authors = [{"name": f"{a.get('given', '')} {a.get('family', '')}".strip()} for a in msg.get("author", [])]
+                        year = (msg.get("published", {}).get("date-parts", [[2024]])[0][0]) if msg.get("published") else 2024
+                        venue = msg.get("container-title", ["Scholarly Journal"])[0] if msg.get("container-title") else "Journal"
+                        fetched = {
+                            "title": title,
+                            "abstract": abstract,
+                            "authors": authors[:5] or [{"name": "Author"}],
+                            "year": year,
+                            "venue": venue,
+                            "topics": ["Research Paper"],
+                            "doi": doi,
+                            "arxiv_id": None,
+                            "sources": ["crossref"]
+                        }
+                except Exception:
+                    pass
+
+            if not fetched and arxiv_id:
+                try:
+                    r = requests.get(f"http://export.arxiv.org/api/query?id_list={arxiv_id}", headers={"User-Agent": "chanakya-commons/1.0"}, timeout=10)
+                    if r.status_code == 200:
+                        import xml.etree.ElementTree as ET
+                        root = ET.fromstring(r.content)
+                        ns = {"atom": "http://www.w3.org/2005/Atom"}
+                        entry = root.find("atom:entry", ns)
+                        if entry is not None:
+                            title = (entry.find("atom:title", ns).text or "").strip().replace("\n", " ")
+                            abstract = (entry.find("atom:summary", ns).text or "").strip().replace("\n", " ")
+                            authors = [{"name": a.find("atom:name", ns).text} for a in entry.findall("atom:author", ns) if a.find("atom:name", ns) is not None]
+                            fetched = {
+                                "title": title,
+                                "abstract": abstract,
+                                "authors": authors[:5] or [{"name": "arXiv Author"}],
+                                "year": 2024,
+                                "venue": "arXiv.org",
+                                "topics": ["arXiv Preprint"],
+                                "doi": None,
+                                "arxiv_id": arxiv_id,
+                                "sources": ["arxiv"]
+                            }
+                except Exception:
+                    pass
+
+            if not fetched:
+                fetched = {
+                    "title": f"External Publication: {raw_id}",
+                    "abstract": f"Academic work saved from external identifier reference: {raw_id}",
+                    "authors": [{"name": "Contributing Scholar"}],
+                    "year": 2024,
+                    "venue": "Academic Commons",
+                    "topics": ["Interdisciplinary"],
+                    "doi": doi,
+                    "arxiv_id": arxiv_id,
+                    "sources": ["external"]
+                }
+
+            paper_id = uuid.uuid4()
+            emb = embed_model.encode(f"{fetched['title']}. {fetched['abstract'][:500]}").tolist()
+            cur.execute(
+                """
+                INSERT INTO papers (paper_id, doi, arxiv_id, canonical_title, abstract, authors, publication_year, venue, topics, sources, embedding)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::vector)
+                """,
+                (
+                    paper_id,
+                    fetched["doi"],
+                    fetched["arxiv_id"],
+                    fetched["title"],
+                    fetched["abstract"],
+                    json.dumps(fetched["authors"]),
+                    fetched["year"],
+                    fetched["venue"],
+                    fetched["topics"],
+                    json.dumps(fetched["sources"]),
+                    emb,
+                ),
+            )
+            cur.execute(
+                """
+                INSERT INTO paper_chunks (paper_id, chunk_index, chunk_text, chunk_embedding)
+                VALUES (%s, 0, %s, %s::vector)
+                """,
+                (paper_id, fetched["abstract"][:1200], emb),
+            )
+
+        # Save to library
+        cur.execute(
+            """
+            INSERT INTO library_saves (user_id, paper_id, collection_id, private_notes)
+            VALUES (%s::uuid, %s::uuid, %s::uuid, %s)
+            ON CONFLICT (user_id, paper_id) DO UPDATE
+              SET collection_id = COALESCE(EXCLUDED.collection_id, library_saves.collection_id),
+                  private_notes = COALESCE(NULLIF(EXCLUDED.private_notes, ''), library_saves.private_notes)
+            """,
+            (user["user_id"], paper_id, payload.collection_id, payload.private_notes or ""),
+        )
+        cur.execute(
+            """
+            UPDATE papers
+            SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid),
+                in_chanakya_library = TRUE
+            WHERE paper_id = %s::uuid
+            RETURNING paper_id, canonical_title, save_count
+            """,
+            (paper_id, paper_id),
+        )
+        saved_row = cur.fetchone()
+        cur.execute("INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'save_paper', %s::uuid)", (user["user_id"], paper_id))
+        conn.commit()
+        cur.close()
+
+    return {"status": "saved", "paper": saved_row, "identifier": raw_id}
+
+
+def _deduplicate_search_results(papers: list[dict]) -> list[dict]:
+    seen = {}
+    deduped = []
+    for p in papers:
+        doi = p.get("doi")
+        title_norm = re.sub(r"[^\w\s]", "", (p.get("canonical_title") or "").lower()).strip()
+        title_norm = re.sub(r"\s+preprint$", "", title_norm)
+        key = doi if doi else title_norm
+        if key in seen:
+            canonical = seen[key]
+            # Merge sources
+            srcs = set(canonical.get("sources") or ["OpenAlex"])
+            if p.get("sources"):
+                for s in p["sources"]:
+                    srcs.add(s.title() if isinstance(s, str) else str(s))
+            canonical["sources"] = list(srcs)
+            if p.get("pagerank_score", 0) > canonical.get("pagerank_score", 0):
+                canonical["pagerank_score"] = p["pagerank_score"]
+        else:
+            p_obj = dict(p)
+            srcs = set()
+            if p_obj.get("sources"):
+                for s in p_obj["sources"]:
+                    srcs.add(s.title() if isinstance(s, str) else str(s))
+            if not srcs:
+                srcs.add("OpenAlex")
+            p_obj["sources"] = list(srcs)
+            seen[key] = p_obj
+            deduped.append(p_obj)
+    return deduped
 
 
 # ==========================================
@@ -473,9 +1236,9 @@ def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1
                 SELECT paper_id, ROW_NUMBER() OVER (ORDER BY kw_score DESC) AS kw_rank
                 FROM keyword_top
             )
-            SELECT p.paper_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
+            SELECT p.paper_id, p.doi, p.arxiv_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
                    p.save_count, p.pagerank_score, p.in_chanakya_library,
-                   ARRAY_AGG(DISTINCT ps.source_name) AS sources,
+                   COALESCE(ARRAY_AGG(DISTINCT ps.source_name) FILTER (WHERE ps.source_name IS NOT NULL), ARRAY['openalex']) AS sources,
                    (COALESCE(1.0 / (60 + s.sem_rank), 0) + COALESCE(1.0 / (60 + k.kw_rank), 0) + (LEAST(p.pagerank_score * 50.0, 0.15))) AS rrf_score
             FROM papers p
             LEFT JOIN semantic s ON p.paper_id = s.paper_id
@@ -487,11 +1250,14 @@ def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1
             LIMIT %s
         """
 
-        cur.execute(paper_sql, (q_vec, False, q_vec, q, False, q, limit))
-        external_papers = cur.fetchall()
+        cur.execute(paper_sql, (q_vec, False, q_vec, q, False, q, limit * 2))
+        raw_external = cur.fetchall()
 
-        cur.execute(paper_sql, (q_vec, True, q_vec, q, True, q, limit))
-        library_papers = cur.fetchall()
+        cur.execute(paper_sql, (q_vec, True, q_vec, q, True, q, limit * 2))
+        raw_library = cur.fetchall()
+
+        external_papers = _deduplicate_search_results(raw_external)[:limit]
+        library_papers = _deduplicate_search_results(raw_library)[:limit]
 
         # Panel 3: University Members working in that area
         cur.execute(
@@ -627,31 +1393,154 @@ def get_also_saved(paper_id: str, limit: int = Query(5, ge=1, le=20)):
         return recommendations
 
 
+@app.get("/api/papers/{paper_id}")
+def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
+    user_id = str(user["user_id"]) if user else None
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            WITH ranked AS (
+              SELECT paper_id, percent_rank() OVER (ORDER BY pagerank_score) AS pagerank_percentile
+              FROM papers
+            )
+            SELECT p.paper_id, p.doi, p.arxiv_id, p.canonical_title, p.abstract, p.authors,
+                   p.publication_year, p.venue, p.topics, p.in_chanakya_library, p.pagerank_score,
+                   p.save_count, ranked.pagerank_percentile,
+                   (SELECT COUNT(*) FROM paper_citations pc WHERE pc.citing_paper_id = p.paper_id) AS cites_count,
+                   (SELECT COUNT(*) FROM paper_citations pc WHERE pc.cited_paper_id = p.paper_id) AS cited_by_count,
+                   EXISTS(SELECT 1 FROM library_saves ls WHERE ls.paper_id = p.paper_id AND ls.user_id = %s::uuid) AS is_saved,
+                   (SELECT collection_id FROM library_saves ls
+                    WHERE ls.paper_id = p.paper_id AND ls.user_id = %s::uuid) AS collection_id
+            FROM papers p JOIN ranked USING (paper_id)
+            WHERE p.paper_id = %s
+            """,
+            (user_id, user_id, paper_id),
+        )
+        paper = cur.fetchone()
+        if not paper:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Paper not found")
+        cur.execute(
+            """
+            SELECT p.paper_id, p.canonical_title, p.publication_year
+            FROM paper_citations pc JOIN papers p ON p.paper_id = pc.cited_paper_id
+            WHERE pc.citing_paper_id = %s ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
+            """,
+            (paper_id,),
+        )
+        paper["references"] = cur.fetchall()
+        cur.execute(
+            """
+            SELECT p.paper_id, p.canonical_title, p.publication_year
+            FROM paper_citations pc JOIN papers p ON p.paper_id = pc.citing_paper_id
+            WHERE pc.cited_paper_id = %s ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
+            """,
+            (paper_id,),
+        )
+        paper["cited_by"] = cur.fetchall()
+        cur.execute(
+            """
+            SELECT p.post_id, p.title, u.full_name AS author_name, p.upvote_count,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
+                   p.created_at
+            FROM posts p JOIN users u ON u.user_id = p.author_id
+            WHERE p.attached_paper_id = %s AND p.is_flagged_spam = FALSE
+            ORDER BY p.created_at DESC LIMIT 10
+            """,
+            (paper_id,),
+        )
+        paper["related_posts"] = cur.fetchall()
+        cur.close()
+    paper["paper_id"] = str(paper["paper_id"])
+    if paper.get("collection_id"):
+        paper["collection_id"] = str(paper["collection_id"])
+    return paper
+
+
+@app.get("/api/home")
+def get_home():
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM papers WHERE in_chanakya_library = TRUE) AS papers,
+              (SELECT COUNT(*) FROM users WHERE is_flagged_spam = FALSE) AS scholars,
+              (SELECT COUNT(DISTINCT parent_cluster) FROM dw.dim_topic) AS clusters,
+              (SELECT COUNT(*) FROM posts WHERE is_flagged_spam = FALSE) AS posts
+            """
+        )
+        stats = cur.fetchone()
+        cur.execute(
+            """
+            WITH ranked AS (
+              SELECT paper_id, percent_rank() OVER (ORDER BY pagerank_score) AS pagerank_percentile
+              FROM papers
+            )
+            SELECT p.paper_id, p.canonical_title, p.authors, p.venue, p.publication_year,
+                   p.pagerank_score, p.save_count, ranked.pagerank_percentile
+            FROM papers p JOIN ranked USING (paper_id)
+            WHERE p.in_chanakya_library = TRUE
+            ORDER BY p.pagerank_score DESC LIMIT 6
+            """
+        )
+        featured = cur.fetchall()
+        cur.execute(
+            """
+            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+                   u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
+                   pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count
+            FROM posts p JOIN users u ON p.author_id = u.user_id
+            LEFT JOIN papers pa ON pa.paper_id = p.attached_paper_id
+            WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
+            ORDER BY p.created_at DESC LIMIT 4
+            """
+        )
+        recent_posts = cur.fetchall()
+        cur.close()
+    for paper in featured:
+        paper["paper_id"] = str(paper["paper_id"])
+    for post in recent_posts:
+        post["post_id"] = str(post["post_id"])
+        post["author_id"] = str(post["author_id"])
+        if post.get("attached_paper_id"):
+            post["attached_paper_id"] = str(post["attached_paper_id"])
+        post["created_at"] = post["created_at"].isoformat()
+    return {"stats": stats, "featured_papers": featured, "recent_posts": recent_posts}
+
+
 # ==========================================
 # F7: Sliding Window Trends & Anomaly Detection
 # ==========================================
 @app.get("/api/trends-and-anomalies")
-def get_trends_and_anomalies():
+def get_trends_and_anomalies(user=Depends(current_user_optional)):
     """
-    Purely read-only endpoint: returns sliding window topic spike detection
+    Purely read-only endpoint: returns date-anchored sliding window topic spike detection
     and active flagged spam/anomaly alerts without modifying database state on GET.
     """
     with get_db() as conn:
         cur = conn.cursor()
 
-        # 1. Sliding window topic spike detection (Last 7 days vs previous 30-day baseline weekly average)
+        # 1. Sliding window topic spike detection anchored to MAX(occurred_at)
         cur.execute(
             """
-            WITH expanded AS (
+            WITH anchor AS (
+                SELECT COALESCE(MAX(occurred_at), NOW()) AS max_ts FROM activity_events
+            ),
+            expanded AS (
                 SELECT UNNEST(topic_tags) AS topic, occurred_at
-                FROM activity_events
-                WHERE topic_tags IS NOT NULL AND occurred_at >= NOW() - INTERVAL '37 days'
+                FROM activity_events, anchor
+                WHERE topic_tags IS NOT NULL
+                  AND occurred_at >= anchor.max_ts - INTERVAL '37 days'
+                  AND occurred_at <= anchor.max_ts
             ),
             window_counts AS (
                 SELECT
                     topic,
-                    COUNT(*) FILTER (WHERE occurred_at >= NOW() - INTERVAL '7 days') AS recent_7d,
-                    COUNT(*) FILTER (WHERE occurred_at < NOW() - INTERVAL '7 days') / 4.28 AS baseline_weekly_avg
+                    COUNT(*) FILTER (WHERE occurred_at >= (SELECT max_ts FROM anchor) - INTERVAL '7 days') AS recent_7d,
+                    COUNT(*) FILTER (WHERE occurred_at < (SELECT max_ts FROM anchor) - INTERVAL '7 days') / 4.28 AS baseline_weekly_avg
                 FROM expanded
                 GROUP BY topic
             )
@@ -665,26 +1554,54 @@ def get_trends_and_anomalies():
         trending_topics = cur.fetchall()
 
         # 2. Read flagged accounts without mutating user rows on GET
+        flagged_accounts = []
+        if user and user["role"] == "admin":
+            cur.execute(
+                """
+                SELECT u.user_id::text, u.full_name, u.department,
+                       COUNT(p.post_id) AS post_count,
+                       u.spam_score AS anomaly_score
+                FROM users u
+                LEFT JOIN posts p ON u.user_id = p.author_id
+                WHERE u.is_flagged_spam = TRUE
+                GROUP BY u.user_id, u.full_name, u.department, u.spam_score
+                ORDER BY u.spam_score DESC
+                LIMIT 20
+                """
+            )
+            flagged_accounts = cur.fetchall()
+        cur.close()
+        result = {"trending_topics": trending_topics}
+        if user and user["role"] == "admin":
+            result["flagged_spam_accounts"] = flagged_accounts
+        return result
+
+
+@app.get("/api/alerts")
+def get_system_alerts(limit: int = Query(25, ge=1, le=100), user=Depends(current_user_optional)):
+    """Fetch unresolved system alerts persisted during ELT or moderation jobs."""
+    with get_db() as conn:
+        cur = conn.cursor()
         cur.execute(
             """
-            SELECT u.user_id::text, u.full_name, u.department,
-                   COUNT(p.post_id) AS post_count,
-                   u.spam_score AS anomaly_score
-            FROM users u
-            LEFT JOIN posts p ON u.user_id = p.author_id
-            WHERE u.is_flagged_spam = TRUE
-            GROUP BY u.user_id, u.full_name, u.department, u.spam_score
-            ORDER BY u.spam_score DESC
-            LIMIT 20
-            """
+            SELECT alert_id, alert_type, entity_ref, severity_score, details, is_resolved, detected_at
+            FROM system_alerts
+            WHERE is_resolved = FALSE
+            ORDER BY detected_at DESC
+            LIMIT %s
+            """,
+            (limit,)
         )
-        flagged_accounts = cur.fetchall()
+        alerts = cur.fetchall()
         cur.close()
-        return {"trending_topics": trending_topics, "flagged_spam_accounts": flagged_accounts}
+        return alerts
 
 
 @app.post("/api/analytics/run-spam-job")
-def run_spam_detection_job(threshold: float = Query(0.18, description="Minimum inverted anomaly score to flag an account")):
+def run_spam_detection_job(
+    threshold: float = Query(0.18, description="Minimum inverted anomaly score to flag an account"),
+    user=Depends(require_role("admin")),
+):
     """
     Scheduled / administrative batch anomaly detection job.
     Uses Isolation Forest with an absolute score threshold rather than hardcoding contamination %,
@@ -754,7 +1671,7 @@ def run_spam_detection_job(threshold: float = Query(0.18, description="Minimum i
 
 
 @app.post("/api/alerts/{alert_id}/resolve")
-def resolve_alert(alert_id: str):
+def resolve_alert(alert_id: UUID, user=Depends(require_role("admin"))):
     """Admin endpoint to resolve an anomaly alert and unflag false positives."""
     with get_db() as conn:
         cur = conn.cursor()
@@ -793,7 +1710,13 @@ def ask_research_assistant(req: AskAssistantRequest):
 
     with get_db() as conn:
         cur = conn.cursor()
-        filter_clause = "WHERE p.in_chanakya_library = TRUE" if req.library_only else ""
+        conditions = []
+        if req.library_only:
+            conditions.append("p.in_chanakya_library = TRUE")
+        if req.paper_id:
+            conditions.append("p.paper_id = %s::uuid")
+        filter_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
+        query_params = (q_vec, q_vec) if not req.paper_id else (q_vec, req.paper_id, q_vec)
         cur.execute(
             f"""
             SELECT pc.chunk_id, pc.chunk_text, p.paper_id, p.canonical_title, p.publication_year,
@@ -804,7 +1727,7 @@ def ask_research_assistant(req: AskAssistantRequest):
             ORDER BY pc.chunk_embedding <=> %s::vector
             LIMIT 4
             """,
-            (q_vec, q_vec),
+            query_params,
         )
         passages = cur.fetchall()
         cur.close()
@@ -816,23 +1739,13 @@ def ask_research_assistant(req: AskAssistantRequest):
             "citations": []
         }
 
-    # Similarity floor: decline to hallucinate if confidence is low (< 0.28)
-    relevant_passages = [p for p in passages if float(p.get("similarity", 0.0)) >= 0.28]
+    # Similarity floor: decline to hallucinate if confidence is low (< 0.32)
+    relevant_passages = [p for p in passages if float(p.get("similarity", 0.0)) >= 0.32]
     if not relevant_passages:
         return {
             "question": req.question,
-            "answer": "Insufficient evidence found in the research library to reliably answer this question. Please try refining your query or broadening topic keywords.",
-            "citations": [
-                {
-                    "ref_index": idx,
-                    "paper_id": str(psg["paper_id"]),
-                    "title": psg["canonical_title"],
-                    "year": psg["publication_year"],
-                    "passage": psg["chunk_text"][:200] + "...",
-                    "similarity": round(float(psg["similarity"]), 3),
-                }
-                for idx, psg in enumerate(passages[:2], start=1)
-            ]
+            "answer": "Insufficient evidence in the Chanakya University repository to answer this query.",
+            "citations": []
         }
 
     context_blocks = []
@@ -876,11 +1789,13 @@ def ask_research_assistant(req: AskAssistantRequest):
 # F9: Institutional Analytics Dashboard (Star Schema)
 # ==========================================
 @app.get("/api/analytics/overview")
-def analytics_overview(department: Optional[str] = None):
+def analytics_overview(department: Optional[str] = None, user=Depends(current_user_optional)):
     """
     Institutional dimensional analytics from dw Star Schema.
     Department filter faithfully applies across Topic Breakdown, Collaboration Matrix, and Monthly Trends.
     """
+    if department and (not user or ROLE_RANK.get(user["role"], 0) < ROLE_RANK["faculty"]):
+        raise HTTPException(status_code=403 if user else 401, detail="Department analytics require faculty access")
     with get_db() as conn:
         cur = conn.cursor()
 
@@ -971,6 +1886,71 @@ def analytics_overview(department: Optional[str] = None):
         }
 
 
+@app.get("/api/analytics/drilldown")
+def get_analytics_drilldown(
+    school: Optional[str] = Query(None, description="School filter"),
+    department: Optional[str] = Query(None, description="Department filter"),
+):
+    """
+    Dimensional Drill-Down supporting University -> School -> Department -> Member hierarchy.
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        if department:
+            # Level 3: Individual Members within Department
+            cur.execute(
+                """
+                SELECT researcher_id, researcher_name, role, department, school_name,
+                       total_publications, total_citations, avg_coauthors, avg_pagerank, topic_breadth
+                FROM dw.vw_researcher_profiles
+                WHERE department = %s
+                ORDER BY avg_pagerank DESC, total_citations DESC
+                """,
+                (department,)
+            )
+            data = cur.fetchall()
+            cur.close()
+            return {"level": "member", "school": school, "department": department, "count": len(data), "data": data}
+        elif school and school != "ALL":
+            # Level 2: Departments within School
+            cur.execute(
+                """
+                SELECT department,
+                       COUNT(DISTINCT researcher_id) AS researcher_count,
+                       SUM(total_publications) AS total_publications,
+                       SUM(total_citations) AS total_citations,
+                       ROUND(AVG(avg_pagerank)::numeric, 5)::float AS avg_pagerank,
+                       ROUND(AVG(topic_breadth)::numeric, 1)::float AS avg_topic_breadth
+                FROM dw.vw_researcher_profiles
+                WHERE school_name = %s
+                GROUP BY department
+                ORDER BY total_citations DESC
+                """,
+                (school,)
+            )
+            data = cur.fetchall()
+            cur.close()
+            return {"level": "department", "school": school, "count": len(data), "data": data}
+        else:
+            # Level 1: Schools across the University
+            cur.execute(
+                """
+                SELECT school_name,
+                       COUNT(DISTINCT researcher_id) AS researcher_count,
+                       COUNT(DISTINCT department) AS department_count,
+                       SUM(total_publications) AS total_publications,
+                       SUM(total_citations) AS total_citations,
+                       ROUND(AVG(avg_pagerank)::numeric, 5)::float AS avg_pagerank
+                FROM dw.vw_researcher_profiles
+                GROUP BY school_name
+                ORDER BY total_citations DESC
+                """
+            )
+            data = cur.fetchall()
+            cur.close()
+            return {"level": "school", "count": len(data), "data": data}
+
+
 # ==========================================
 # F9.2: Association Rule Mining & Researcher Archetypes
 # ==========================================
@@ -1002,7 +1982,7 @@ def researcher_archetypes(
 # F9.3: Isolation Forest Anomaly Watchlist & Gatekeeper
 # ==========================================
 @app.get("/api/analytics/anomalies")
-def get_anomalies():
+def get_anomalies(user=Depends(current_user_optional)):
     """
     Multidimensional Isolation Forest Outlier Analysis on Researcher Profiles.
     Separates positive breakout performers (HIGH_IMPACT_SPOTLIGHT) from
@@ -1037,15 +2017,15 @@ def get_anomalies():
                 id_col="researcher_id",
                 classify_impact=True
             )
-            return {
-                "spotlights": result.get("impact_spotlights", []),
-                "integrity": result.get("integrity_alerts", [])
-            }
+            response = {"spotlights": result.get("impact_spotlights", [])}
+            if user and user["role"] == "admin":
+                response["integrity"] = result.get("integrity_alerts", [])
+            return response
     except Exception as exc:
         print(f"[Anomalies API] Database notice: {exc}")
 
     # Fallback simulation if warehouse table is not populated yet
-    return {
+    response = {
         "spotlights": [
             {
                 "id": "spotlight-dr-sharma-0",
@@ -1082,7 +2062,9 @@ def get_anomalies():
                 }
             }
         ],
-        "integrity": [
+    }
+    if user and user["role"] == "admin":
+        response["integrity"] = [
             {
                 "id": "integrity-user-bot-0",
                 "name": "ResearchBot_Alpha",
@@ -1118,13 +2100,13 @@ def get_anomalies():
                 }
             }
         ]
-    }
+    return response
 
 
 @app.post("/api/analytics/gatekeeper")
 @app.post("/api/analytics/gatekeeper/score")
 @app.post("/api/analytics/anomalies/score")
-def score_gatekeeper_submission(payload: GatekeeperPayload):
+def score_gatekeeper_submission(payload: GatekeeperPayload, user=Depends(require_role("admin"))):
     """
     Sub-5ms in-memory Isolation Forest live submission gatekeeper.
     Evaluates submission characteristics for anomalies and moderation flags.

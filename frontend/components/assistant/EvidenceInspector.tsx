@@ -14,12 +14,12 @@ function Passage({ text }: { text: string }) {
   const long = text.length > 360;
   return (
     <div>
-      <p className={cx("text-[13.5px] leading-[1.65] text-stone-700", long && !open && "line-clamp-5")}>{text}</p>
+      <p className={cx("text-meta leading-[1.65] text-stone-700", long && !open && "line-clamp-5")}>{text}</p>
       {long && (
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
-          className="mt-1 text-[12px] font-medium text-stone-500 underline decoration-stone-300 underline-offset-2 hover:text-ink"
+          className="mt-1 text-meta font-medium text-stone-500 underline decoration-stone-300 underline-offset-2 hover:text-ink"
         >
           {open ? "Show less" : "Show full passage"}
         </button>
@@ -58,7 +58,7 @@ export function EvidenceInspector({
           <ShieldCheck className="h-3 w-3" strokeWidth={1.75} /> Grounding
         </p>
         <h2 className="font-serif text-[17px] leading-snug text-ink">Evidence inspector</h2>
-        <p className="mt-1 text-[12px] leading-relaxed text-stone-500">
+        <p className="mt-1 text-meta leading-relaxed text-stone-500">
           The top retrieved passages the answer was allowed to use, with cosine similarity from the vector index.
         </p>
       </header>
@@ -78,12 +78,12 @@ export function EvidenceInspector({
         ) : !turn ? (
           <div className="px-6 py-12 text-center">
             <p className="font-serif text-[16px] text-stone-600">Nothing retrieved yet</p>
-            <p className="mt-1 text-[13px] leading-relaxed text-stone-500">Ask a question and the supporting passages will appear here.</p>
+            <p className="mt-1 text-meta leading-relaxed text-stone-500">Ask a question and the supporting passages will appear here.</p>
           </div>
         ) : turn.citations.length === 0 ? (
           <div className="px-6 py-12 text-center">
             <p className="font-serif text-[16px] text-stone-600">No passages retrieved</p>
-            <p className="mt-1 text-[13px] leading-relaxed text-stone-500">
+            <p className="mt-1 text-meta leading-relaxed text-stone-500">
               Nothing in the corpus was close enough to this question, so there is nothing to ground an answer on.
             </p>
           </div>
@@ -109,7 +109,7 @@ export function EvidenceInspector({
                   >
                     <span
                       className={cx(
-                        "num mt-0.5 inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full border px-1 text-[10.5px] font-semibold",
+                        "num mt-0.5 inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full border px-1 text-meta font-semibold",
                         active ? "border-ink bg-ink text-white" : "border-stone-300 bg-paper text-stone-600",
                       )}
                     >
@@ -117,12 +117,12 @@ export function EvidenceInspector({
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block font-serif text-[15.5px] leading-snug text-ink">{c.title}</span>
-                      <span className="num mt-0.5 block text-[12px] text-stone-500">{c.year ?? "Year unknown"}</span>
+                      <span className="num mt-0.5 block text-meta text-stone-500">{c.year ?? "Year unknown"}</span>
                     </span>
                   </button>
                   <div className="mt-2.5 flex items-center gap-2.5">
                     <Meter value={c.similarity} tone={c.similarity >= 0.5 ? "sage" : "stone"} label={`Similarity ${fmtPct(c.similarity)}`} />
-                    <span className="num shrink-0 text-[12px] font-medium text-stone-700">{fmtPct(c.similarity, 1)}</span>
+                    <span className="num shrink-0 text-meta font-medium text-stone-700">{fmtPct(c.similarity, 1)}</span>
                   </div>
                   <div className="mt-2.5 border-l-2 border-stone-200 pl-3">
                     <Passage text={c.passage} />

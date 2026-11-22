@@ -14,6 +14,7 @@ import {
   normalizeComments,
   normalizeFeed,
   normalizeGatekeeper,
+  normalizePaper,
   normalizeOverview,
   normalizeSavedPaper,
   normalizeSearch,
@@ -22,10 +23,12 @@ import {
   num,
   paperList,
   str,
+  strOrNull,
 } from "@/lib/normalize";
 import type {
   AlsoSavedPaper,
   AnalyticsOverview,
+  AuthUser,
   AnomalyFeed,
   AssistantAnswer,
   Collection,
@@ -35,6 +38,9 @@ import type {
   GatekeeperVerdict,
   Member,
   Paper,
+  PaperDetail,
+  HomePayload,
+  PostDetail,
   RecommendedPaper,
   RecommendedPerson,
   ResearcherArchetypes,
@@ -54,14 +60,15 @@ export const ENDPOINTS = {
   researcherArchetypes: ["/analytics/researcher-archetypes"], // [contract]
   anomalies: ["/analytics/anomalies"], // [contract]
   gatekeeper: ["/analytics/gatekeeper", "/analytics/anomalies/score", "/analytics/gatekeeper/score"], // [contract]
-  upvote: (postId: string) => `/posts/${postId}/upvote`, // [contract]
+  upvote: (postId: string) => `/posts/${postId}/upvote`,
+  vote: (postId: string) => `/posts/${postId}/vote`,
   comments: (postId: string) => `/posts/${postId}/comments`, // [contract]
-  collections: "/collections", // [contract]
+  collections: "/collections",
 } as const;
 
 /* -------------------------------- errors -------------------------------- */
 
-export type ApiErrorKind = "network" | "unsupported" | "http";
+export type ApiErrorKind = "network" | "unsupported" | "http" | "unauthorized" | "forbidden";
 
 export class ApiError extends Error {
   readonly kind: ApiErrorKind;
@@ -90,7 +97,7 @@ export function describeError(e: unknown): string {
 /* ------------------------------- transport ------------------------------ */
 
 interface ReqOptions {
-  method?: "GET" | "POST";
+  method?: "GET" | "POST" | "DELETE";
   query?: Record<string, string | number | boolean | null | undefined>;
   body?: unknown;
   signal?: AbortSignal;
@@ -108,10 +115,19 @@ function buildUrl(path: string, query?: ReqOptions["query"]): string {
 
 async function request(path: string, opts: ReqOptions = {}): Promise<unknown> {
   let res: Response;
+  let token: string | null = null;
+  try {
+    token = typeof window === "undefined" ? null : window.localStorage.getItem("crc.auth.token");
+  } catch {
+    token = null;
+  }
+  const headers: Record<string, string> = {};
+  if (opts.body !== undefined) headers["Content-Type"] = "application/json";
+  if (token) headers.Authorization = `Bearer ${token}`;
   try {
     res = await fetch(buildUrl(path, opts.query), {
       method: opts.method ?? "GET",
-      headers: opts.body !== undefined ? { "Content-Type": "application/json" } : undefined,
+      headers,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
       signal: opts.signal,
       cache: "no-store",
@@ -130,6 +146,18 @@ async function request(path: string, opts: ReqOptions = {}): Promise<unknown> {
     const detail = await safeDetail(res);
     if (detail && detail !== "Not Found") throw new ApiError("http", detail, path, res.status);
     throw new ApiError("unsupported", "This backend doesn’t expose that endpoint yet.", path, res.status);
+  }
+  if (res.status === 401 || res.status === 403) {
+    const detail = await safeDetail(res);
+    if (res.status === 401 && token && !path.endsWith("/auth/login") && typeof window !== "undefined") {
+      window.dispatchEvent(new Event("crc:auth-expired"));
+    }
+    throw new ApiError(
+      res.status === 401 ? "unauthorized" : "forbidden",
+      detail ?? (res.status === 401 ? "Sign in to continue." : "You don’t have permission to do that."),
+      path,
+      res.status,
+    );
   }
   if (!res.ok) {
     const detail = await safeDetail(res);
@@ -175,6 +203,43 @@ async function requestFirst(paths: readonly string[], opts: ReqOptions): Promise
 
 /* -------------------------------- members ------------------------------- */
 
+export async function login(identifier: string, passcode: string): Promise<{ token: string; expires_at: string; user: AuthUser }> {
+  const raw = await request("/auth/login", { method: "POST", body: { identifier, passcode } });
+  const o = isRecord(raw) ? raw : {};
+  const u = isRecord(o.user) ? o.user : {};
+  return {
+    token: str(o.token),
+    expires_at: str(o.expires_at),
+    user: {
+      user_id: str(u.user_id),
+      university_id: str(u.university_id),
+      full_name: str(u.full_name),
+      email: strOrNull(u.email) ?? undefined,
+      role: str(u.role, "student") as AuthUser["role"],
+      department: str(u.department),
+      bio: strOrNull(u.bio),
+      interest_tags: Array.isArray(u.interest_tags) ? (u.interest_tags as string[]) : null,
+      is_flagged_spam: u.is_flagged_spam === true,
+    },
+  };
+}
+
+export async function getMe(signal?: AbortSignal): Promise<AuthUser> {
+  const raw = await request("/auth/me", { signal });
+  const u = isRecord(raw) ? raw : {};
+  return {
+    user_id: str(u.user_id),
+    university_id: str(u.university_id),
+    full_name: str(u.full_name),
+    email: strOrNull(u.email) ?? undefined,
+    role: str(u.role, "student") as AuthUser["role"],
+    department: str(u.department),
+    bio: strOrNull(u.bio),
+    interest_tags: Array.isArray(u.interest_tags) ? (u.interest_tags as string[]) : null,
+    is_flagged_spam: u.is_flagged_spam === true,
+  };
+}
+
 export async function getMembers(limit = 60, signal?: AbortSignal): Promise<Member[]> {
   const raw = await request("/users", { query: { limit }, signal });
   if (!Array.isArray(raw)) return [];
@@ -205,8 +270,8 @@ export async function search(q: string, signal?: AbortSignal): Promise<SearchRes
 
 /* ---------------------------------- feed -------------------------------- */
 
-export async function getFeed(userId: string | null, signal?: AbortSignal): Promise<FeedPost[]> {
-  return normalizeFeed(await request("/feed", { query: { user_id: userId, limit: 40 }, signal }));
+export async function getFeed(userId: string | null, signal?: AbortSignal, sort = "best"): Promise<FeedPost[]> {
+  return normalizeFeed(await request("/feed", { query: { user_id: userId, limit: 40, sort }, signal }));
 }
 
 export async function createPost(input: {
@@ -219,11 +284,52 @@ export async function createPost(input: {
   await request("/posts", { method: "POST", body: input });
 }
 
+export async function getPost(postId: string, signal?: AbortSignal): Promise<PostDetail> {
+  const raw = await request(`/posts/${postId}`, { signal });
+  const o = isRecord(raw) ? raw : {};
+  const feedPost = normalizeFeed([o])[0];
+  const author = isRecord(o.author) ? o.author : {};
+  const paper = isRecord(o.attached_paper) ? o.attached_paper : null;
+  return {
+    ...feedPost,
+    author_name: str(author.full_name, feedPost.author_name),
+    author_role: str(author.role, "student") as FeedPost["author_role"],
+    author_dept: str(author.department),
+    author: {
+      user_id: str(author.user_id),
+      full_name: str(author.full_name, feedPost.author_name),
+      role: str(author.role, "student") as AuthUser["role"],
+      department: str(author.department),
+      bio: strOrNull(author.bio),
+      interest_tags: Array.isArray(author.interest_tags) ? (author.interest_tags as string[]) : null,
+      post_count: num(author.post_count),
+    },
+    attached_paper: paper ? {
+      paper_id: str(paper.paper_id),
+      canonical_title: str(paper.canonical_title),
+      authors: Array.isArray(paper.authors) ? (paper.authors as Paper["authors"]) : null,
+      venue: strOrNull(paper.venue),
+      publication_year: paper.publication_year === null ? null : num(paper.publication_year),
+      pagerank_percentile: paper.pagerank_percentile === null ? null : num(paper.pagerank_percentile),
+    } : null,
+  };
+}
+
 /** Optimistic-UI friendly: resolves with the server's count when it returns one. */
 export async function toggleUpvote(postId: string, userId: string): Promise<{ upvote_count: number | null }> {
   const raw = await request(ENDPOINTS.upvote(postId), { method: "POST", body: { user_id: userId } });
   const o = isRecord(raw) ? raw : {};
   return { upvote_count: o.upvote_count === undefined ? null : num(o.upvote_count) };
+}
+
+export async function votePost(postId: string, value: -1 | 0 | 1): Promise<{ upvote_count: number; my_vote: -1 | 0 | 1 }> {
+  const raw = await request(ENDPOINTS.vote(postId), { method: "POST", body: { value } });
+  const o = isRecord(raw) ? raw : {};
+  const vote = num(o.my_vote);
+  return {
+    upvote_count: num(o.upvote_count),
+    my_vote: vote === -1 || vote === 1 ? vote : 0,
+  };
 }
 
 export async function getComments(postId: string, signal?: AbortSignal): Promise<Comment[]> {
@@ -248,11 +354,26 @@ export async function getSaves(userId: string, signal?: AbortSignal): Promise<Sa
   return Array.isArray(raw) ? raw.map(normalizeSavedPaper) : [];
 }
 
-export async function savePaper(userId: string, paperId: string, notes = ""): Promise<void> {
+export async function savePaper(userId: string, paperId: string, notes = "", collectionId?: string | null): Promise<void> {
   await request("/library/save", {
     method: "POST",
-    body: { user_id: userId, paper_id: paperId, private_notes: notes },
+    body: { user_id: userId, paper_id: paperId, private_notes: notes, collection_id: collectionId ?? null },
   });
+}
+
+export async function removeSavedPaper(paperId: string): Promise<void> {
+  await request(`/library/save/${paperId}`, { method: "DELETE" });
+}
+
+export async function createCollection(name: string, description = ""): Promise<Collection> {
+  const raw = await request(ENDPOINTS.collections, { method: "POST", body: { name, description } });
+  const o = isRecord(raw) ? raw : {};
+  return {
+    collection_id: str(o.collection_id),
+    name: str(o.name, name),
+    description: strOrNull(o.description),
+    paper_count: num(o.paper_count),
+  };
 }
 
 export async function getCollections(userId: string, signal?: AbortSignal): Promise<Collection[]> {
@@ -320,17 +441,72 @@ export async function getAlsoSaved(paperId: string, signal?: AbortSignal): Promi
   });
 }
 
+export async function getPaper(paperId: string, signal?: AbortSignal): Promise<PaperDetail> {
+  const raw = await request(`/papers/${paperId}`, { signal });
+  const o = isRecord(raw) ? raw : {};
+  const citationRows = (key: string) => Array.isArray(o[key]) ? (o[key] as unknown[]).map((row) => {
+    const item = isRecord(row) ? row : {};
+    return {
+      paper_id: str(item.paper_id),
+      canonical_title: str(item.canonical_title),
+      publication_year: item.publication_year === null ? null : num(item.publication_year),
+    };
+  }) : [];
+  const posts = Array.isArray(o.related_posts) ? o.related_posts.map((row) => {
+    const item = isRecord(row) ? row : {};
+    return {
+      post_id: str(item.post_id),
+      title: str(item.title),
+      author_name: str(item.author_name),
+      upvote_count: num(item.upvote_count),
+      comment_count: num(item.comment_count),
+      created_at: str(item.created_at),
+    };
+  }) : [];
+  return {
+    ...normalizePaper(raw),
+    arxiv_id: strOrNull(o.arxiv_id),
+    in_chanakya_library: o.in_chanakya_library === true,
+    pagerank_percentile: o.pagerank_percentile === null ? null : num(o.pagerank_percentile),
+    cites_count: num(o.cites_count),
+    cited_by_count: num(o.cited_by_count),
+    references: citationRows("references"),
+    cited_by: citationRows("cited_by"),
+    related_posts: posts,
+    is_saved: o.is_saved === true,
+    collection_id: strOrNull(o.collection_id),
+  };
+}
+
+export async function getHome(signal?: AbortSignal): Promise<HomePayload> {
+  const raw = await request("/home", { signal });
+  const o = isRecord(raw) ? raw : {};
+  const s = isRecord(o.stats) ? o.stats : {};
+  const feed = normalizeFeed(o.recent_posts);
+  return {
+    stats: {
+      papers: num(s.papers),
+      scholars: num(s.scholars),
+      clusters: num(s.clusters),
+      posts: num(s.posts),
+    },
+    featured_papers: Array.isArray(o.featured_papers) ? o.featured_papers.map(normalizePaper) : [],
+    recent_posts: feed,
+  };
+}
+
 /* -------------------------------- assistant ----------------------------- */
 
 export async function askAssistant(
   question: string,
   libraryOnly: boolean,
   signal?: AbortSignal,
+  paperId?: string | null,
 ): Promise<AssistantAnswer> {
   const raw = await requestFirst(ENDPOINTS.assistant, {
     method: "POST",
     // `query` is sent alongside `question` so the alternate /rag/query contract also validates.
-    body: { question, query: question, library_only: libraryOnly },
+    body: { question, query: question, library_only: libraryOnly, paper_id: paperId ?? undefined },
     signal,
   });
   return normalizeAssistant(raw, question);

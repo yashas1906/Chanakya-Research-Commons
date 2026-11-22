@@ -1,12 +1,23 @@
 import type { RawAuthor } from "@/types/crc";
 
 const INT = new Intl.NumberFormat("en-IN");
+const COMPACT_INT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
 export const fmtInt = (n: number) => INT.format(Math.round(n));
+export const fmtCount = (n: number) => COMPACT_INT.format(Math.round(n));
 
 /** 0.4231 -> "42%"; digits optional. */
 export const fmtPct = (fraction: number, digits = 0) => `${(fraction * 100).toFixed(digits)}%`;
 
 export const fmtLift = (lift: number) => `${lift.toFixed(2)}×`;
+
+export function pagerankTier(percentile: number | null | undefined): string {
+  if (percentile == null) return "Prestige";
+  if (percentile >= 0.99) return "Top 1%";
+  if (percentile >= 0.9) return "Top 10%";
+  if (percentile >= 0.75) return "Top 25%";
+  if (percentile >= 0.5) return "Mid";
+  return "Long tail";
+}
 
 /** PageRank scores are tiny probabilities; show them in a stable, scannable form. */
 export function fmtPagerank(score: number): string {

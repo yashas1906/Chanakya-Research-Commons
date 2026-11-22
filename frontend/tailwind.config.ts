@@ -40,6 +40,15 @@ const config: Config = {
         serif: ["var(--font-serif)", "Georgia", "Cambria", "serif"],
         sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
+      fontSize: {
+        body: ["16px", { lineHeight: "26px" }],
+        ui: ["15px", { lineHeight: "22px" }],
+        meta: ["14px", { lineHeight: "20px" }],
+        label: ["12px", { lineHeight: "16px" }],
+        h1: ["clamp(2rem, 3.2vw, 2.5rem)", { lineHeight: "1.1" }],
+        h2: ["28px", { lineHeight: "34px" }],
+        h3: ["20px", { lineHeight: "28px" }],
+      },
       letterSpacing: {
         eyebrow: "0.14em",
       },

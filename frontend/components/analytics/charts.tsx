@@ -78,14 +78,14 @@ export function Sparkline({ points, name, className }: { points: SparkPoint[]; n
         />
         {hover !== null && (
           <div
-            className="pointer-events-none absolute -top-9 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-stone-200/90 bg-paper px-2 py-1 text-[11.5px] shadow-[0_4px_12px_-6px_rgba(24,24,27,0.25)]"
+            className="pointer-events-none absolute -top-9 z-10 -translate-x-1/2 whitespace-nowrap rounded-md border border-stone-200/90 bg-paper px-2 py-1 text-meta shadow-[0_4px_12px_-6px_rgba(24,24,27,0.25)]"
             style={{ left: `${clamp((x(active) / W) * 100, 12, 88)}%` }}
           >
             <span className="text-stone-500">{hp.label}</span> <span className="num font-medium text-ink">{fmtInt(hp.value)}</span>
           </div>
         )}
       </div>
-      <div className="num mt-1 flex justify-between text-[10.5px] text-stone-400">
+      <div className="num mt-1 flex justify-between text-meta text-stone-400">
         <span>{points[0].label}</span>
         <span>{points[points.length - 1].label}</span>
       </div>
@@ -132,7 +132,7 @@ export function MatrixHeatmap({
               </span>
             </th>
             {cols.map((c) => (
-              <th key={c} scope="col" className="px-1 pb-1 align-bottom text-[11px] font-medium leading-tight text-stone-500">
+              <th key={c} scope="col" className="px-1 pb-1 align-bottom text-meta font-medium leading-tight text-stone-500">
                 {format(c)}
               </th>
             ))}
@@ -141,7 +141,7 @@ export function MatrixHeatmap({
         <tbody>
           {rows.map((r) => (
             <tr key={r}>
-              <th scope="row" className="pr-2 text-left text-[11.5px] font-medium leading-tight text-stone-600">
+              <th scope="row" className="pr-2 text-left text-meta font-medium leading-tight text-stone-600">
                 {format(r)}
               </th>
               {cols.map((c) => {
@@ -154,7 +154,7 @@ export function MatrixHeatmap({
                     key={c}
                     title={v !== undefined ? `${r} → ${c}: ${fmtInt(v)} interactions` : `${r} → ${c}: no recorded interactions`}
                     className={cx(
-                      "num h-10 rounded-md text-[12px] transition-transform duration-150 hover:scale-[1.04]",
+                      "num h-10 rounded-md text-meta transition-transform duration-150 hover:scale-[1.04]",
                       v === undefined ? "bg-sunken/60 text-stone-300" : dark ? "text-white" : "text-stone-700",
                     )}
                     style={v !== undefined ? { backgroundColor: `rgba(24,24,27,${alpha.toFixed(3)})` } : undefined}

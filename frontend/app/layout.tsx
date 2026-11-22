@@ -1,15 +1,15 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, Newsreader } from "next/font/google";
 import "./globals.css";
-import { Header } from "@/components/shell/Header";
-import { MemberProvider } from "@/lib/member-context";
+import { Navbar } from "@/components/Navbar";
+import { AuthProvider } from "@/context/AuthContext";
 import { SavesProvider } from "@/lib/saves-context";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const serif = Newsreader({
   subsets: ["latin"],
   variable: "--font-serif",
   display: "swap",
-  style: ["normal", "italic"],
 });
 
 const sans = Inter({
@@ -33,12 +33,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="en" className={`${serif.variable} ${sans.variable}`}>
       <body>
-        <MemberProvider>
-          <SavesProvider>
-            <Header />
-            <main className="mx-auto max-w-[1280px] px-5 pb-24 pt-10 lg:px-8">{children}</main>
-          </SavesProvider>
-        </MemberProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <SavesProvider>
+              <Navbar />
+              <main className="mx-auto w-full max-w-7xl px-4 pb-24 pt-8 sm:px-6 lg:px-8">{children}</main>
+            </SavesProvider>
+          </AuthProvider>
+        </ToastProvider>
       </body>
     </html>
   );

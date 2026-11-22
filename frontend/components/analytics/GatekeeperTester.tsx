@@ -30,7 +30,7 @@ function Field({ label, children, hint }: { label: string; children: React.React
     <label className="block">
       <span className="eyebrow mb-1 block">{label}</span>
       {children}
-      {hint && <span className="mt-1 block text-[11px] text-stone-400">{hint}</span>}
+      {hint && <span className="mt-1 block text-meta text-stone-400">{hint}</span>}
     </label>
   );
 }
@@ -84,7 +84,7 @@ export function GatekeeperTester() {
           <Gauge className="h-4 w-4 text-stone-400" strokeWidth={1.5} />
           <span>
             <span className="block font-serif text-[16px] leading-tight text-ink">Live submission gatekeeper</span>
-            <span className="block text-[12px] text-stone-500">Score sample metadata against the Isolation Forest — target under 5 ms</span>
+            <span className="block text-meta text-stone-500">Score sample metadata against the Isolation Forest — target under 5 ms</span>
           </span>
         </span>
         <ChevronDown className={cx("h-4 w-4 shrink-0 text-stone-400 transition-transform duration-200", open && "rotate-180")} />
@@ -121,7 +121,7 @@ export function GatekeeperTester() {
 
             <div aria-live="polite" className="min-h-[200px]">
               {error ? (
-                <div role="alert" className="rounded-lg border border-terracotta-200 bg-terracotta-50 px-4 py-3 text-[13px] leading-relaxed text-terracotta-700">
+                <div role="alert" className="rounded-lg border border-terracotta-200 bg-terracotta-50 px-4 py-3 text-meta leading-relaxed text-terracotta-700">
                   {error}
                 </div>
               ) : verdict ? (
@@ -141,7 +141,7 @@ export function GatekeeperTester() {
                       <p className={cx("font-serif text-[20px] leading-tight", verdict.flagged ? "text-terracotta-700" : "text-sage-700")}>
                         {verdict.flagged ? "Held for integrity review" : "Cleared for submission"}
                       </p>
-                      {verdict.score !== null && <p className="num text-[12.5px] text-stone-600">Anomaly score {verdict.score.toFixed(3)}</p>}
+                      {verdict.score !== null && <p className="num text-meta text-stone-600">Anomaly score {verdict.score.toFixed(3)}</p>}
                     </div>
                   </div>
 
@@ -151,7 +151,7 @@ export function GatekeeperTester() {
                       <dd className="num mt-0.5 text-[15px] font-medium text-ink">
                         {serverMs != null ? `${serverMs.toFixed(2)} ms` : "not reported"}
                         {budgetOk !== null && (
-                          <span className={cx("ml-1.5 text-[11px] font-medium", budgetOk ? "text-sage-600" : "text-terracotta-600")}>
+                          <span className={cx("ml-1.5 text-meta font-medium", budgetOk ? "text-sage-600" : "text-terracotta-600")}>
                             {budgetOk ? "within 5 ms" : "over 5 ms"}
                           </span>
                         )}
@@ -164,7 +164,7 @@ export function GatekeeperTester() {
                   </dl>
 
                   {verdict.reasons.length > 0 && (
-                    <ul className="list-disc space-y-1 pl-5 text-[13px] leading-relaxed text-stone-700 marker:text-stone-300">
+                    <ul className="list-disc space-y-1 pl-5 text-meta leading-relaxed text-stone-700 marker:text-stone-300">
                       {verdict.reasons.map((r) => (
                         <li key={r}>{r}</li>
                       ))}
@@ -172,18 +172,18 @@ export function GatekeeperTester() {
                   )}
 
                   <div>
-                    <button type="button" onClick={() => setShowRaw((s) => !s)} className="text-[12px] font-medium text-stone-500 underline decoration-stone-300 underline-offset-2 hover:text-ink">
+                    <button type="button" onClick={() => setShowRaw((s) => !s)} className="text-meta font-medium text-stone-500 underline decoration-stone-300 underline-offset-2 hover:text-ink">
                       {showRaw ? "Hide" : "Show"} raw response
                     </button>
                     {showRaw && (
-                      <pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-sunken p-3 font-mono text-[11.5px] leading-relaxed text-stone-700">
+                      <pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-sunken p-3 font-mono text-meta leading-relaxed text-stone-700">
                         {JSON.stringify(verdict.raw, null, 2)}
                       </pre>
                     )}
                   </div>
                 </div>
               ) : (
-                <div className="flex h-full min-h-[200px] items-center justify-center rounded-lg border border-dashed border-stone-200 px-6 text-center text-[13px] leading-relaxed text-stone-500">
+                <div className="flex h-full min-h-[200px] items-center justify-center rounded-lg border border-dashed border-stone-200 px-6 text-center text-meta leading-relaxed text-stone-500">
                   Choose a preset or edit the fields, then score the submission to see the gatekeeper&apos;s decision.
                 </div>
               )}
