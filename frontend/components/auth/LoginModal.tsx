@@ -64,7 +64,7 @@ export function LoginModal() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="eyebrow">Chanakya University</p>
-            <h2 id="login-title" className="mt-1 font-serif text-h2 text-ink">Sign in to CRC</h2>
+            <h2 id="login-title" className="mt-1 font-sans text-h2 font-semibold text-ink">Sign in to CRC</h2>
           </div>
           <button type="button" className="rounded-full p-2 text-stone-500 hover:bg-sunken" onClick={closeLogin} aria-label="Close sign in">
             <X className="h-5 w-5" />

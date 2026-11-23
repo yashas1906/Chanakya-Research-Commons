@@ -62,8 +62,7 @@ const config: Config = {
         },
       },
       fontFamily: {
-        // Newsreader is kept for long-form reading only (abstracts, post bodies in the thread view).
-        serif: ["var(--font-serif)", "Georgia", "Cambria", "serif"],
+        // Inter is the sole typeface. All text uses font-sans.
         sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
       fontSize: {
