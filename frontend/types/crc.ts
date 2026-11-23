@@ -431,3 +431,61 @@ export interface GatekeeperVerdict {
   reasons: string[];
   raw: unknown;
 }
+
+export interface AdminTotals {
+  members: number;
+  flagged_members: number;
+  papers: number;
+  library_papers: number;
+  posts: number;
+  comments: number;
+  votes: number;
+  saves: number;
+  open_alerts: number;
+}
+
+export interface AdminActivityDay {
+  day: string;
+  posts: number;
+  comments: number;
+  votes: number;
+  saves: number;
+}
+
+export interface AdminOverview {
+  totals: AdminTotals;
+  members_by_role: Array<{ role: Role; count: number }>;
+  members_by_department: Array<{ department: string; count: number }>;
+  activity: AdminActivityDay[];
+  open_alerts: Array<{ alert_id: string; alert_type: string; entity_ref: string; entity_name: string | null; severity_score: number; detected_at: string | null }>;
+  top_contributors: Array<{ user_id: string; full_name: string; role: Role; department: string; posts: number; karma: number }>;
+}
+
+export interface AdminMember {
+  user_id: string;
+  university_id: string;
+  full_name: string;
+  email: string;
+  role: Role;
+  department: string;
+  interest_tags: string[];
+  created_at: string | null;
+  last_active: string | null;
+  is_synthetic: boolean;
+  is_flagged_spam: boolean;
+  spam_score: number;
+  posts: number;
+  comments: number;
+  saves: number;
+  votes_cast: number;
+  karma: number;
+}
+
+export interface AdminMembersPage {
+  total: number;
+  limit: number;
+  offset: number;
+  items: AdminMember[];
+}
+
+export type AdminMemberSort = "name" | "role" | "department" | "joined" | "posts" | "comments" | "saves" | "votes" | "karma" | "last_active";

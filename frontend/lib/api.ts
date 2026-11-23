@@ -51,6 +51,10 @@ import type {
   SearchResponse,
   TopicAssociations,
   TrendsAndAnomalies,
+  AdminOverview,
+  AdminMembersPage,
+  AdminMember,
+  AdminMemberSort,
 } from "@/types/crc";
 
 export const API_ORIGIN = (process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:8000").replace(/\/$/, "");
@@ -737,4 +741,117 @@ export async function scoreSubmission(input: GatekeeperInput, signal?: AbortSign
     signal,
   });
   return normalizeGatekeeper(raw, Math.round((performance.now() - t0) * 10) / 10);
+}
+
+const adminRoles = ["student", "faculty", "researcher", "admin"] as const;
+const asAdminRole = (value: unknown): AdminMember["role"] =>
+  adminRoles.includes(value as AdminMember["role"]) ? (value as AdminMember["role"]) : "student";
+const adminRows = (value: unknown): Record<string, unknown>[] =>
+  Array.isArray(value) ? value.filter(isRecord) : [];
+
+export async function getAdminOverview(signal?: AbortSignal): Promise<AdminOverview> {
+  const raw = await request("/admin/overview", { signal });
+  const o = isRecord(raw) ? raw : {};
+  const totals = isRecord(o.totals) ? o.totals : {};
+  return {
+    totals: {
+      members: num(totals.members),
+      flagged_members: num(totals.flagged_members),
+      papers: num(totals.papers),
+      library_papers: num(totals.library_papers),
+      posts: num(totals.posts),
+      comments: num(totals.comments),
+      votes: num(totals.votes),
+      saves: num(totals.saves),
+      open_alerts: num(totals.open_alerts),
+    },
+    members_by_role: adminRows(o.members_by_role).map((r) => ({ role: asAdminRole(r.role), count: num(r.count) })),
+    members_by_department: adminRows(o.members_by_department).map((r) => ({ department: str(r.department), count: num(r.count) })),
+    activity: adminRows(o.activity).map((r) => ({
+      day: str(r.day),
+      posts: num(r.posts),
+      comments: num(r.comments),
+      votes: num(r.votes),
+      saves: num(r.saves),
+    })),
+    open_alerts: adminRows(o.open_alerts).map((r) => ({
+      alert_id: str(r.alert_id),
+      alert_type: str(r.alert_type),
+      entity_ref: str(r.entity_ref),
+      entity_name: strOrNull(r.entity_name),
+      severity_score: num(r.severity_score),
+      detected_at: strOrNull(r.detected_at),
+    })),
+    top_contributors: adminRows(o.top_contributors).map((r) => ({
+      user_id: str(r.user_id),
+      full_name: str(r.full_name),
+      role: asAdminRole(r.role),
+      department: str(r.department),
+      posts: num(r.posts),
+      karma: num(r.karma),
+    })),
+  };
+}
+
+export interface AdminMemberQuery {
+  q?: string;
+  role?: string;
+  department?: string;
+  flagged?: boolean;
+  sort: AdminMemberSort;
+  order: "asc" | "desc";
+  limit: number;
+  offset: number;
+}
+
+export async function getAdminMembers(query: AdminMemberQuery, signal?: AbortSignal): Promise<AdminMembersPage> {
+  const raw = await request("/admin/members", {
+    query: {
+      q: query.q,
+      role: query.role,
+      department: query.department,
+      flagged: query.flagged ? true : undefined,
+      sort: query.sort,
+      order: query.order,
+      limit: query.limit,
+      offset: query.offset,
+    },
+    signal,
+  });
+  const o = isRecord(raw) ? raw : {};
+  return {
+    total: num(o.total),
+    limit: num(o.limit, query.limit),
+    offset: num(o.offset),
+    items: adminRows(o.items).map((r) => ({
+      user_id: str(r.user_id),
+      university_id: str(r.university_id),
+      full_name: str(r.full_name),
+      email: str(r.email),
+      role: asAdminRole(r.role),
+      department: str(r.department),
+      interest_tags: Array.isArray(r.interest_tags) ? r.interest_tags.filter((v): v is string => typeof v === "string") : [],
+      created_at: strOrNull(r.created_at),
+      last_active: strOrNull(r.last_active),
+      is_synthetic: r.is_synthetic === true,
+      is_flagged_spam: r.is_flagged_spam === true,
+      spam_score: num(r.spam_score),
+      posts: num(r.posts),
+      comments: num(r.comments),
+      saves: num(r.saves),
+      votes_cast: num(r.votes_cast),
+      karma: num(r.karma),
+    })),
+  };
+}
+
+export async function getAnalyticsDrilldown(school?: string, department?: string, signal?: AbortSignal): Promise<{
+  level: "school" | "department" | "member";
+  count: number;
+  data: Record<string, unknown>[];
+}> {
+  const raw = await request("/analytics/drilldown", { query: { school, department }, signal });
+  const o = isRecord(raw) ? raw : {};
+  const level = o.level === "department" || o.level === "member" ? o.level : "school";
+  return { level, count: num(o.count), data: adminRows(o.data) };
 }

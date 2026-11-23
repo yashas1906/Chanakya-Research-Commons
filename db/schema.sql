@@ -61,6 +61,7 @@ CREATE TABLE papers (
     pagerank_score FLOAT DEFAULT 0.0,
     save_count INT DEFAULT 0,
     sources JSONB DEFAULT '["openalex"]'::jsonb,
+    cited_by_count INT DEFAULT 0,
     in_chanakya_library BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );

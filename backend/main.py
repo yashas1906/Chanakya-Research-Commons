@@ -228,6 +228,18 @@ class AddPaperToCollectionRequest(BaseModel):
 ROLE_RANK = {"student": 1, "faculty": 2, "researcher": 2, "admin": 3}
 _login_attempts: dict[str, list[float]] = {}
 _login_attempts_lock = threading.Lock()
+_ADMIN_MEMBER_SORTS = {
+    "name": "u.full_name",
+    "role": "u.role",
+    "department": "u.department",
+    "joined": "u.created_at",
+    "posts": "(SELECT COUNT(*) FROM posts p WHERE p.author_id = u.user_id)",
+    "comments": "(SELECT COUNT(*) FROM comments c WHERE c.author_id = u.user_id)",
+    "saves": "(SELECT COUNT(*) FROM library_saves ls WHERE ls.user_id = u.user_id)",
+    "votes": "(SELECT COUNT(*) FROM post_upvotes vu WHERE vu.user_id = u.user_id)",
+    "karma": "(SELECT COALESCE(SUM(p.upvote_count), 0) FROM posts p WHERE p.author_id = u.user_id)",
+    "last_active": "GREATEST(u.created_at, COALESCE((SELECT MAX(p.created_at) FROM posts p WHERE p.author_id = u.user_id), u.created_at))",
+}
 
 
 def _b64url(data: bytes) -> str:
@@ -2146,6 +2158,135 @@ def ask_research_assistant_stream(req: AskAssistantRequest):
 # ==========================================
 # F9: Institutional Analytics Dashboard (Star Schema)
 # ==========================================
+@app.get("/api/admin/overview")
+def admin_overview(days: int = Query(30, ge=7, le=90), user=Depends(require_role("admin"))):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM users) AS members,
+              (SELECT COUNT(*) FROM users WHERE is_flagged_spam) AS flagged_members,
+              (SELECT COUNT(*) FROM papers) AS papers,
+              (SELECT COUNT(*) FROM papers WHERE in_chanakya_library) AS library_papers,
+              (SELECT COUNT(*) FROM posts) AS posts,
+              (SELECT COUNT(*) FROM comments) AS comments,
+              (SELECT COUNT(*) FROM post_upvotes) AS votes,
+              (SELECT COUNT(*) FROM library_saves) AS saves,
+              (SELECT COUNT(*) FROM system_alerts WHERE NOT is_resolved) AS open_alerts
+            """
+        )
+        totals = cur.fetchone()
+        cur.execute("SELECT role, COUNT(*)::int AS count FROM users GROUP BY role ORDER BY count DESC")
+        members_by_role = cur.fetchall()
+        cur.execute("SELECT department, COUNT(*)::int AS count FROM users GROUP BY department ORDER BY count DESC")
+        members_by_department = cur.fetchall()
+        cur.execute(
+            """
+            WITH d AS (
+              SELECT generate_series((CURRENT_DATE - (%(n)s - 1) * INTERVAL '1 day')::date,
+                                     CURRENT_DATE, INTERVAL '1 day')::date AS day
+            )
+            SELECT d.day::text AS day,
+              (SELECT COUNT(*) FROM posts p WHERE p.created_at::date = d.day)::int AS posts,
+              (SELECT COUNT(*) FROM comments c WHERE c.created_at::date = d.day)::int AS comments,
+              (SELECT COUNT(*) FROM post_upvotes v WHERE v.created_at::date = d.day)::int AS votes,
+              (SELECT COUNT(*) FROM library_saves s WHERE s.saved_at::date = d.day)::int AS saves
+            FROM d ORDER BY d.day
+            """,
+            {"n": days},
+        )
+        activity = cur.fetchall()
+        cur.execute(
+            """
+            SELECT a.alert_id::text, a.alert_type, a.entity_ref, u.full_name AS entity_name,
+                   a.severity_score, a.details, a.detected_at
+            FROM system_alerts a
+            LEFT JOIN users u ON a.alert_type = 'USER_SPAM' AND u.user_id::text = a.entity_ref
+            WHERE NOT a.is_resolved
+            ORDER BY a.severity_score DESC, a.detected_at DESC LIMIT 8
+            """
+        )
+        open_alerts = cur.fetchall()
+        cur.execute(
+            """
+            SELECT u.user_id::text, u.full_name, u.role, u.department,
+                   COUNT(DISTINCT p.post_id)::int AS posts,
+                   COALESCE(SUM(p.upvote_count), 0)::int AS karma
+            FROM users u JOIN posts p ON p.author_id = u.user_id AND NOT p.is_flagged_spam
+            WHERE NOT u.is_flagged_spam
+            GROUP BY u.user_id, u.full_name, u.role, u.department
+            ORDER BY karma DESC, posts DESC LIMIT 5
+            """
+        )
+        top_contributors = cur.fetchall()
+        cur.close()
+        return {
+            "totals": totals,
+            "members_by_role": members_by_role,
+            "members_by_department": members_by_department,
+            "activity": activity,
+            "open_alerts": open_alerts,
+            "top_contributors": top_contributors,
+        }
+
+
+@app.get("/api/admin/members")
+def admin_members(
+    q: Optional[str] = Query(None, max_length=80),
+    role: Optional[str] = Query(None, pattern="^(student|faculty|researcher|admin)$"),
+    department: Optional[str] = Query(None, max_length=100),
+    flagged: Optional[bool] = None,
+    sort: str = Query("joined"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    user=Depends(require_role("admin")),
+):
+    sort_col = _ADMIN_MEMBER_SORTS.get(sort)
+    if not sort_col:
+        raise HTTPException(status_code=422, detail=f"sort must be one of {sorted(_ADMIN_MEMBER_SORTS)}")
+    where, params = ["TRUE"], {"limit": limit, "offset": offset}
+    if q:
+        where.append("(u.full_name ILIKE %(q)s OR u.email ILIKE %(q)s OR u.university_id ILIKE %(q)s)")
+        params["q"] = f"%{q.strip()}%"
+    if role:
+        where.append("u.role = %(role)s")
+        params["role"] = role
+    if department:
+        where.append("u.department = %(department)s")
+        params["department"] = department
+    if flagged is not None:
+        where.append("u.is_flagged_spam = %(flagged)s")
+        params["flagged"] = flagged
+    clause = " AND ".join(where)
+    direction = "ASC" if order == "asc" else "DESC"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) AS n FROM users u WHERE {clause}", params)
+        total = cur.fetchone()["n"]
+        cur.execute(
+            f"""
+            SELECT u.user_id::text, u.university_id, u.full_name, u.email, u.role, u.department,
+                   u.interest_tags, u.created_at, u.is_synthetic, u.is_flagged_spam, u.spam_score,
+                   (SELECT COUNT(*) FROM posts p WHERE p.author_id = u.user_id AND NOT p.is_flagged_spam)::int AS posts,
+                   (SELECT COUNT(*) FROM comments c WHERE c.author_id = u.user_id)::int AS comments,
+                   (SELECT COUNT(*) FROM library_saves ls WHERE ls.user_id = u.user_id)::int AS saves,
+                   (SELECT COUNT(*) FROM post_upvotes vu WHERE vu.user_id = u.user_id)::int AS votes_cast,
+                   (SELECT COALESCE(SUM(p.upvote_count), 0) FROM posts p WHERE p.author_id = u.user_id)::int AS karma,
+                   GREATEST(u.created_at, COALESCE((SELECT MAX(p.created_at) FROM posts p WHERE p.author_id = u.user_id), u.created_at)) AS last_active
+            FROM users u
+            WHERE {clause}
+            ORDER BY {sort_col} {direction}
+            LIMIT %(limit)s OFFSET %(offset)s
+            """,
+            params,
+        )
+        items = cur.fetchall()
+        cur.close()
+        return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
 @app.get("/api/analytics/overview")
 def analytics_overview(department: Optional[str] = None, user=Depends(current_user_optional)):
     """

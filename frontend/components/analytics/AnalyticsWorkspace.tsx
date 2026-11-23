@@ -13,7 +13,7 @@ type AnalyticsTab = "activity" | "associations" | "archetypes" | "anomalies";
 const isTab = (value: string | null): value is AnalyticsTab => value === "activity" || value === "associations" || value === "archetypes" || value === "anomalies";
 
 /** Executive view over the star-schema warehouse and the data-mining services. */
-export function AnalyticsWorkspace() {
+export function AnalyticsWorkspace({ embedded = false, basePath = "/analytics" }: { embedded?: boolean; basePath?: string }) {
   const params = useSearchParams();
   const router = useRouter();
   const [tab, setTab] = useState<AnalyticsTab>(() => isTab(params.get("tab")) ? params.get("tab") as AnalyticsTab : "activity");
@@ -21,8 +21,8 @@ export function AnalyticsWorkspace() {
     const query = new URLSearchParams(window.location.search);
     query.set("tab", tab);
     const next = `?${query.toString()}`;
-    if (window.location.search !== next) router.replace(`/analytics${next}`, { scroll: false });
-  }, [tab, router]);
+    if (window.location.search !== next) router.replace(`${basePath}${next}`, { scroll: false });
+  }, [tab, router, basePath]);
   const tabs = [
     { id: "activity" as const, label: "Activity" },
     { id: "associations" as const, label: "Topic associations" },
@@ -31,11 +31,13 @@ export function AnalyticsWorkspace() {
   ];
   return (
     <div className="space-y-8">
-      <PageHeader
-        eyebrow="Institutional analytics"
-        title="Research intelligence"
-        description="How Chanakya researches: what the warehouse records, which topics travel together, who the archetypal researchers are, and which works or submissions deserve attention."
-      />
+      {!embedded && (
+        <PageHeader
+          eyebrow="Institutional analytics"
+          title="Research intelligence"
+          description="How Chanakya researches: what the warehouse records, which topics travel together, who the archetypal researchers are, and which works or submissions deserve attention."
+        />
+      )}
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
       {tab === "activity" && <WarehouseActivityCard />}
       {tab === "associations" && <TopicAssociationsCard />}

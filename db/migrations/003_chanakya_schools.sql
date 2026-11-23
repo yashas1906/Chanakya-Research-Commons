@@ -1,5 +1,7 @@
 BEGIN;
 
+ALTER TABLE papers ADD COLUMN IF NOT EXISTS cited_by_count INTEGER DEFAULT 0;
+
 CREATE TEMP TABLE school_map (old_name TEXT PRIMARY KEY, new_name TEXT NOT NULL) ON COMMIT DROP;
 INSERT INTO school_map (old_name, new_name) VALUES
   ('Computer Science & AI', 'School of Engineering'),

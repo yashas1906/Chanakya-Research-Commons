@@ -6,7 +6,7 @@ import { Meter } from "@/components/ui/Meter";
 import { Panel } from "@/components/ui/Section";
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { getOverview } from "@/lib/api";
+import { getAnalyticsDrilldown, getOverview } from "@/lib/api";
 import { cx, fmtInt, shortSchool } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { SCHOOLS } from "@/types/crc";
@@ -44,6 +44,12 @@ export function WarehouseActivityCard() {
   const canFilterDepartment = can("faculty");
   const [school, setSchool] = useState<string>("ALL");
   const [mode, setMode] = useState<"bars" | "table">("bars");
+  const [drillSchool, setDrillSchool] = useState<string>("ALL");
+  const [drillDepartment, setDrillDepartment] = useState<string>("");
+  const drilldown = useAsync(
+    (s) => getAnalyticsDrilldown(drillSchool === "ALL" ? undefined : drillSchool, drillDepartment || undefined, s),
+    [drillSchool, drillDepartment],
+  );
   const { data, error, loading, reload } = useAsync((s) => getOverview(school === "ALL" ? null : school, s), [school]);
 
   const months = useMemo(
@@ -131,6 +137,70 @@ export function WarehouseActivityCard() {
             )}
           </section>
 
+          <section>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <h3 className="eyebrow">University drill-down</h3>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={drillSchool}
+                  onChange={(e) => { setDrillSchool(e.target.value); setDrillDepartment(""); }}
+                  className="input w-auto py-1.5 pr-8 text-meta"
+                  aria-label="Drill down to school"
+                >
+                  <option value="ALL">All schools</option>
+                  {SCHOOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                {drilldown.data?.level === "department" && (
+                  <select
+                    value={drillDepartment}
+                    onChange={(e) => setDrillDepartment(e.target.value)}
+                    className="input w-auto py-1.5 pr-8 text-meta"
+                    aria-label="Drill down to department member"
+                  >
+                    <option value="">Select department</option>
+                    {drilldown.data.data.map((row) => {
+                      const department = String(row.department ?? "");
+                      return department ? <option key={department} value={department}>{department}</option> : null;
+                    })}
+                  </select>
+                )}
+              </div>
+            </div>
+            {drilldown.loading ? (
+              <Skeleton className="h-32" />
+            ) : drilldown.error ? (
+              <ErrorState error={drilldown.error} onRetry={drilldown.reload} />
+            ) : drilldown.data ? (
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {drilldown.data.data.slice(0, 12).map((row, index) => {
+                  const level = drilldown.data?.level ?? "school";
+                  return (
+                    <button
+                      key={String(row.researcher_id ?? row.department ?? row.school_name ?? index)}
+                      type="button"
+                      className="card px-3 py-2 text-left"
+                      onClick={() => {
+                        if (level === "school") setDrillSchool(String(row.school_name ?? ""));
+                        else if (level === "department") setDrillDepartment(String(row.department ?? ""));
+                      }}
+                    >
+                      <p className="truncate text-meta font-semibold text-ink">
+                        {String(row.researcher_name ?? row.department ?? row.school_name ?? "Unknown")}
+                      </p>
+                      <p className="text-label text-stone-500">
+                        {level === "member"
+                          ? `${fmtInt(Number(row.total_publications ?? 0))} publications · ${fmtInt(Number(row.total_citations ?? 0))} citations`
+                          : level === "department"
+                            ? `${fmtInt(Number(row.researcher_count ?? 0))} members`
+                            : `${fmtInt(Number(row.researcher_count ?? 0))} members · ${fmtInt(Number(row.department_count ?? 0))} departments`}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+          </section>
+
           <div className="grid gap-8 xl:grid-cols-2">
             {/* Topic activity */}
             <section className="min-w-0">
@@ -149,6 +219,7 @@ export function WarehouseActivityCard() {
                     </button>
                   ))}
                 </div>
+
               </div>
               {topics.length === 0 ? (
                 <EmptyState className="py-8" title="No topic activity" hint="Nothing recorded for this school yet." />

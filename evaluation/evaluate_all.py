@@ -29,6 +29,27 @@ def get_conn():
     return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 
 
+def eval_pagerank_validation(cur) -> dict:
+    cur.execute(
+        """
+        SELECT pagerank_score, COALESCE(cited_by_count, 0) AS cited_by_count
+        FROM papers
+        WHERE pagerank_score IS NOT NULL
+        """
+    )
+    rows = cur.fetchall()
+    if len(rows) < 3:
+        return {"samples": len(rows), "spearman_rho": None, "p_value": None}
+    pagerank = np.array([float(r["pagerank_score"]) for r in rows])
+    cited = np.array([int(r["cited_by_count"]) for r in rows])
+    rho, p_value = stats.spearmanr(pagerank, cited)
+    return {
+        "samples": len(rows),
+        "spearman_rho": None if not np.isfinite(rho) else round(float(rho), 4),
+        "p_value": None if not np.isfinite(p_value) else round(float(p_value), 6),
+    }
+
+
 def vec_literal(text: str) -> str:
     emb = model.encode(text).tolist()
     return "[" + ",".join(f"{x:.6f}" for x in emb) + "]"
@@ -635,6 +656,7 @@ def main():
     results = {
         "F4_F5_deduplication_and_author_matching": eval_deduplication(gt),
         "F5_unified_search_benchmark": eval_unified_search(cur, gt),
+        "F5_pagerank_external_citation_validation": eval_pagerank_validation(cur),
         "F6_recommendations_temporal_holdout": eval_recommendations(cur),
         "F7_trends_and_spam_detection": eval_trends_and_spam(cur, gt, anchor_dt),
         "F8_rag_retrieval_and_refusal_gate": eval_rag_retrieval(cur, gt),
