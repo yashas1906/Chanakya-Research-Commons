@@ -32,8 +32,8 @@ export function AccountMenu() {
   if (!user) {
     return (
       <div className={cx("flex shrink-0 items-center gap-2", status === "loading" && "opacity-0")}>
-        <button type="button" onClick={() => promptLogin("login")} className="btn h-9">Log in</button>
-        <button type="button" onClick={() => promptLogin("register")} className="btn-primary hidden h-9 sm:inline-flex">Sign up</button>
+        <button type="button" onClick={() => promptLogin("login")} className="inline-flex h-9 items-center justify-center rounded-full border border-white/30 px-4 text-ui font-semibold text-white transition hover:bg-white/10">Log in</button>
+        <button type="button" onClick={() => promptLogin("register")} className="hidden h-9 items-center justify-center rounded-full bg-saffron-400 px-4 text-ui font-semibold text-ink shadow-sm transition hover:bg-saffron-300 active:scale-[0.98] sm:inline-flex">Sign up</button>
       </div>
     );
   }
@@ -45,17 +45,17 @@ export function AccountMenu() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={cx("flex items-center gap-2 rounded-full border border-transparent p-1 pr-2 transition hover:bg-stone-100", open && "border-stone-200 bg-stone-100")}
+        className={cx("flex items-center gap-2 rounded-full border border-transparent p-1 pr-1 transition hover:bg-white/10 xl:pr-2.5", open && "border-white/20 bg-white/10")}
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label="Account menu"
       >
         <Avatar name={user.full_name} size={32} />
-        <span className="hidden max-w-36 text-left lg:block">
-          <span className="block truncate text-meta font-semibold leading-4 text-ink">{user.full_name}</span>
-          <span className="block text-label capitalize leading-4 text-stone-500">{user.role}</span>
+        <span className="hidden max-w-36 text-left xl:block">
+          <span className="block truncate text-meta font-semibold leading-4 text-white">{user.full_name}</span>
+          <span className="block text-label capitalize leading-4 text-white/60">{user.role}</span>
         </span>
-        <ChevronDown className={cx("hidden h-4 w-4 text-stone-500 transition-transform lg:block", open && "rotate-180")} />
+        <ChevronDown className={cx("hidden h-4 w-4 text-white/60 transition-transform xl:block", open && "rotate-180")} />
       </button>
       {open && (
         <div role="menu" className="absolute right-0 top-full z-50 mt-2 w-72 animate-pop rounded-2xl border border-stone-200 bg-paper p-2 shadow-pop">

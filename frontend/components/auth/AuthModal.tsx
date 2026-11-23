@@ -144,7 +144,7 @@ export function AuthModal() {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-slate-900/55 p-4 backdrop-blur-[3px] animate-fade"
+      className="fixed inset-0 z-[100] flex items-center justify-center overflow-y-auto bg-ink/60 p-4 backdrop-blur-[3px] animate-fade"
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) closeLogin();
       }}
@@ -158,12 +158,12 @@ export function AuthModal() {
         className="relative my-auto grid w-full max-w-[860px] overflow-hidden rounded-2xl bg-paper shadow-pop animate-pop md:grid-cols-[320px_minmax(0,1fr)]"
       >
         {/* Brand panel */}
-        <aside className="relative hidden flex-col justify-between overflow-hidden bg-brand-700 p-8 text-white md:flex">
-          <svg aria-hidden className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 text-white/10" viewBox="0 0 200 200" fill="none" stroke="currentColor" strokeWidth="1">
+        <aside className="hero hidden flex-col justify-between p-8 md:flex">
+          <svg aria-hidden className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 text-saffron-300/20" viewBox="0 0 200 200" fill="none" stroke="currentColor" strokeWidth="1">
             {[30, 50, 70, 90].map((r) => <circle key={r} cx="100" cy="100" r={r} />)}
           </svg>
           <div className="relative">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-white font-display text-lg text-brand-700">C</span>
+            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-saffron-400 font-display text-lg text-brand-900">C</span>
             <h2 className="mt-6 font-display text-[26px] leading-tight">Where Chanakya’s research comes together.</h2>
           </div>
           <ul className="relative mt-7 space-y-5">

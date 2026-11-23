@@ -19,13 +19,13 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#3449CC",
+  themeColor: "#0C3124",
   colorScheme: "light",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={sans.variable}>
+    <html lang="en" className={`${sans.variable}`}>
       <body>
         <ToastProvider>
           <AuthProvider>

@@ -57,7 +57,7 @@ export function Panel({
 }
 
 /** Deterministic, friendly avatar colour per person so lists are easy to scan. */
-const AVATAR_HUES = ["#4A63E3", "#0E8F7E", "#D9730D", "#B4408F", "#2F855A", "#C2410C", "#7C5CE6", "#0B7285", "#A16207", "#BE185D"];
+const AVATAR_HUES = ["#175240", "#7A1F33", "#946C1F", "#2B4C7E", "#5F4590", "#A0522D", "#1F6F78", "#6B5A2A", "#8C2F4B", "#3F5D2A"];
 function hueFor(name: string): string {
   let hash = 0;
   for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;

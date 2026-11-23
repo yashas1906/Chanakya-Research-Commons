@@ -1,5 +1,4 @@
 import type { Config } from "tailwindcss";
-import colors from "tailwindcss/colors";
 
 const config: Config = {
   content: [
@@ -11,36 +10,49 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // Surfaces: a cool, slightly blue-grey page with crisp white cards.
-        canvas: "#EFF1F5",
-        paper: "#FFFFFF",
-        sunken: "#F4F6F9",
+        // Surfaces: warm ivory paper under cream cards, like good stationery.
+        canvas: "#F4EEE2",
+        paper: "#FFFCF6",
+        sunken: "#F0E9DA",
         ink: {
-          DEFAULT: "#0F172A",
-          soft: "#1E293B",
+          DEFAULT: "#1D1915",
+          soft: "#2C2620",
         },
-        // Every neutral in the app (text-stone-*, border-stone-*, bg-stone-*) is a cool slate.
-        stone: colors.slate,
-        // Brand: Chanakya blue. Used for primary actions, active states and links.
+        // Every neutral in the app (text-stone-*, border-stone-*, bg-stone-*) is a warm stone.
+        stone: {
+          50: "#FAF6EE",
+          100: "#F2ECDF",
+          200: "#E6DECC",
+          300: "#D3C9B2",
+          400: "#A89D86",
+          500: "#7E745F",
+          600: "#5E5645",
+          700: "#463F32",
+          800: "#2E2922",
+          900: "#1D1915",
+        },
+        // Brand: deep Chanakya green. Primary actions, active states, the masthead.
         brand: {
-          50: "#EEF2FF",
-          100: "#DFE6FE",
-          200: "#C2CFFC",
-          300: "#9BB0F8",
-          400: "#6F88F0",
-          500: "#4A63E3",
-          600: "#3449CC",
-          700: "#2A3BA6",
-          800: "#233084",
-          900: "#1C2663",
+          50: "#EEF5F1",
+          100: "#D8E8DF",
+          200: "#B1D0BF",
+          300: "#80B09A",
+          400: "#4C8A71",
+          500: "#2A6B54",
+          600: "#175240",
+          700: "#11412F",
+          800: "#0C3124",
+          900: "#07231A",
         },
-        // Accent: saffron. Small highlights only (logo mark, notices).
+        // Accent: antique gold. Highlights, active nav underline, small emblems.
         saffron: {
-          50: "#FFF8E8",
-          100: "#FEEFC8",
-          400: "#F7B02F",
-          500: "#EC9A0C",
-          600: "#C97A06",
+          50: "#FBF5E6",
+          100: "#F5E8C3",
+          200: "#EBD498",
+          300: "#E0BE6B",
+          400: "#D2A649",
+          500: "#B88A2E",
+          600: "#946C1F",
         },
         // Integrity watchlist: muted terracotta
         terracotta: {
@@ -62,7 +74,8 @@ const config: Config = {
         },
       },
       fontFamily: {
-        // Inter is the sole typeface. All text uses font-sans.
+        // Newsreader: headings and long-form reading.
+        serif: ["var(--font-serif)", "Georgia", "Cambria", "serif"],
         sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
       fontSize: {
@@ -78,9 +91,9 @@ const config: Config = {
         eyebrow: "0.01em",
       },
       boxShadow: {
-        card: "0 1px 2px rgba(15, 23, 42, 0.05)",
-        lift: "0 6px 20px -8px rgba(15, 23, 42, 0.18), 0 2px 6px -2px rgba(15, 23, 42, 0.06)",
-        pop: "0 16px 40px -12px rgba(15, 23, 42, 0.28), 0 4px 12px -4px rgba(15, 23, 42, 0.08)",
+        card: "0 1px 2px rgba(60, 40, 10, 0.05), 0 0 0 1px rgba(60, 40, 10, 0.01)",
+        lift: "0 10px 26px -10px rgba(60, 40, 10, 0.28), 0 2px 6px -2px rgba(60, 40, 10, 0.08)",
+        pop: "0 18px 44px -14px rgba(40, 25, 5, 0.38), 0 4px 12px -4px rgba(40, 25, 5, 0.10)",
       },
       keyframes: {
         shimmer: {

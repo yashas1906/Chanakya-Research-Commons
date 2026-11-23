@@ -3,10 +3,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowUp, Square, TriangleAlert } from "lucide-react";
+import { ArrowUp, Library, Plus, Sparkles, Square, TriangleAlert, X } from "lucide-react";
 import { AnswerText } from "@/components/assistant/AnswerText";
-import { EvidenceInspector } from "@/components/assistant/EvidenceInspector";
-import { PageHeader } from "@/components/ui/Section";
+import { SourcesPanel } from "@/components/assistant/EvidenceInspector";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/States";
 import { askAssistant, getPaper, isAbort } from "@/lib/api";
@@ -31,6 +30,14 @@ const SUGGESTIONS = [
   "What methods exist for detecting anomalies in citation data?",
 ];
 
+function AssistantMark({ className }: { className?: string }) {
+  return (
+    <span aria-hidden className={cx("flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-900 font-display text-[16px] leading-none text-saffron-300 shadow-card", className)}>
+      C
+    </span>
+  );
+}
+
 export function AssistantWorkspace() {
   const searchParams = useSearchParams();
   const { user, promptLogin } = useAuth();
@@ -39,12 +46,13 @@ export function AssistantWorkspace() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [question, setQuestion] = useState(searchParams.get("q") ?? "");
   const [libraryOnly, setLibraryOnly] = useState(false);
-  const [activeTurn, setActiveTurn] = useState<number | null>(null);
-  const [activeRef, setActiveRef] = useState<number | null>(null);
+  const [focus, setFocus] = useState<{ turn: number; ref: number } | null>(null);
+  const [openSources, setOpenSources] = useState<Set<number>>(() => new Set());
   const [elapsed, setElapsed] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
   const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const pendingTurn = turns.find((t) => t.status === "pending");
 
@@ -66,24 +74,33 @@ export function AssistantWorkspace() {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // Grow the textarea with its content, like a chat box.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+  }, [question]);
+
   const ask = useCallback(
     async (q: string) => {
       const text = q.trim();
       if (!text || abortRef.current) return;
       if (!user) {
-        promptLogin();
+        promptLogin("login");
         return;
       }
       const id = ++idRef.current;
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       setTurns((prev) => [...prev, { id, question: text, libraryOnly, paperId: paperScope, status: "pending" }]);
-      setActiveTurn(id);
-      setActiveRef(null);
+      setFocus(null);
       setQuestion("");
       try {
         const result = await askAssistant(text, libraryOnly, ctrl.signal, paperScope);
         setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, status: "done", result } : t)));
+        // When the model is down the passages are all we have, so show them straight away.
+        if (result.degraded && result.citations.length > 0) setOpenSources((prev) => new Set(prev).add(id));
       } catch (e) {
         if (isAbort(e)) {
           setTurns((prev) => prev.filter((t) => t.id !== id));
@@ -101,172 +118,196 @@ export function AssistantWorkspace() {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns.length, pendingTurn?.status]);
 
-  const active = turns.find((t) => t.id === activeTurn) ?? null;
+  const toggleSources = (id: number) =>
+    setOpenSources((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(id)) next.add(id);
+      return next;
+    });
+  const selectRef = (turn: number, ref: number) => {
+    setFocus((cur) => (cur?.turn === turn && cur.ref === ref ? null : { turn, ref }));
+    setOpenSources((prev) => new Set(prev).add(turn));
+  };
+  const newChat = () => {
+    abortRef.current?.abort();
+    setTurns([]);
+    setFocus(null);
+    setOpenSources(new Set());
+    setQuestion("");
+    inputRef.current?.focus();
+  };
 
-  return (
-    <div className="space-y-8">
-      <PageHeader
-        eyebrow="Grounded assistant"
-        title="Ask the library"
-        description="Answers are written by a local model using only passages retrieved from Chanakya's papers. Every claim carries a citation you can inspect."
-      />
+  const empty = turns.length === 0;
 
-      {paperScope && <div className="flex items-center justify-between gap-3 rounded-xl border border-stone-200 bg-paper px-4 py-3">
-        <p className="min-w-0 truncate text-ui text-stone-700">Scoped to: <Link href={`/papers/${paperScope}`} className="font-medium text-ink hover:underline">{scopedPaper.data?.canonical_title ?? paperScope}</Link></p>
-        <button type="button" onClick={() => setPaperScope(null)} className="btn h-9">Remove scope</button>
-      </div>}
-
-      <div className="grid gap-6 lg:grid-cols-12">
-        {/* ----------------------------- thread ----------------------------- */}
-        <section className="flex min-h-[520px] flex-col lg:col-span-7" aria-label="Research Q&A thread">
-          <div className="flex-1 space-y-8 pb-6">
-            {turns.length === 0 && (
-              <div className="card px-6 py-8">
-                <p className="eyebrow mb-2">Try asking</p>
-                <ul className="space-y-1.5">
-                  {SUGGESTIONS.map((s) => (
-                    <li key={s}>
-                      <button
-                        type="button"
-                        onClick={() => ask(s)}
-                        className="w-full rounded-lg px-3 py-2 text-left font-medium text-[17px] leading-snug text-stone-700 transition-colors hover:bg-sunken hover:text-ink"
-                      >
-                        {s}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-
-            {turns.map((t) => {
-              const selected = t.id === activeTurn;
-              return (
-                <article
-                  key={t.id}
-                  className={cx(
-                    "space-y-4 rounded-xl transition-colors duration-200",
-                    selected && turns.length > 1 && "-mx-4 bg-paper px-4 py-4 ring-1 ring-stone-200/90",
-                  )}
-                  onClick={() => {
-                    if (t.status === "done" && !selected) {
-                      setActiveTurn(t.id);
-                      setActiveRef(null);
-                    }
-                  }}
-                >
-                  <h2 className="font-display text-[24px] leading-snug tracking-tight text-ink">{t.question}</h2>
-                  {t.libraryOnly && <p className="eyebrow">Restricted to Chanakya Library</p>}
-                  {t.paperId && <p className="eyebrow">Scoped to a paper</p>}
-
-                  {t.status === "pending" && (
-                    <div className="space-y-3" role="status" aria-live="polite">
-                      <p className="text-meta text-stone-500">
-                        Retrieving passages and writing an answer
-                        <span className="num"> · {elapsed}s</span>
-                        {elapsed > 15 && <span> — local models can take up to a minute.</span>}
-                      </p>
-                      <div className="space-y-2.5">
-                        <Skeleton className="h-4 w-full" />
-                        <Skeleton className="h-4 w-11/12" />
-                        <Skeleton className="h-4 w-4/5" />
-                      </div>
-                    </div>
-                  )}
-
-                  {t.status === "error" && (
-                    <div className="card">
-                      <ErrorState compact error={t.error} onRetry={() => ask(t.question)} />
-                    </div>
-                  )}
-
-                  {t.status === "done" && t.result && (
-                    <>
-                      {t.result.degraded && (
-                        <div role="alert" className="flex items-start gap-2.5 rounded-lg border border-terracotta-200 bg-terracotta-50 px-3.5 py-2.5 text-meta leading-relaxed text-terracotta-700">
-                          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                          <span>
-                            {t.result.answer || "The local model returned nothing."}{" "}
-                            {t.result.citations.length > 0 && "The retrieved passages are still shown in the inspector."}
-                          </span>
-                        </div>
-                      )}
-                      {!t.result.degraded && (
-                        <AnswerText
-                          text={t.result.answer}
-                          citations={t.result.citations}
-                          activeRef={selected ? activeRef : null}
-                          onSelect={(n) => {
-                            setActiveTurn(t.id);
-                            setActiveRef((cur) => (selected && cur === n ? null : n));
-                          }}
-                        />
-                      )}
-                    </>
-                  )}
-                </article>
-              );
-            })}
-            <div ref={endRef} />
-          </div>
-
-          {/* ----------------------------- composer ---------------------------- */}
-          <form
-            onSubmit={(e) => {
+  const composer = (
+    <div className="space-y-2">
+      {paperScope && (
+        <div className="flex items-center gap-2 rounded-xl border border-saffron-200 bg-saffron-50 px-3.5 py-2 text-meta text-stone-700">
+          <span className="shrink-0 font-semibold text-saffron-600">Scoped to</span>
+          <Link href={`/papers/${paperScope}`} className="min-w-0 flex-1 truncate font-medium text-ink hover:underline">{scopedPaper.data?.canonical_title ?? paperScope}</Link>
+          <button type="button" onClick={() => setPaperScope(null)} className="rounded-full p-1 text-stone-500 hover:bg-saffron-100 hover:text-ink" aria-label="Remove paper scope">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+      )}
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          ask(question);
+        }}
+        className="rounded-2xl border border-stone-200 bg-paper p-3 shadow-lift transition focus-within:border-brand-500 focus-within:ring-4 focus-within:ring-brand-100"
+      >
+        <textarea
+          ref={inputRef}
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               ask(question);
-            }}
-            className="card sticky bottom-4 z-10 space-y-2.5 bg-paper p-3 shadow-[0_8px_24px_-16px_rgba(24,24,27,0.25)]"
-          >
-            <textarea
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  ask(question);
-                }
-              }}
-              rows={2}
-              placeholder="Ask a research question…"
-              aria-label="Research question"
-              className="w-full resize-none border-0 bg-transparent px-2 py-1 text-[15.5px] leading-relaxed text-ink placeholder:text-stone-400 focus:outline-none"
-            />
-            <div className="flex items-center justify-between gap-3 border-t border-stone-100 pt-2.5">
-              <label className="flex cursor-pointer items-center gap-2 text-meta text-stone-600">
-                <input
-                  type="checkbox"
-                  checked={libraryOnly}
-                  onChange={(e) => setLibraryOnly(e.target.checked)}
-                  className="h-3.5 w-3.5 rounded border-stone-300 accent-ink"
-                />
-                Chanakya Library only
-              </label>
-              {pendingTurn ? (
-                <button type="button" className="btn" onClick={() => abortRef.current?.abort()}>
-                  <Square className="h-3 w-3 fill-current" /> Stop
-                </button>
-              ) : (
-                <button type="submit" disabled={!question.trim()} className="btn-primary">
-                  Ask <ArrowUp className="h-3.5 w-3.5" />
-                </button>
-              )}
-            </div>
-          </form>
-        </section>
-
-        {/* ---------------------------- inspector --------------------------- */}
-        <div className="lg:col-span-5">
-          <div className="lg:sticky lg:top-24">
-            <EvidenceInspector
-              turn={active?.status === "done" ? (active.result ?? null) : null}
-              pending={active?.status === "pending"}
-              activeRef={activeRef}
-              onSelect={setActiveRef}
-            />
-          </div>
+            }
+          }}
+          rows={2}
+          placeholder="Ask a research question…"
+          aria-label="Research question"
+          className="block max-h-[200px] w-full resize-none border-0 bg-transparent px-2 py-1 text-[16px] leading-relaxed text-ink placeholder:text-stone-400 focus:outline-none"
+        />
+        <div className="mt-1 flex items-center justify-between gap-3 border-t border-stone-100 pt-2.5">
+          <label className="flex cursor-pointer items-center gap-2 text-meta text-stone-600">
+            <input type="checkbox" checked={libraryOnly} onChange={(e) => setLibraryOnly(e.target.checked)} className="h-3.5 w-3.5 rounded border-stone-300 accent-brand-600" />
+            <Library className="h-3.5 w-3.5 text-stone-400" /> Chanakya Library only
+          </label>
+          {pendingTurn ? (
+            <button type="button" className="btn" onClick={() => abortRef.current?.abort()}>
+              <Square className="h-3 w-3 fill-current" /> Stop
+            </button>
+          ) : (
+            <button type="submit" disabled={!question.trim()} className="btn-primary h-9 w-9 !px-0" aria-label="Ask">
+              <ArrowUp className="h-4 w-4" />
+            </button>
+          )}
         </div>
+      </form>
+      <p className="px-2 text-center text-label text-stone-400">Answers come from a local model using only retrieved library passages. Check the sources.</p>
+    </div>
+  );
+
+  if (empty) {
+    return (
+      <div className="mx-auto flex min-h-[calc(100dvh-9rem)] w-full max-w-[720px] flex-col justify-center gap-8 pb-10">
+        <div className="text-center">
+          <AssistantMark className="mx-auto h-12 w-12 text-[24px]" />
+          <h1 className="mt-5 font-display text-[34px] leading-tight text-ink sm:text-[40px]">What would you like to know?</h1>
+          <p className="mx-auto mt-3 max-w-lg text-body leading-relaxed text-stone-600">
+            Ask anything about Chanakya’s research. Every answer is grounded in the library’s papers, with sources you can check.
+          </p>
+        </div>
+        {composer}
+        <ul className="grid gap-2.5 sm:grid-cols-3" aria-label="Suggested questions">
+          {SUGGESTIONS.map((s) => (
+            <li key={s}>
+              <button
+                type="button"
+                onClick={() => ask(s)}
+                className="card card-hover flex h-full w-full flex-col items-start gap-2 p-4 text-left"
+              >
+                <Sparkles className="h-4 w-4 text-saffron-500" />
+                <span className="text-meta font-medium leading-snug text-stone-700">{s}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
+    );
+  }
+
+  return (
+    <div className="mx-auto w-full max-w-[760px]">
+      <div className="mb-6 flex items-center justify-between">
+        <h1 className="font-display text-[20px] text-ink">Research assistant</h1>
+        <button type="button" onClick={newChat} className="btn h-9"><Plus className="h-4 w-4" /> New chat</button>
+      </div>
+
+      <section className="space-y-9 pb-8" aria-label="Research Q&A thread">
+        {turns.map((t) => (
+          <div key={t.id} className="space-y-6 animate-rise">
+            {/* user */}
+            <div className="flex justify-end">
+              <div className="max-w-[88%] rounded-2xl rounded-br-md bg-brand-900 px-4 py-3 text-[16px] leading-relaxed text-white shadow-card sm:max-w-[80%]">
+                {t.question}
+                {(t.libraryOnly || t.paperId) && (
+                  <p className="mt-1.5 text-label font-medium text-saffron-300">
+                    {t.paperId ? "Scoped to a paper" : "Chanakya Library only"}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* assistant */}
+            <div className="flex gap-3.5">
+              <AssistantMark className="mt-0.5" />
+              <div className="min-w-0 flex-1 space-y-5">
+                {t.status === "pending" && (
+                  <div role="status" aria-live="polite" className="space-y-3">
+                    <p className="flex items-center gap-2 text-meta text-stone-500">
+                      <span className="flex gap-1" aria-hidden>
+                        {[0, 1, 2].map((i) => (
+                          <span key={i} className="h-1.5 w-1.5 animate-pulse rounded-full bg-saffron-500" style={{ animationDelay: `${i * 160}ms` }} />
+                        ))}
+                      </span>
+                      Searching the library and writing an answer · <span className="num">{elapsed}s</span>
+                      {elapsed > 15 && <span className="hidden sm:inline"> — local models can take up to a minute.</span>}
+                    </p>
+                    <div className="space-y-2.5">
+                      <Skeleton className="h-4 w-full" />
+                      <Skeleton className="h-4 w-11/12" />
+                      <Skeleton className="h-4 w-3/5" />
+                    </div>
+                  </div>
+                )}
+
+                {t.status === "error" && (
+                  <div className="card">
+                    <ErrorState compact error={t.error} onRetry={() => ask(t.question)} />
+                  </div>
+                )}
+
+                {t.status === "done" && t.result && (
+                  <>
+                    {t.result.degraded ? (
+                      <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-terracotta-200 bg-terracotta-50 px-4 py-3 text-meta leading-relaxed text-terracotta-700">
+                        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>
+                          {t.result.answer || "The local model returned nothing."}{" "}
+                          {t.result.citations.length > 0 && "The passages it retrieved are listed below."}
+                        </span>
+                      </div>
+                    ) : (
+                      <AnswerText
+                        text={t.result.answer}
+                        citations={t.result.citations}
+                        activeRef={focus?.turn === t.id ? focus.ref : null}
+                        onSelect={(n) => selectRef(t.id, n)}
+                      />
+                    )}
+                    <SourcesPanel
+                      citations={t.result.citations}
+                      answer={t.result.answer}
+                      activeRef={focus?.turn === t.id ? focus.ref : null}
+                      expanded={openSources.has(t.id)}
+                      onToggle={() => toggleSources(t.id)}
+                      onSelect={(n) => selectRef(t.id, n)}
+                    />
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+        <div ref={endRef} />
+      </section>
+
+      <div className="sticky bottom-0 -mx-4 bg-gradient-to-t from-canvas via-canvas to-transparent px-4 pb-4 pt-8 sm:-mx-6 sm:px-6">{composer}</div>
     </div>
   );
 }

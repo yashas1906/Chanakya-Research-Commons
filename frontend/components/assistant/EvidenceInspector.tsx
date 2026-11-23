@@ -1,26 +1,21 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ShieldCheck } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { BookOpenText, ChevronDown } from "lucide-react";
 import { Meter } from "@/components/ui/Meter";
 import { Pill } from "@/components/ui/Pill";
-import { Skeleton } from "@/components/ui/Skeleton";
-import { cx, fmtPct } from "@/lib/format";
 import { citedRefs } from "@/components/assistant/AnswerText";
-import type { AssistantAnswer } from "@/types/crc";
+import { cx, fmtPct } from "@/lib/format";
+import type { Citation } from "@/types/crc";
 
 function Passage({ text }: { text: string }) {
   const [open, setOpen] = useState(false);
-  const long = text.length > 360;
+  const long = text.length > 320;
   return (
     <div>
-      <p className={cx("text-meta leading-[1.65] text-stone-700", long && !open && "line-clamp-5")}>{text}</p>
+      <p className={cx("text-meta leading-[1.65] text-stone-700", long && !open && "line-clamp-4")}>{text}</p>
       {long && (
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="mt-1 text-meta font-medium text-stone-500 underline decoration-stone-300 underline-offset-2 hover:text-ink"
-        >
+        <button type="button" onClick={() => setOpen((o) => !o)} className="mt-1 text-meta font-semibold text-brand-600 hover:text-brand-700">
           {open ? "Show less" : "Show full passage"}
         </button>
       )}
@@ -28,114 +23,128 @@ function Passage({ text }: { text: string }) {
   );
 }
 
+interface SourceGroup {
+  key: string;
+  title: string;
+  year: number | null;
+  refs: number[];
+  best: number;
+}
+
+/** The same paper often yields several retrieved chunks; show it once with all its reference numbers. */
+function groupSources(citations: Citation[]): SourceGroup[] {
+  const groups = new Map<string, SourceGroup>();
+  for (const c of citations) {
+    const key = `${c.title.trim().toLowerCase()}|${c.year ?? ""}`;
+    const group = groups.get(key);
+    if (group) {
+      group.refs.push(c.ref_index);
+      group.best = Math.max(group.best, c.similarity);
+    } else {
+      groups.set(key, { key, title: c.title, year: c.year ?? null, refs: [c.ref_index], best: c.similarity });
+    }
+  }
+  return [...groups.values()];
+}
+
 /**
- * Right-hand grounding inspector: the exact top-k retrieved chunks behind the active answer,
- * with source titles and pgvector (HNSW) cosine similarity, so every claim can be checked.
+ * Sits directly under an answer, like the sources row in a chat product: a compact chip per paper,
+ * and a collapsible list of the exact retrieved passages with their cosine similarity.
  */
-export function EvidenceInspector({
-  turn,
-  pending,
+export function SourcesPanel({
+  citations,
+  answer,
   activeRef,
+  expanded,
+  onToggle,
   onSelect,
 }: {
-  turn: AssistantAnswer | null;
-  pending: boolean;
+  citations: Citation[];
+  answer: string;
   activeRef: number | null;
-  onSelect: (n: number | null) => void;
+  expanded: boolean;
+  onToggle: () => void;
+  onSelect: (n: number) => void;
 }) {
   const itemRefs = useRef<Map<number, HTMLLIElement>>(new Map());
+  const groups = useMemo(() => groupSources(citations), [citations]);
+  const cited = useMemo(() => citedRefs(answer), [answer]);
 
   useEffect(() => {
-    if (activeRef !== null) itemRefs.current.get(activeRef)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  }, [activeRef]);
+    if (expanded && activeRef !== null) itemRefs.current.get(activeRef)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [activeRef, expanded]);
 
-  const cited = turn ? citedRefs(turn.answer) : new Set<number>();
+  if (citations.length === 0) {
+    return <p className="text-meta text-stone-500">No passages in the library were close enough to this question to ground an answer.</p>;
+  }
 
   return (
-    <aside aria-label="Evidence and grounding inspector" className="card flex max-h-[calc(100vh-8rem)] flex-col overflow-hidden">
-      <header className="border-b border-stone-100 px-4 py-3">
-        <p className="eyebrow mb-0.5 flex items-center gap-1.5">
-          <ShieldCheck className="h-3 w-3" strokeWidth={1.75} /> Grounding
-        </p>
-        <h2 className="font-display text-[17px] leading-snug text-ink">Evidence inspector</h2>
-        <p className="mt-1 text-meta leading-relaxed text-stone-500">
-          The top retrieved passages the answer was allowed to use, with cosine similarity from the vector index.
-        </p>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {pending ? (
-          <ul className="divide-y divide-stone-100" role="status" aria-label="Retrieving passages">
-            {[0, 1, 2, 3].map((i) => (
-              <li key={i} className="space-y-2 px-4 py-3.5">
-                <Skeleton className="h-3.5 w-4/5" />
-                <Skeleton className="h-1.5 w-full" />
-                <Skeleton className="h-3 w-full" />
-                <Skeleton className="h-3 w-2/3" />
-              </li>
-            ))}
-          </ul>
-        ) : !turn ? (
-          <div className="px-6 py-12 text-center">
-            <p className="font-display text-[16px] text-stone-600">Nothing retrieved yet</p>
-            <p className="mt-1 text-meta leading-relaxed text-stone-500">Ask a question and the supporting passages will appear here.</p>
-          </div>
-        ) : turn.citations.length === 0 ? (
-          <div className="px-6 py-12 text-center">
-            <p className="font-display text-[16px] text-stone-600">No passages retrieved</p>
-            <p className="mt-1 text-meta leading-relaxed text-stone-500">
-              Nothing in the corpus was close enough to this question, so there is nothing to ground an answer on.
-            </p>
-          </div>
-        ) : (
-          <ul className="divide-y divide-stone-100">
-            {turn.citations.map((c) => {
-              const active = activeRef === c.ref_index;
-              return (
-                <li
-                  key={c.ref_index}
-                  ref={(el) => {
-                    if (el) itemRefs.current.set(c.ref_index, el);
-                    else itemRefs.current.delete(c.ref_index);
-                  }}
-                  className={cx("relative px-4 py-3.5 transition-colors duration-200", active && "bg-sunken")}
-                >
-                  <span className={cx("absolute inset-y-0 left-0 w-0.5 transition-colors", active ? "bg-ink" : "bg-transparent")} />
-                  <button
-                    type="button"
-                    onClick={() => onSelect(active ? null : c.ref_index)}
-                    className="flex w-full items-start gap-2.5 text-left"
-                    aria-pressed={active}
-                  >
-                    <span
-                      className={cx(
-                        "num mt-0.5 inline-flex h-[18px] min-w-[18px] shrink-0 items-center justify-center rounded-full border px-1 text-meta font-semibold",
-                        active ? "border-ink bg-ink text-white" : "border-stone-300 bg-paper text-stone-600",
-                      )}
-                    >
-                      {c.ref_index}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block font-display text-[15.5px] leading-snug text-ink">{c.title}</span>
-                      <span className="num mt-0.5 block text-meta text-stone-500">{c.year ?? "Year unknown"}</span>
-                    </span>
-                  </button>
-                  <div className="mt-2.5 flex items-center gap-2.5">
-                    <Meter value={c.similarity} tone={c.similarity >= 0.5 ? "sage" : "stone"} label={`Similarity ${fmtPct(c.similarity)}`} />
-                    <span className="num shrink-0 text-meta font-medium text-stone-700">{fmtPct(c.similarity, 1)}</span>
-                  </div>
-                  <div className="mt-2.5 border-l-2 border-stone-200 pl-3">
-                    <Passage text={c.passage} />
-                  </div>
-                  <div className="mt-2.5">
-                    {cited.has(c.ref_index) ? <Pill tone="sage">Cited in answer</Pill> : <Pill>Retrieved, not cited</Pill>}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
+    <section aria-label="Sources" className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="mr-1 flex items-center gap-1.5 text-label font-semibold uppercase tracking-[0.12em] text-stone-500">
+          <BookOpenText className="h-3.5 w-3.5" /> Sources
+        </span>
+        {groups.map((group) => {
+          const active = activeRef !== null && group.refs.includes(activeRef);
+          return (
+            <button
+              key={group.key}
+              type="button"
+              onClick={() => onSelect(group.refs[0])}
+              aria-pressed={active}
+              title={group.title}
+              className={cx(
+                "inline-flex max-w-full items-center gap-2 rounded-full border py-1 pl-1.5 pr-3 text-meta transition duration-150",
+                active ? "border-brand-600 bg-brand-50 text-brand-800" : "border-stone-200 bg-paper text-stone-700 hover:border-brand-300 hover:bg-brand-50",
+              )}
+            >
+              <span className="num flex h-5 min-w-5 items-center justify-center rounded-full bg-brand-700 px-1.5 text-[11px] font-semibold text-white">{group.refs.join(" · ")}</span>
+              <span className="max-w-[170px] truncate font-medium sm:max-w-[210px]">{group.title}</span>
+              {group.year && <span className="num text-stone-400">{group.year}</span>}
+            </button>
+          );
+        })}
       </div>
-    </aside>
+
+      <button type="button" onClick={onToggle} aria-expanded={expanded} className="inline-flex items-center gap-1.5 text-meta font-semibold text-brand-600 hover:text-brand-700">
+        {expanded ? "Hide" : "Show"} retrieved passages ({citations.length})
+        <ChevronDown className={cx("h-4 w-4 transition-transform duration-200", expanded && "rotate-180")} />
+      </button>
+
+      {expanded && (
+        <ul className="animate-fade divide-y divide-stone-100 overflow-hidden rounded-xl border border-stone-200 bg-paper">
+          {citations.map((c) => {
+            const active = activeRef === c.ref_index;
+            return (
+              <li
+                key={c.ref_index}
+                ref={(el) => {
+                  if (el) itemRefs.current.set(c.ref_index, el);
+                  else itemRefs.current.delete(c.ref_index);
+                }}
+                className={cx("relative space-y-2.5 px-4 py-3.5 transition-colors duration-200", active && "bg-brand-50/70")}
+              >
+                <span aria-hidden className={cx("absolute inset-y-0 left-0 w-[3px] transition-colors", active ? "bg-brand-600" : "bg-transparent")} />
+                <div className="flex items-start gap-2.5">
+                  <span className="num mt-0.5 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-brand-700 px-1.5 text-[11px] font-semibold text-white">{c.ref_index}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="font-display text-[16px] leading-snug text-ink">{c.title}</p>
+                    <p className="num mt-0.5 text-meta text-stone-500">{c.year ?? "Year unknown"}</p>
+                  </div>
+                  {cited.has(c.ref_index) ? <Pill tone="sage">Cited</Pill> : <Pill>Not cited</Pill>}
+                </div>
+                <div className="flex items-center gap-2.5 pl-[30px]">
+                  <Meter value={c.similarity} tone={c.similarity >= 0.5 ? "sage" : "stone"} label={`Similarity ${fmtPct(c.similarity)}`} />
+                  <span className="num shrink-0 text-meta font-medium text-stone-700">{fmtPct(c.similarity, 1)} match</span>
+                </div>
+                <div className="ml-[30px] border-l-2 border-stone-200 pl-3">
+                  <Passage text={c.passage} />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }

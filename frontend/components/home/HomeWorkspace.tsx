@@ -17,22 +17,22 @@ function Welcome() {
   const { user, promptLogin } = useAuth();
   const first = user?.full_name.split(" ")[0];
   return (
-    <section className="relative overflow-hidden rounded-2xl bg-brand-600 px-6 py-8 text-white sm:px-9 sm:py-10">
-      <svg aria-hidden className="pointer-events-none absolute inset-0 h-full w-full text-white/[0.07]" fill="none" stroke="currentColor" strokeWidth="1.2">
+    <section className="hero rounded-2xl px-6 py-9 sm:px-10 sm:py-12">
+      <svg aria-hidden className="pointer-events-none absolute inset-0 h-full w-full text-saffron-300/[0.14]" fill="none" stroke="currentColor" strokeWidth="1.2">
         {[40, 80, 120, 160, 200, 240].map((r) => <circle key={r} cx="92%" cy="-10%" r={r} />)}
       </svg>
       <div className="relative max-w-2xl">
-        <p className="text-meta font-semibold text-saffron-300">{user ? "Welcome back" : "Chanakya Research Commons"}</p>
+        <p className="text-label font-semibold uppercase tracking-[0.14em] text-saffron-300">{user ? "Welcome back" : "Chanakya Research Commons"}</p>
         <h1 className="mt-2 font-display text-[30px] leading-tight sm:text-[36px]">
           {first ? `Good to see you, ${first}.` : "Find the work, the people and the conversation."}
         </h1>
-        <p className="mt-3 max-w-xl text-body leading-relaxed text-white/80">
+        <p className="mt-3 max-w-xl text-body leading-relaxed text-white/75">
           Discover research across disciplines, follow scholars on campus and join discussions around the work. Use the search bar above to look across everything.
         </p>
         <div className="mt-6 flex flex-wrap gap-2.5">
-          <Link href="/library" className="btn bg-white text-brand-700 hover:bg-brand-50"><BookOpen className="h-4 w-4" /> Browse library</Link>
-          <Link href="/feed" className="btn border-white/30 bg-white/10 text-white hover:bg-white/20"><MessageSquare className="h-4 w-4" /> Join the feed</Link>
-          {!user && <button type="button" onClick={() => promptLogin("register")} className="btn border-transparent bg-saffron-400 text-ink hover:bg-saffron-300">Create account</button>}
+          <Link href="/library" className="btn border-transparent bg-saffron-400 text-ink hover:bg-saffron-300"><BookOpen className="h-4 w-4" /> Browse library</Link>
+          <Link href="/feed" className="btn border-white/30 bg-transparent text-white hover:bg-white/10"><MessageSquare className="h-4 w-4" /> Join the feed</Link>
+          {!user && <button type="button" onClick={() => promptLogin("register")} className="btn border-transparent bg-paper text-brand-800 hover:bg-white">Create account</button>}
         </div>
       </div>
     </section>

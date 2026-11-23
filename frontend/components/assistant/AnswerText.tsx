@@ -19,7 +19,7 @@ export function CitationPill({
   if (!citation) {
     return (
       <span
-        className="mx-0.5 inline-flex h-[18px] min-w-[18px] -translate-y-px items-center justify-center rounded-full border border-dashed border-stone-300 px-1 align-middle text-meta font-semibold text-stone-400"
+        className="mx-0.5 inline-flex h-[18px] min-w-[18px] -translate-y-px items-center justify-center rounded-full border border-dashed border-stone-300 px-1 align-middle text-[11px] font-semibold text-stone-400"
         title="No retrieved passage backs this reference"
       >
         {n}
@@ -34,8 +34,8 @@ export function CitationPill({
       aria-label={`Citation ${n}: ${citation.title}`}
       aria-pressed={active}
       className={cx(
-        "num mx-0.5 inline-flex h-[18px] min-w-[18px] -translate-y-px items-center justify-center rounded-full border px-1 align-middle text-meta font-semibold transition-colors duration-150",
-        active ? "border-ink bg-ink text-white" : "border-stone-300 bg-paper text-stone-600 hover:border-ink hover:text-ink",
+        "num mx-0.5 inline-flex h-[18px] min-w-[18px] -translate-y-px items-center justify-center rounded-full border px-1 align-middle text-[11px] font-semibold transition-colors duration-150",
+        active ? "border-brand-700 bg-brand-700 text-white" : "border-brand-200 bg-brand-50 text-brand-700 hover:border-brand-600 hover:bg-brand-100",
       )}
     >
       {n}
@@ -93,7 +93,7 @@ export function AnswerText({
   const blocks = parseBlocks(text);
 
   return (
-    <div className="space-y-3.5 font-sans text-[16px] leading-[1.75] text-stone-800">
+    <div className="space-y-4 font-sans text-[16.5px] leading-[1.8] text-ink-soft">
       {blocks.map((b, bi) => {
         if (b.type === "list") {
           const Tag = b.ordered ? "ol" : "ul";

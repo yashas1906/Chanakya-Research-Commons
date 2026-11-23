@@ -17,9 +17,7 @@ import numpy as np
 import pandas as pd
 import requests
 import psycopg2
-from psycopg2.extras import RealDictCursor, register_uuid
-
-register_uuid()
+from psycopg2.extras import RealDictCursor
 from fastapi import FastAPI, Header, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -93,52 +91,26 @@ except Exception as exc:
 
 @contextmanager
 def get_db():
-    """Connection context manager with connection pooling and stale-connection recovery."""
+    """Connection context manager with connection pooling and guaranteed return/closure."""
     if db_pool:
         conn = db_pool.getconn()
-        # If the pool returned a stale/closed connection, replace it with a fresh one.
-        if conn.closed:
-            try:
-                db_pool.putconn(conn, close=True)
-            except Exception:
-                pass
-            conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
-            conn.cursor_factory = RealDictCursor
-            use_pool = False
-        else:
-            conn.cursor_factory = RealDictCursor
-            use_pool = True
+        conn.cursor_factory = RealDictCursor
         try:
             yield conn
         except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            conn.rollback()
             raise
         finally:
-            try:
-                if use_pool:
-                    db_pool.putconn(conn)
-                else:
-                    conn.close()
-            except Exception:
-                pass
+            db_pool.putconn(conn)
     else:
         conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
         try:
             yield conn
         except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            conn.rollback()
             raise
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            conn.close()
 
 
 def get_conn():
@@ -743,42 +715,41 @@ def create_post(payload: PostCreate, user=Depends(current_user)):
 
 
 def _set_post_vote(post_id: UUID, user_id: str, value: int):
-    pid = str(post_id)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM posts WHERE post_id = %s::uuid", (pid,))
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
         if not cur.fetchone():
             cur.close()
             raise HTTPException(status_code=404, detail="Post not found")
         if value == 0:
             cur.execute(
-                "DELETE FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
-                (user_id, pid),
+                "DELETE FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
+                (user_id, post_id),
             )
         else:
             cur.execute(
                 """
-                INSERT INTO post_upvotes (user_id, post_id, value) VALUES (%s::uuid, %s::uuid, %s)
+                INSERT INTO post_upvotes (user_id, post_id, value) VALUES (%s::uuid, %s, %s)
                 ON CONFLICT (user_id, post_id) DO UPDATE SET value = EXCLUDED.value
                 """,
-                (user_id, pid, value),
+                (user_id, post_id, value),
             )
             cur.execute(
-                "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'vote_post', %s::uuid)",
-                (user_id, pid),
+                "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'vote_post', %s)",
+                (user_id, post_id),
             )
         cur.execute(
             """
             UPDATE posts SET upvote_count = COALESCE(
-              (SELECT SUM(value) FROM post_upvotes WHERE post_id = %s::uuid), 0
-            ) WHERE post_id = %s::uuid RETURNING upvote_count
+              (SELECT SUM(value) FROM post_upvotes WHERE post_id = %s), 0
+            ) WHERE post_id = %s RETURNING upvote_count
             """,
-            (pid, pid),
+            (post_id, post_id),
         )
         score = cur.fetchone()["upvote_count"]
         cur.execute(
-            "SELECT COALESCE(value, 0) AS my_vote FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
-            (user_id, pid),
+            "SELECT COALESCE(value, 0) AS my_vote FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
+            (user_id, post_id),
         )
         vote = cur.fetchone()
         conn.commit()
@@ -807,7 +778,6 @@ def toggle_upvote(post_id: UUID, payload: UpvoteRequest, user=Depends(current_us
 @app.get("/api/posts/{post_id}")
 def get_post(post_id: UUID, user=Depends(current_user_optional)):
     user_id = str(user["user_id"]) if user else None
-    pid = str(post_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -829,9 +799,9 @@ def get_post(post_id: UUID, user=Depends(current_user_optional)):
             JOIN users u ON u.user_id = p.author_id
             LEFT JOIN papers pa ON pa.paper_id = p.attached_paper_id
             LEFT JOIN post_upvotes mine ON mine.post_id = p.post_id AND mine.user_id = %s::uuid
-            WHERE p.post_id = %s::uuid AND p.is_flagged_spam = FALSE
+            WHERE p.post_id = %s AND p.is_flagged_spam = FALSE
             """,
-            (user_id, pid),
+            (user_id, post_id),
         )
         post = cur.fetchone()
         cur.close()
@@ -868,10 +838,9 @@ def get_post(post_id: UUID, user=Depends(current_user_optional)):
 
 @app.get("/api/posts/{post_id}/comments")
 def get_comments(post_id: UUID):
-    pid = str(post_id)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM posts WHERE post_id = %s::uuid", (pid,))
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
         if not cur.fetchone():
             cur.close()
             raise HTTPException(status_code=404, detail="Post not found")
@@ -885,7 +854,7 @@ def get_comments(post_id: UUID):
             WHERE c.post_id = %s::uuid
             ORDER BY c.created_at ASC
             """,
-            (pid,),
+            (post_id,),
         )
         comments = cur.fetchall()
         cur.close()
@@ -894,17 +863,16 @@ def get_comments(post_id: UUID):
 
 @app.post("/api/posts/{post_id}/comments")
 def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user)):
-    pid = str(post_id)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM posts WHERE post_id = %s::uuid", (pid,))
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
         if not cur.fetchone():
             cur.close()
             raise HTTPException(status_code=404, detail="Post not found")
         if payload.parent_comment_id:
             cur.execute(
-                "SELECT 1 FROM comments WHERE comment_id = %s::uuid AND post_id = %s::uuid",
-                (str(payload.parent_comment_id), pid),
+                "SELECT 1 FROM comments WHERE comment_id = %s AND post_id = %s",
+                (payload.parent_comment_id, post_id),
             )
             if not cur.fetchone():
                 cur.close()
@@ -915,7 +883,7 @@ def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user
             VALUES (%s::uuid, %s::uuid, %s::uuid, %s)
             RETURNING comment_id, created_at
             """,
-            (pid, user["user_id"], str(payload.parent_comment_id) if payload.parent_comment_id else None, payload.body),
+            (post_id, user["user_id"], payload.parent_comment_id, payload.body),
         )
         created = cur.fetchone()
         cur.execute(
@@ -1045,18 +1013,17 @@ def save_to_library(req: SavePaperRequest, user=Depends(current_user)):
 
 @app.delete("/api/library/save/{paper_id}")
 def remove_from_library(paper_id: UUID, user=Depends(current_user)):
-    pid = str(paper_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM library_saves WHERE user_id = %s::uuid AND paper_id = %s::uuid",
-            (user["user_id"], pid),
+            "DELETE FROM library_saves WHERE user_id = %s::uuid AND paper_id = %s",
+            (user["user_id"], paper_id),
         )
         removed = cur.rowcount > 0
         if removed:
             cur.execute(
-                "UPDATE papers SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid) WHERE paper_id = %s::uuid",
-                (pid, pid),
+                "UPDATE papers SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s) WHERE paper_id = %s",
+                (paper_id, paper_id),
             )
             conn.commit()
         cur.close()
@@ -1107,13 +1074,11 @@ def create_collection(payload: CollectionCreate, user=Depends(current_user)):
 
 @app.post("/api/collections/{collection_id}/papers")
 def add_paper_to_collection(collection_id: UUID, payload: AddPaperToCollectionRequest, user=Depends(current_user)):
-    cid = str(collection_id)
-    pid = str(payload.paper_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             "SELECT 1 FROM collections WHERE collection_id = %s::uuid AND user_id = %s::uuid",
-            (cid, user["user_id"]),
+            (collection_id, user["user_id"]),
         )
         if not cur.fetchone():
             cur.close()
@@ -1127,11 +1092,11 @@ def add_paper_to_collection(collection_id: UUID, payload: AddPaperToCollectionRe
                   private_notes = COALESCE(NULLIF(EXCLUDED.private_notes, ''), library_saves.private_notes)
             RETURNING save_id
             """,
-            (user["user_id"], pid, cid, payload.private_notes),
+            (user["user_id"], payload.paper_id, collection_id, payload.private_notes),
         )
         cur.execute(
             "UPDATE papers SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid), in_chanakya_library = TRUE WHERE paper_id = %s::uuid",
-            (pid, pid),
+            (payload.paper_id, payload.paper_id),
         )
         conn.commit()
         cur.close()
@@ -1516,7 +1481,6 @@ def get_also_saved(paper_id: str, limit: int = Query(5, ge=1, le=20)):
 @app.get("/api/papers/{paper_id}")
 def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
     user_id = str(user["user_id"]) if user else None
-    pid = str(paper_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -1534,9 +1498,9 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
                    (SELECT collection_id FROM library_saves ls
                     WHERE ls.paper_id = p.paper_id AND ls.user_id = %s::uuid) AS collection_id
             FROM papers p JOIN ranked USING (paper_id)
-            WHERE p.paper_id = %s::uuid
+            WHERE p.paper_id = %s
             """,
-            (user_id, user_id, pid),
+            (user_id, user_id, paper_id),
         )
         paper = cur.fetchone()
         if not paper:
@@ -1546,18 +1510,18 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
             """
             SELECT p.paper_id, p.canonical_title, p.publication_year
             FROM paper_citations pc JOIN papers p ON p.paper_id = pc.cited_paper_id
-            WHERE pc.citing_paper_id = %s::uuid ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
+            WHERE pc.citing_paper_id = %s ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
             """,
-            (pid,),
+            (paper_id,),
         )
         paper["references"] = cur.fetchall()
         cur.execute(
             """
             SELECT p.paper_id, p.canonical_title, p.publication_year
             FROM paper_citations pc JOIN papers p ON p.paper_id = pc.citing_paper_id
-            WHERE pc.cited_paper_id = %s::uuid ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
+            WHERE pc.cited_paper_id = %s ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
             """,
-            (pid,),
+            (paper_id,),
         )
         paper["cited_by"] = cur.fetchall()
         cur.execute(
@@ -1566,10 +1530,10 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
                    (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
                    p.created_at
             FROM posts p JOIN users u ON u.user_id = p.author_id
-            WHERE p.attached_paper_id = %s::uuid AND p.is_flagged_spam = FALSE
+            WHERE p.attached_paper_id = %s AND p.is_flagged_spam = FALSE
             ORDER BY p.created_at DESC LIMIT 10
             """,
-            (pid,),
+            (paper_id,),
         )
         paper["related_posts"] = cur.fetchall()
         cur.close()
@@ -1794,7 +1758,6 @@ def run_spam_detection_job(
 @app.post("/api/alerts/{alert_id}/resolve")
 def resolve_alert(alert_id: UUID, user=Depends(require_role("admin"))):
     """Admin endpoint to resolve an anomaly alert and unflag false positives."""
-    aid = str(alert_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -1804,7 +1767,7 @@ def resolve_alert(alert_id: UUID, user=Depends(require_role("admin"))):
             WHERE alert_id = %s::uuid
             RETURNING alert_id, alert_type, entity_ref
             """,
-            (aid,)
+            (alert_id,)
         )
         alert = cur.fetchone()
         if not alert:

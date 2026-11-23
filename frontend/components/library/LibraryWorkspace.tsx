@@ -273,7 +273,7 @@ export function LibraryWorkspace() {
           </div>
 
           <aside className="min-w-0">
-            <div className="lg:sticky lg:top-[72px]">
+            <div className="lg:sticky lg:top-[88px]">
               <Panel eyebrow="For you" title="Recommended reading" bodyClassName="max-h-[640px] overflow-y-auto">
                 {authStatus !== "authenticated" ? (
                   <EmptyState className="py-8" title="Log in for recommendations" hint="Your saved papers help personalise this list." />

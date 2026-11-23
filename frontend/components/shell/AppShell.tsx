@@ -5,13 +5,15 @@ import { usePathname } from "next/navigation";
 import { PlugZap, RefreshCw } from "lucide-react";
 import { AuthModal } from "@/components/auth/AuthModal";
 import { Navbar } from "@/components/Navbar";
-import { Sidebar } from "@/components/shell/Sidebar";
+import { FilterRail } from "@/components/shell/FilterRail";
 import { ShellContext } from "@/components/shell/SidebarSlot";
 import { ApiError, getMembers } from "@/lib/api";
 import { useAsync } from "@/lib/hooks";
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  // Only these two pages have filters, so only they get a left column.
+  const hasRail = pathname === "/feed" || pathname === "/library";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const health = useAsync((signal) => getMembers(1, signal), []);
 
@@ -44,7 +46,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       )}
       <div className="mx-auto flex w-full max-w-[1520px]">
-        <Sidebar />
+        {hasRail && <FilterRail />}
         <main id="main" className="min-w-0 flex-1 px-4 pb-20 pt-5 sm:px-6 xl:px-8 xl:pt-6">
           <div key={pathname} className="mx-auto w-full max-w-[1120px] animate-rise">{children}</div>
         </main>

@@ -199,7 +199,7 @@ export function FeedWorkspace() {
         </div>
 
         <aside className="hidden min-w-0 lg:block">
-          <div className="sticky top-[72px]">
+          <div className="sticky top-[88px]">
             <FeedRail
               topics={topics}
               people={recs.data?.people ?? []}

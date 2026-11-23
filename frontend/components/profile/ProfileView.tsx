@@ -133,8 +133,8 @@ export function ProfileView({ userId }: { userId: string }) {
     <div className="space-y-5">
       {/* Banner + identity */}
       <section className="card overflow-hidden">
-        <div className="relative h-28 bg-brand-600 sm:h-36">
-          <svg aria-hidden className="absolute inset-0 h-full w-full text-white/[0.08]" fill="none" stroke="currentColor" strokeWidth="1.2">
+        <div className="hero h-28 sm:h-36">
+          <svg aria-hidden className="absolute inset-0 h-full w-full text-saffron-300/[0.16]" fill="none" stroke="currentColor" strokeWidth="1.2">
             {[40, 80, 120, 160, 200, 240].map((r) => <circle key={r} cx="90%" cy="130%" r={r} />)}
           </svg>
         </div>
@@ -205,7 +205,7 @@ export function ProfileView({ userId }: { userId: string }) {
         </div>
 
         <aside className="min-w-0">
-          <div className="card space-y-4 p-4 lg:sticky lg:top-[72px]">
+          <div className="card space-y-4 p-4 lg:sticky lg:top-[88px]">
             <h2 className="font-display text-[16px] text-ink">About</h2>
             {person.bio ? <p className="text-meta leading-relaxed text-stone-600">{person.bio}</p> : <p className="text-meta text-stone-400">No bio yet.</p>}
             <dl className="grid grid-cols-3 gap-2 border-y border-stone-100 py-3 text-center">

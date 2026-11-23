@@ -8,7 +8,7 @@
 
 @layer base {
   html {
-    background: #eff1f5;
+    background: #f4eee2;
     scroll-behavior: smooth;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -16,27 +16,27 @@
   }
   body {
     @apply bg-canvas font-sans text-ink antialiased;
-    font-feature-settings: "cv11", "ss03";
+    
   }
   ::selection {
-    background: #dfe6fe;
+    background: #ebd498;
   }
   :focus-visible {
-    outline: 2px solid #3449cc;
+    outline: 2px solid #175240;
     outline-offset: 2px;
     border-radius: 6px;
   }
   /* Thin, quiet scrollbars (sidebar, dropdowns, long lists). */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #cbd5e1 transparent;
+    scrollbar-color: #d3c9b2 transparent;
   }
   *::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
   *::-webkit-scrollbar-thumb {
-    background: #cbd5e1;
+    background: #d3c9b2;
     border-radius: 999px;
   }
   *::-webkit-scrollbar-track {
@@ -46,7 +46,7 @@
 
 @layer components {
   .eyebrow {
-    @apply font-sans text-label font-semibold text-brand-600;
+    @apply font-sans text-label font-semibold uppercase tracking-[0.12em] text-saffron-600;
   }
   .hairline {
     @apply border border-stone-200;
@@ -76,23 +76,35 @@
   .input {
     @apply min-h-10 w-full rounded-lg border border-stone-300 bg-paper px-3 py-2 text-ui text-ink placeholder:text-stone-400 transition duration-150 hover:border-stone-400 focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-100;
   }
+  /* Masthead gradient used by the home, profile and feed banners. */
+  .hero {
+    @apply relative overflow-hidden text-white;
+    background:
+      radial-gradient(120% 140% at 100% 0%, rgba(210, 166, 73, 0.22) 0%, rgba(210, 166, 73, 0) 45%),
+      linear-gradient(135deg, #0c3124 0%, #11412f 55%, #175240 100%);
+  }
+  .hero::after {
+    content: "";
+    @apply pointer-events-none absolute inset-x-0 bottom-0 h-[3px];
+    background: linear-gradient(90deg, rgba(210, 166, 73, 0) 0%, #d2a649 30%, #e0be6b 50%, #d2a649 70%, rgba(210, 166, 73, 0) 100%);
+  }
   .skeleton {
     @apply relative overflow-hidden rounded-md bg-stone-200/70;
   }
   .skeleton::after {
     content: "";
     @apply absolute inset-0 -translate-x-full;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.7), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 252, 246, 0.7), transparent);
     animation: shimmer 1.4s infinite;
   }
 }
 
 @layer utilities {
-  /* Display type: the UI face, set heavier and tighter. Replaces the old serif headings. */
+  /* Display type: Newsreader, an editorial serif, for every heading. */
   .font-display {
-    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
-    font-weight: 650;
-    letter-spacing: -0.018em;
+    font-family: var(--font-serif), Georgia, Cambria, "Times New Roman", serif;
+    font-weight: 600;
+    letter-spacing: -0.012em;
   }
 }
 
