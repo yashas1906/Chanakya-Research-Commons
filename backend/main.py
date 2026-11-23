@@ -18,10 +18,9 @@ import pandas as pd
 import requests
 import psycopg2
 from psycopg2.extras import RealDictCursor, register_uuid
-
-register_uuid()
 from fastapi import FastAPI, Header, HTTPException, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
 from sklearn.ensemble import IsolationForest
@@ -53,10 +52,13 @@ from contextlib import contextmanager
 from psycopg2 import pool
 
 load_dotenv()
+register_uuid()
 
 DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+# The first request after Ollama starts loads the model into memory, which can exceed 60s on CPU.
+OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "180"))
 AUTH_SECRET = os.getenv("CRC_AUTH_SECRET")
 if not AUTH_SECRET:
     AUTH_SECRET = secrets.token_urlsafe(48)
@@ -93,52 +95,26 @@ except Exception as exc:
 
 @contextmanager
 def get_db():
-    """Connection context manager with connection pooling and stale-connection recovery."""
+    """Connection context manager with connection pooling and guaranteed return/closure."""
     if db_pool:
         conn = db_pool.getconn()
-        # If the pool returned a stale/closed connection, replace it with a fresh one.
-        if conn.closed:
-            try:
-                db_pool.putconn(conn, close=True)
-            except Exception:
-                pass
-            conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
-            conn.cursor_factory = RealDictCursor
-            use_pool = False
-        else:
-            conn.cursor_factory = RealDictCursor
-            use_pool = True
+        conn.cursor_factory = RealDictCursor
         try:
             yield conn
         except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            conn.rollback()
             raise
         finally:
-            try:
-                if use_pool:
-                    db_pool.putconn(conn)
-                else:
-                    conn.close()
-            except Exception:
-                pass
+            db_pool.putconn(conn)
     else:
         conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
         try:
             yield conn
         except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
+            conn.rollback()
             raise
         finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            conn.close()
 
 
 def get_conn():
@@ -743,42 +719,41 @@ def create_post(payload: PostCreate, user=Depends(current_user)):
 
 
 def _set_post_vote(post_id: UUID, user_id: str, value: int):
-    pid = str(post_id)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM posts WHERE post_id = %s::uuid", (pid,))
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
         if not cur.fetchone():
             cur.close()
             raise HTTPException(status_code=404, detail="Post not found")
         if value == 0:
             cur.execute(
-                "DELETE FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
-                (user_id, pid),
+                "DELETE FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
+                (user_id, post_id),
             )
         else:
             cur.execute(
                 """
-                INSERT INTO post_upvotes (user_id, post_id, value) VALUES (%s::uuid, %s::uuid, %s)
+                INSERT INTO post_upvotes (user_id, post_id, value) VALUES (%s::uuid, %s, %s)
                 ON CONFLICT (user_id, post_id) DO UPDATE SET value = EXCLUDED.value
                 """,
-                (user_id, pid, value),
+                (user_id, post_id, value),
             )
             cur.execute(
-                "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'vote_post', %s::uuid)",
-                (user_id, pid),
+                "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'vote_post', %s)",
+                (user_id, post_id),
             )
         cur.execute(
             """
             UPDATE posts SET upvote_count = COALESCE(
-              (SELECT SUM(value) FROM post_upvotes WHERE post_id = %s::uuid), 0
-            ) WHERE post_id = %s::uuid RETURNING upvote_count
+              (SELECT SUM(value) FROM post_upvotes WHERE post_id = %s), 0
+            ) WHERE post_id = %s RETURNING upvote_count
             """,
-            (pid, pid),
+            (post_id, post_id),
         )
         score = cur.fetchone()["upvote_count"]
         cur.execute(
-            "SELECT COALESCE(value, 0) AS my_vote FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s::uuid",
-            (user_id, pid),
+            "SELECT COALESCE(value, 0) AS my_vote FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
+            (user_id, post_id),
         )
         vote = cur.fetchone()
         conn.commit()
@@ -807,7 +782,6 @@ def toggle_upvote(post_id: UUID, payload: UpvoteRequest, user=Depends(current_us
 @app.get("/api/posts/{post_id}")
 def get_post(post_id: UUID, user=Depends(current_user_optional)):
     user_id = str(user["user_id"]) if user else None
-    pid = str(post_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -829,9 +803,9 @@ def get_post(post_id: UUID, user=Depends(current_user_optional)):
             JOIN users u ON u.user_id = p.author_id
             LEFT JOIN papers pa ON pa.paper_id = p.attached_paper_id
             LEFT JOIN post_upvotes mine ON mine.post_id = p.post_id AND mine.user_id = %s::uuid
-            WHERE p.post_id = %s::uuid AND p.is_flagged_spam = FALSE
+            WHERE p.post_id = %s AND p.is_flagged_spam = FALSE
             """,
-            (user_id, pid),
+            (user_id, post_id),
         )
         post = cur.fetchone()
         cur.close()
@@ -868,10 +842,9 @@ def get_post(post_id: UUID, user=Depends(current_user_optional)):
 
 @app.get("/api/posts/{post_id}/comments")
 def get_comments(post_id: UUID):
-    pid = str(post_id)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM posts WHERE post_id = %s::uuid", (pid,))
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
         if not cur.fetchone():
             cur.close()
             raise HTTPException(status_code=404, detail="Post not found")
@@ -885,7 +858,7 @@ def get_comments(post_id: UUID):
             WHERE c.post_id = %s::uuid
             ORDER BY c.created_at ASC
             """,
-            (pid,),
+            (post_id,),
         )
         comments = cur.fetchall()
         cur.close()
@@ -894,17 +867,16 @@ def get_comments(post_id: UUID):
 
 @app.post("/api/posts/{post_id}/comments")
 def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user)):
-    pid = str(post_id)
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM posts WHERE post_id = %s::uuid", (pid,))
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
         if not cur.fetchone():
             cur.close()
             raise HTTPException(status_code=404, detail="Post not found")
         if payload.parent_comment_id:
             cur.execute(
-                "SELECT 1 FROM comments WHERE comment_id = %s::uuid AND post_id = %s::uuid",
-                (str(payload.parent_comment_id), pid),
+                "SELECT 1 FROM comments WHERE comment_id = %s AND post_id = %s",
+                (payload.parent_comment_id, post_id),
             )
             if not cur.fetchone():
                 cur.close()
@@ -915,7 +887,7 @@ def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user
             VALUES (%s::uuid, %s::uuid, %s::uuid, %s)
             RETURNING comment_id, created_at
             """,
-            (pid, user["user_id"], str(payload.parent_comment_id) if payload.parent_comment_id else None, payload.body),
+            (post_id, user["user_id"], payload.parent_comment_id, payload.body),
         )
         created = cur.fetchone()
         cur.execute(
@@ -1045,18 +1017,17 @@ def save_to_library(req: SavePaperRequest, user=Depends(current_user)):
 
 @app.delete("/api/library/save/{paper_id}")
 def remove_from_library(paper_id: UUID, user=Depends(current_user)):
-    pid = str(paper_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "DELETE FROM library_saves WHERE user_id = %s::uuid AND paper_id = %s::uuid",
-            (user["user_id"], pid),
+            "DELETE FROM library_saves WHERE user_id = %s::uuid AND paper_id = %s",
+            (user["user_id"], paper_id),
         )
         removed = cur.rowcount > 0
         if removed:
             cur.execute(
-                "UPDATE papers SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid) WHERE paper_id = %s::uuid",
-                (pid, pid),
+                "UPDATE papers SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s) WHERE paper_id = %s",
+                (paper_id, paper_id),
             )
             conn.commit()
         cur.close()
@@ -1107,13 +1078,11 @@ def create_collection(payload: CollectionCreate, user=Depends(current_user)):
 
 @app.post("/api/collections/{collection_id}/papers")
 def add_paper_to_collection(collection_id: UUID, payload: AddPaperToCollectionRequest, user=Depends(current_user)):
-    cid = str(collection_id)
-    pid = str(payload.paper_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             "SELECT 1 FROM collections WHERE collection_id = %s::uuid AND user_id = %s::uuid",
-            (cid, user["user_id"]),
+            (collection_id, user["user_id"]),
         )
         if not cur.fetchone():
             cur.close()
@@ -1127,11 +1096,11 @@ def add_paper_to_collection(collection_id: UUID, payload: AddPaperToCollectionRe
                   private_notes = COALESCE(NULLIF(EXCLUDED.private_notes, ''), library_saves.private_notes)
             RETURNING save_id
             """,
-            (user["user_id"], pid, cid, payload.private_notes),
+            (user["user_id"], payload.paper_id, collection_id, payload.private_notes),
         )
         cur.execute(
             "UPDATE papers SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid), in_chanakya_library = TRUE WHERE paper_id = %s::uuid",
-            (pid, pid),
+            (payload.paper_id, payload.paper_id),
         )
         conn.commit()
         cur.close()
@@ -1516,7 +1485,6 @@ def get_also_saved(paper_id: str, limit: int = Query(5, ge=1, le=20)):
 @app.get("/api/papers/{paper_id}")
 def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
     user_id = str(user["user_id"]) if user else None
-    pid = str(paper_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -1534,9 +1502,9 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
                    (SELECT collection_id FROM library_saves ls
                     WHERE ls.paper_id = p.paper_id AND ls.user_id = %s::uuid) AS collection_id
             FROM papers p JOIN ranked USING (paper_id)
-            WHERE p.paper_id = %s::uuid
+            WHERE p.paper_id = %s
             """,
-            (user_id, user_id, pid),
+            (user_id, user_id, paper_id),
         )
         paper = cur.fetchone()
         if not paper:
@@ -1546,18 +1514,18 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
             """
             SELECT p.paper_id, p.canonical_title, p.publication_year
             FROM paper_citations pc JOIN papers p ON p.paper_id = pc.cited_paper_id
-            WHERE pc.citing_paper_id = %s::uuid ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
+            WHERE pc.citing_paper_id = %s ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
             """,
-            (pid,),
+            (paper_id,),
         )
         paper["references"] = cur.fetchall()
         cur.execute(
             """
             SELECT p.paper_id, p.canonical_title, p.publication_year
             FROM paper_citations pc JOIN papers p ON p.paper_id = pc.citing_paper_id
-            WHERE pc.cited_paper_id = %s::uuid ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
+            WHERE pc.cited_paper_id = %s ORDER BY p.publication_year DESC NULLS LAST LIMIT 8
             """,
-            (pid,),
+            (paper_id,),
         )
         paper["cited_by"] = cur.fetchall()
         cur.execute(
@@ -1566,10 +1534,10 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
                    (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
                    p.created_at
             FROM posts p JOIN users u ON u.user_id = p.author_id
-            WHERE p.attached_paper_id = %s::uuid AND p.is_flagged_spam = FALSE
+            WHERE p.attached_paper_id = %s AND p.is_flagged_spam = FALSE
             ORDER BY p.created_at DESC LIMIT 10
             """,
-            (pid,),
+            (paper_id,),
         )
         paper["related_posts"] = cur.fetchall()
         cur.close()
@@ -1794,7 +1762,6 @@ def run_spam_detection_job(
 @app.post("/api/alerts/{alert_id}/resolve")
 def resolve_alert(alert_id: UUID, user=Depends(require_role("admin"))):
     """Admin endpoint to resolve an anomaly alert and unflag false positives."""
-    aid = str(alert_id)
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
@@ -1804,7 +1771,7 @@ def resolve_alert(alert_id: UUID, user=Depends(require_role("admin"))):
             WHERE alert_id = %s::uuid
             RETURNING alert_id, alert_type, entity_ref
             """,
-            (aid,)
+            (alert_id,)
         )
         alert = cur.fetchone()
         if not alert:
@@ -1822,13 +1789,32 @@ def resolve_alert(alert_id: UUID, user=Depends(require_role("admin"))):
 # ==========================================
 # F8: Grounded Research Assistant (RAG + Ollama)
 # ==========================================
-@app.post("/api/assistant/ask")
-def ask_research_assistant(req: AskAssistantRequest):
-    """
-    Grounded Question Answering: enforces a similarity floor to prevent hallucinated answers
-    when retrieval confidence is insufficient.
-    """
+_SUMMARY_RE = re.compile(
+    r"summar|overview|main (contribution|idea|finding)|key (idea|contribution|finding)|about this paper|tl;?dr|what does this paper",
+    re.I,
+)
+
+
+def _clean_passage(text: str) -> str:
+    """Chunks are cut at fixed character offsets, so they often start/end mid-word. Trim those fragments."""
+    t = (text or "").strip()
+    if t and t[0].islower() and " " in t[:25]:
+        t = t.split(" ", 1)[1]
+    if t and t[-1] not in ".!?\"')]" and " " in t[-25:]:
+        cut = t.rfind(" ")
+        tail = t[cut + 1:]
+        if len(tail) < 15 and not tail.endswith((".", "!", "?")):
+            t = t[:cut]
+    return t.strip()
+
+
+def _retrieve_for_assistant(req: AskAssistantRequest):
+    """Returns (passages, refusal_message). `refusal_message` is set when there is nothing to answer from."""
     q_vec = vec_literal(req.question)
+    scoped = bool(req.paper_id)
+    # "Summarize this paper" shares almost no words with the paper's text, so its embedding scores low
+    # against every chunk. For those questions we read the paper's opening chunks instead.
+    wants_overview = scoped and bool(_SUMMARY_RE.search(req.question))
 
     with get_db() as conn:
         cur = conn.cursor()
@@ -1838,7 +1824,12 @@ def ask_research_assistant(req: AskAssistantRequest):
         if req.paper_id:
             conditions.append("p.paper_id = %s::uuid")
         filter_clause = "WHERE " + " AND ".join(conditions) if conditions else ""
-        query_params = (q_vec, q_vec) if not req.paper_id else (q_vec, req.paper_id, q_vec)
+        if wants_overview:
+            order_clause, query_params = "pc.chunk_index ASC", (q_vec, req.paper_id)
+        elif scoped:
+            order_clause, query_params = "pc.chunk_embedding <=> %s::vector", (q_vec, req.paper_id, q_vec)
+        else:
+            order_clause, query_params = "pc.chunk_embedding <=> %s::vector", (q_vec, q_vec)
         cur.execute(
             f"""
             SELECT pc.chunk_id, pc.chunk_text, p.paper_id, p.canonical_title, p.publication_year,
@@ -1846,90 +1837,198 @@ def ask_research_assistant(req: AskAssistantRequest):
             FROM paper_chunks pc
             JOIN papers p ON pc.paper_id = p.paper_id
             {filter_clause}
-            ORDER BY pc.chunk_embedding <=> %s::vector
+            ORDER BY {order_clause}
             LIMIT 4
             """,
             query_params,
         )
         passages = cur.fetchall()
+        if scoped and not passages:
+            # The paper has no stored chunks (e.g. saved from an external ID): fall back to its abstract.
+            cur.execute(
+                "SELECT paper_id, canonical_title, publication_year, abstract FROM papers WHERE paper_id = %s::uuid",
+                (req.paper_id,),
+            )
+            paper = cur.fetchone()
+            if paper and paper["abstract"]:
+                passages = [{
+                    "chunk_id": None,
+                    "chunk_text": paper["abstract"][:1500],
+                    "paper_id": paper["paper_id"],
+                    "canonical_title": paper["canonical_title"],
+                    "publication_year": paper["publication_year"],
+                    "similarity": 0.0,
+                }]
         cur.close()
 
-    if not passages and req.paper_id:
-        # Fallback to the paper's abstract if chunk index has no rows for this paper
-        with get_db() as conn:
-            cur = conn.cursor()
-            cur.execute(
-                "SELECT paper_id, canonical_title, abstract, publication_year FROM papers WHERE paper_id = %s::uuid",
-                (str(req.paper_id),),
-            )
-            p_row = cur.fetchone()
-            cur.close()
-            if p_row and p_row.get("abstract"):
-                passages = [{
-                    "chunk_id": str(p_row["paper_id"]),
-                    "chunk_text": p_row["abstract"],
-                    "paper_id": p_row["paper_id"],
-                    "canonical_title": p_row["canonical_title"],
-                    "publication_year": p_row["publication_year"],
-                    "similarity": 1.0,
-                }]
-
     if not passages:
-        return {
-            "question": req.question,
-            "answer": "No relevant passages found in the research corpus.",
-            "citations": []
+        return [], "No relevant passages found in the research corpus."
+    if scoped:
+        # The person chose this paper, so retrieval is not a relevance judgement: use what it has.
+        return passages, None
+    # Similarity floor: decline to hallucinate if confidence is low (< 0.32)
+    relevant = [p for p in passages if float(p.get("similarity", 0.0)) >= 0.32]
+    if not relevant:
+        return [], "Insufficient evidence in the Chanakya University repository to answer this query."
+    return relevant, None
+
+
+def _citations_payload(passages) -> list[dict]:
+    return [
+        {
+            "ref_index": idx,
+            "paper_id": str(psg["paper_id"]),
+            "title": psg["canonical_title"],
+            "year": psg["publication_year"],
+            "passage": _clean_passage(psg["chunk_text"]),
+            "similarity": round(float(psg["similarity"]), 3),
         }
+        for idx, psg in enumerate(passages, start=1)
+    ]
 
-    # Similarity floor: decline to hallucinate if confidence is low.
-    # When scoped to a specific paper, passages are already explicitly targeted to that paper.
-    if req.paper_id:
-        relevant_passages = passages
-    else:
-        relevant_passages = [p for p in passages if float(p.get("similarity", 0.0)) >= 0.25]
 
-    if not relevant_passages:
-        return {
-            "question": req.question,
-            "answer": "Insufficient evidence in the Chanakya University repository to answer this query.",
-            "citations": []
-        }
-
-    context_blocks = []
-    for idx, psg in enumerate(relevant_passages, start=1):
-        context_blocks.append(f"[{idx}] {psg['canonical_title']} ({psg['publication_year']}): {psg['chunk_text']}")
-
-    prompt = (
-        "You are the Chanakya Research Commons Assistant. Answer the user's research question using ONLY the retrieved passages below. "
-        "Cite sources inline using [1], [2], etc. If the passages do not contain the answer, state that clearly.\n\n"
-        f"Retrieved Passages:\n" + "\n\n".join(context_blocks) + f"\n\nQuestion: {req.question}\nAnswer:"
+def _build_prompt(question: str, passages) -> str:
+    blocks = [
+        f"[{idx}] {psg['canonical_title']} ({psg['publication_year']}): {_clean_passage(psg['chunk_text'])}"
+        for idx, psg in enumerate(passages, start=1)
+    ]
+    return (
+        "You are the Chanakya Research Commons Assistant. Answer the question using ONLY the numbered passages below.\n"
+        "Rules: be direct and start with the answer; write 2 short paragraphs or a short bullet list at most; "
+        "cite every claim inline like [1] or [2]; never invent a citation number; "
+        "if the passages do not answer the question, say so in one sentence.\n\n"
+        "Passages:\n" + "\n\n".join(blocks) + f"\n\nQuestion: {question}\nAnswer:"
     )
+
+
+def _extractive_answer(question: str, passages) -> str:
+    """
+    Model-free fallback: pick the sentences from the retrieved passages that best match the question
+    and present them with their citation numbers, so the person still gets an answer.
+    """
+    candidates = []  # (ref, sentence)
+    for idx, psg in enumerate(passages, start=1):
+        text = _clean_passage(psg["chunk_text"])
+        for sent in re.split(r"(?<=[.!?])\s+", text):
+            sent = sent.strip()
+            if 40 <= len(sent) <= 400:
+                candidates.append((idx, sent))
+    if not candidates:
+        return "I couldn't extract a clear answer from the retrieved passages."
+    q_emb = embed_model.encode(question)
+    s_emb = embed_model.encode([c[1] for c in candidates])
+    sims = (s_emb @ q_emb) / (np.linalg.norm(s_emb, axis=1) * np.linalg.norm(q_emb) + 1e-9)
+    ranked = sorted(range(len(candidates)), key=lambda i: -float(sims[i]))
+    chosen: list[int] = []
+    for i in ranked:
+        if len(chosen) >= 4:
+            break
+        if any(candidates[i][1][:60] == candidates[j][1][:60] for j in chosen):
+            continue
+        chosen.append(i)
+    chosen.sort(key=lambda i: (candidates[i][0], i))
+    bullets = "\n".join(f"- {candidates[i][1]} [{candidates[i][0]}]" for i in chosen)
+    return "Here is what the library's sources say:\n" + bullets
+
+
+def _ollama_payload(prompt: str, stream: bool) -> dict:
+    return {
+        "model": OLLAMA_MODEL,
+        "prompt": prompt,
+        "stream": stream,
+        "keep_alive": "30m",  # keep the model in memory so only the first question pays the load time
+        "options": {"temperature": 0.2, "num_predict": 450},
+    }
+
+
+@app.post("/api/assistant/ask")
+def ask_research_assistant(req: AskAssistantRequest):
+    """
+    Grounded Question Answering: enforces a similarity floor to prevent hallucinated answers
+    when retrieval confidence is insufficient. If the local model is unavailable the answer is
+    assembled from the best-matching sentences of the retrieved passages.
+    """
+    passages, refusal = _retrieve_for_assistant(req)
+    if refusal:
+        return {"question": req.question, "answer": refusal, "citations": []}
 
     try:
         resp = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
-            json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=120,
+            json=_ollama_payload(_build_prompt(req.question, passages), False),
+            timeout=OLLAMA_TIMEOUT,
         )
-        answer_text = resp.json().get("response", "Model returned an empty response.") if resp.status_code == 200 else f"Ollama error: {resp.status_code}"
+        if resp.status_code != 200:
+            raise RuntimeError(f"Ollama returned HTTP {resp.status_code}")
+        answer_text = (resp.json().get("response") or "").strip()
+        if not answer_text:
+            raise RuntimeError("the model returned an empty response")
+        degraded, reason = False, None
     except Exception as exc:
-        answer_text = f"Local LLM unavailable ({exc}). Showing top retrieved passages below."
+        answer_text, degraded, reason = _extractive_answer(req.question, passages), True, str(exc)
 
     return {
         "question": req.question,
         "answer": answer_text,
-        "citations": [
-            {
-                "ref_index": idx,
-                "paper_id": str(psg["paper_id"]),
-                "title": psg["canonical_title"],
-                "year": psg["publication_year"],
-                "passage": psg["chunk_text"],
-                "similarity": round(float(psg["similarity"]), 3),
-            }
-            for idx, psg in enumerate(relevant_passages, start=1)
-        ],
+        "degraded": degraded,
+        "degraded_reason": reason,
+        "citations": _citations_payload(passages),
     }
+
+
+@app.post("/api/assistant/ask/stream")
+def ask_research_assistant_stream(req: AskAssistantRequest):
+    """
+    Same contract as /api/assistant/ask but streamed as newline-delimited JSON so the page can show
+    sources immediately and the answer as it is written:
+      {"type":"meta","citations":[...]}  ->  {"type":"token","text":"..."} *  ->  {"type":"done","degraded":bool}
+    A {"type":"replace","answer":"..."} event overwrites the text (refusals and the model-free fallback).
+    """
+    def emit(obj: dict) -> bytes:
+        return (json.dumps(obj, default=str) + "\n").encode("utf-8")
+
+    def generate():
+        passages, refusal = _retrieve_for_assistant(req)
+        if refusal:
+            yield emit({"type": "meta", "citations": []})
+            yield emit({"type": "replace", "answer": refusal})
+            yield emit({"type": "done", "degraded": False})
+            return
+
+        yield emit({"type": "meta", "citations": _citations_payload(passages)})
+        produced = 0
+        try:
+            # The read timeout applies between chunks, so a slow first token (model load) gets the
+            # full OLLAMA_TIMEOUT but a model that stalls mid-answer is still caught.
+            with requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json=_ollama_payload(_build_prompt(req.question, passages), True),
+                stream=True,
+                timeout=(10, OLLAMA_TIMEOUT),
+            ) as resp:
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Ollama returned HTTP {resp.status_code}")
+                for line in resp.iter_lines():
+                    if not line:
+                        continue
+                    chunk = json.loads(line)
+                    piece = chunk.get("response") or ""
+                    if piece:
+                        produced += len(piece)
+                        yield emit({"type": "token", "text": piece})
+                    if chunk.get("done"):
+                        break
+            if produced == 0:
+                raise RuntimeError("the model returned an empty response")
+            yield emit({"type": "done", "degraded": False})
+        except Exception as exc:
+            if produced == 0:
+                yield emit({"type": "replace", "answer": _extractive_answer(req.question, passages)})
+                yield emit({"type": "done", "degraded": True, "reason": str(exc)})
+            else:
+                yield emit({"type": "done", "degraded": False, "truncated": True, "reason": str(exc)})
+
+    return StreamingResponse(generate(), media_type="application/x-ndjson", headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
 
 
 # ==========================================

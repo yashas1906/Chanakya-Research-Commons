@@ -284,7 +284,7 @@ export function normalizeComments(raw: unknown, postId: string): Comment[] {
 
 /* ------------------------------- assistant ------------------------------ */
 
-const DEGRADED = /^(local llm unavailable|ollama error|model returned an empty|no relevant passages)/i;
+const DEGRADED = /^(local llm unavailable|ollama error|model returned an empty)/i;
 
 export function normalizeAssistant(raw: unknown, question: string): AssistantAnswer {
   const o = isRecord(raw) ? raw : {};
@@ -305,7 +305,7 @@ export function normalizeAssistant(raw: unknown, question: string): AssistantAns
     question: str(o.question, question),
     answer,
     citations,
-    degraded: DEGRADED.test(answer.trim()),
+    degraded: o.degraded === true || DEGRADED.test(answer.trim()),
   };
 }
 

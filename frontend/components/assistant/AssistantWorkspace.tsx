@@ -3,24 +3,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowUp, Library, Plus, Sparkles, Square, TriangleAlert, X } from "lucide-react";
+import { ArrowUp, Info, Library, Plus, RotateCw, Sparkles, Square, X } from "lucide-react";
 import { AnswerText } from "@/components/assistant/AnswerText";
 import { SourcesPanel } from "@/components/assistant/EvidenceInspector";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/States";
-import { askAssistant, getPaper, isAbort } from "@/lib/api";
+import { getPaper, isAbort, streamAssistant } from "@/lib/api";
 import { cx } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { useAuth } from "@/context/AuthContext";
-import type { AssistantAnswer } from "@/types/crc";
+import type { Citation } from "@/types/crc";
 
 interface Turn {
   id: number;
   question: string;
   libraryOnly: boolean;
   paperId: string | null;
-  status: "pending" | "done" | "error";
-  result?: AssistantAnswer;
+  /** pending: searching · streaming: sources in, answer being written · done · error */
+  status: "pending" | "streaming" | "done" | "error";
+  answer: string;
+  citations: Citation[];
+  /** The model didn't answer, so the text was assembled from the retrieved passages. */
+  degraded: boolean;
   error?: unknown;
 }
 
@@ -29,6 +33,16 @@ const SUGGESTIONS = [
   "How does federated learning protect privacy?",
   "What methods exist for detecting anomalies in citation data?",
 ];
+
+function Dots() {
+  return (
+    <span className="flex gap-1" aria-hidden>
+      {[0, 1, 2].map((i) => (
+        <span key={i} className="h-1.5 w-1.5 animate-pulse rounded-full bg-saffron-500" style={{ animationDelay: `${i * 160}ms` }} />
+      ))}
+    </span>
+  );
+}
 
 function AssistantMark({ className }: { className?: string }) {
   return (
@@ -54,7 +68,7 @@ export function AssistantWorkspace() {
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  const pendingTurn = turns.find((t) => t.status === "pending");
+  const pendingTurn = turns.find((t) => t.status === "pending" || t.status === "streaming");
 
   useEffect(() => {
     setPaperScope(searchParams.get("paper"));
@@ -93,19 +107,23 @@ export function AssistantWorkspace() {
       const id = ++idRef.current;
       const ctrl = new AbortController();
       abortRef.current = ctrl;
-      setTurns((prev) => [...prev, { id, question: text, libraryOnly, paperId: paperScope, status: "pending" }]);
+      const patch = (fn: (t: Turn) => Turn) => setTurns((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
+      setTurns((prev) => [...prev, { id, question: text, libraryOnly, paperId: paperScope, status: "pending", answer: "", citations: [], degraded: false }]);
       setFocus(null);
       setQuestion("");
       try {
-        const result = await askAssistant(text, libraryOnly, ctrl.signal, paperScope);
-        setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, status: "done", result } : t)));
-        // When the model is down the passages are all we have, so show them straight away.
-        if (result.degraded && result.citations.length > 0) setOpenSources((prev) => new Set(prev).add(id));
+        await streamAssistant(text, libraryOnly, ctrl.signal, paperScope, {
+          onMeta: (citations) => patch((t) => ({ ...t, status: "streaming", citations })),
+          onToken: (piece) => patch((t) => ({ ...t, status: "streaming", answer: t.answer + piece })),
+          onReplace: (answer) => patch((t) => ({ ...t, answer })),
+          onDone: ({ degraded }) => patch((t) => ({ ...t, status: "done", degraded })),
+        });
       } catch (e) {
         if (isAbort(e)) {
-          setTurns((prev) => prev.filter((t) => t.id !== id));
+          // Stopping keeps whatever was already written; an empty turn is dropped.
+          setTurns((prev) => prev.flatMap((t) => (t.id !== id ? [t] : t.answer ? [{ ...t, status: "done" as const }] : [])));
         } else {
-          setTurns((prev) => prev.map((t) => (t.id === id ? { ...t, status: "error", error: e } : t)));
+          patch((t) => ({ ...t, status: "error", error: e }));
         }
       } finally {
         abortRef.current = null;
@@ -117,6 +135,14 @@ export function AssistantWorkspace() {
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns.length, pendingTurn?.status]);
+
+  // Follow the text as it is written, unless the reader has scrolled up to look at something.
+  const streamedLength = pendingTurn?.answer.length ?? 0;
+  useEffect(() => {
+    if (!streamedLength) return;
+    const nearBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 260;
+    if (nearBottom) endRef.current?.scrollIntoView({ block: "end" });
+  }, [streamedLength]);
 
   const toggleSources = (id: number) =>
     setOpenSources((prev) => {
@@ -250,13 +276,8 @@ export function AssistantWorkspace() {
                 {t.status === "pending" && (
                   <div role="status" aria-live="polite" className="space-y-3">
                     <p className="flex items-center gap-2 text-meta text-stone-500">
-                      <span className="flex gap-1" aria-hidden>
-                        {[0, 1, 2].map((i) => (
-                          <span key={i} className="h-1.5 w-1.5 animate-pulse rounded-full bg-saffron-500" style={{ animationDelay: `${i * 160}ms` }} />
-                        ))}
-                      </span>
-                      Searching the library and writing an answer · <span className="num">{elapsed}s</span>
-                      {elapsed > 15 && <span className="hidden sm:inline"> — local models can take up to a minute.</span>}
+                      <Dots />
+                      Searching the library · <span className="num">{elapsed}s</span>
                     </p>
                     <div className="space-y-2.5">
                       <Skeleton className="h-4 w-full" />
@@ -272,32 +293,51 @@ export function AssistantWorkspace() {
                   </div>
                 )}
 
-                {t.status === "done" && t.result && (
+                {(t.status === "streaming" || t.status === "done") && (
                   <>
-                    {t.result.degraded ? (
-                      <div role="alert" className="flex items-start gap-2.5 rounded-xl border border-terracotta-200 bg-terracotta-50 px-4 py-3 text-meta leading-relaxed text-terracotta-700">
-                        <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-                        <span>
-                          {t.result.answer || "The local model returned nothing."}{" "}
-                          {t.result.citations.length > 0 && "The passages it retrieved are listed below."}
+                    {t.degraded && (
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-xl border border-saffron-200 bg-saffron-50 px-3.5 py-2.5 text-meta text-stone-700">
+                        <span className="flex min-w-0 flex-1 items-start gap-2">
+                          <Info className="mt-0.5 h-4 w-4 shrink-0 text-saffron-600" />
+                          The language model didn’t respond in time, so this answer is assembled directly from the sources below.
                         </span>
+                        <button type="button" onClick={() => ask(t.question)} className="inline-flex items-center gap-1.5 font-semibold text-brand-600 hover:text-brand-700">
+                          <RotateCw className="h-3.5 w-3.5" /> Try again
+                        </button>
                       </div>
-                    ) : (
+                    )}
+
+                    {t.answer ? (
                       <AnswerText
-                        text={t.result.answer}
-                        citations={t.result.citations}
+                        text={t.status === "streaming" ? `${t.answer}▍` : t.answer}
+                        citations={t.citations}
                         activeRef={focus?.turn === t.id ? focus.ref : null}
                         onSelect={(n) => selectRef(t.id, n)}
                       />
+                    ) : (
+                      <div role="status" aria-live="polite" className="space-y-3">
+                        <p className="flex items-center gap-2 text-meta text-stone-500">
+                          <Dots />
+                          Reading {t.citations.length} {t.citations.length === 1 ? "passage" : "passages"} and writing an answer · <span className="num">{elapsed}s</span>
+                          {elapsed > 20 && <span className="hidden sm:inline"> — the first answer after startup is the slowest.</span>}
+                        </p>
+                        <div className="space-y-2.5">
+                          <Skeleton className="h-4 w-full" />
+                          <Skeleton className="h-4 w-10/12" />
+                        </div>
+                      </div>
                     )}
-                    <SourcesPanel
-                      citations={t.result.citations}
-                      answer={t.result.answer}
-                      activeRef={focus?.turn === t.id ? focus.ref : null}
-                      expanded={openSources.has(t.id)}
-                      onToggle={() => toggleSources(t.id)}
-                      onSelect={(n) => selectRef(t.id, n)}
-                    />
+
+                    {t.citations.length > 0 && (
+                      <SourcesPanel
+                        citations={t.citations}
+                        answer={t.answer}
+                        activeRef={focus?.turn === t.id ? focus.ref : null}
+                        expanded={openSources.has(t.id)}
+                        onToggle={() => toggleSources(t.id)}
+                        onSelect={(n) => selectRef(t.id, n)}
+                      />
+                    )}
                   </>
                 )}
               </div>

@@ -31,6 +31,7 @@ import type {
   AuthUser,
   AnomalyFeed,
   AssistantAnswer,
+  Citation,
   Collection,
   Comment,
   FeedPost,
@@ -569,6 +570,102 @@ export async function askAssistant(
     signal,
   });
   return normalizeAssistant(raw, question);
+}
+
+export interface AssistantStreamHandlers {
+  /** Sources arrive first, before any text. */
+  onMeta: (citations: Citation[]) => void;
+  /** A piece of the answer as the model writes it. */
+  onToken: (text: string) => void;
+  /** Replaces the whole answer (refusals and the model-free fallback). */
+  onReplace: (answer: string) => void;
+  onDone: (info: { degraded: boolean; reason?: string }) => void;
+}
+
+/**
+ * Streams an answer from POST /assistant/ask/stream (newline-delimited JSON). Backends without that
+ * route fall back to the single-response endpoint so the page keeps working.
+ */
+export async function streamAssistant(
+  question: string,
+  libraryOnly: boolean,
+  signal: AbortSignal,
+  paperId: string | null,
+  handlers: AssistantStreamHandlers,
+): Promise<void> {
+  const path = "/assistant/ask/stream";
+  let token: string | null = null;
+  try {
+    token = window.localStorage.getItem("crc.auth.token");
+  } catch {
+    token = null;
+  }
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ question, query: question, library_only: libraryOnly, paper_id: paperId ?? undefined }),
+      signal,
+      cache: "no-store",
+    });
+  } catch (e) {
+    if (isAbort(e)) throw e;
+    throw new ApiError("network", `Can't reach the CRC API at ${API_ORIGIN}. Start the backend (uvicorn backend.main:app --port 8000) and retry.`, path);
+  }
+
+  if (res.status === 404 || res.status === 405) {
+    const full = await askAssistant(question, libraryOnly, signal, paperId);
+    handlers.onMeta(full.citations);
+    handlers.onReplace(full.answer);
+    handlers.onDone({ degraded: full.degraded });
+    return;
+  }
+  if (!res.ok || !res.body) {
+    const detail = await safeDetail(res);
+    throw new ApiError(res.status === 401 ? "unauthorized" : res.status === 403 ? "forbidden" : "http", detail ?? `Request failed (${res.status}).`, path, res.status);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finished = false;
+  const dispatch = (line: string) => {
+    if (!line.trim()) return;
+    let event: unknown;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return;
+    }
+    if (!isRecord(event)) return;
+    if (event.type === "meta") handlers.onMeta(normalizeAssistant({ citations: event.citations }, question).citations);
+    else if (event.type === "token" && typeof event.text === "string") handlers.onToken(event.text);
+    else if (event.type === "replace" && typeof event.answer === "string") handlers.onReplace(event.answer);
+    else if (event.type === "done") {
+      finished = true;
+      handlers.onDone({ degraded: event.degraded === true, reason: typeof event.reason === "string" ? event.reason : undefined });
+    }
+  };
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      lines.forEach(dispatch);
+    }
+    buffer += decoder.decode();
+    dispatch(buffer);
+  } catch (e) {
+    if (isAbort(e)) throw e;
+    throw new ApiError("network", "The connection to the assistant dropped before the answer finished.", path);
+  }
+  if (!finished) handlers.onDone({ degraded: false });
 }
 
 /* -------------------------------- analytics ----------------------------- */

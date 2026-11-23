@@ -8,7 +8,15 @@ import { citedRefs } from "@/components/assistant/AnswerText";
 import { cx, fmtPct } from "@/lib/format";
 import type { Citation } from "@/types/crc";
 
-function Passage({ text }: { text: string }) {
+/** Older chunks were cut at fixed offsets and start or end mid-word; show them tidily. */
+function tidy(text: string): string {
+  let t = text.trim();
+  if (t && /^[a-z]/.test(t) && t.slice(0, 25).includes(" ")) t = `…${t.slice(t.indexOf(" ")).trimStart()}`;
+  return t;
+}
+
+function Passage({ text: raw }: { text: string }) {
+  const text = tidy(raw);
   const [open, setOpen] = useState(false);
   const long = text.length > 320;
   return (
@@ -75,7 +83,7 @@ export function SourcesPanel({
   }, [activeRef, expanded]);
 
   if (citations.length === 0) {
-    return <p className="text-meta text-stone-500">No passages in the library were close enough to this question to ground an answer.</p>;
+    return <p className="text-meta text-stone-500">No passages in the library were close enough to ground an answer. Try more specific terms, or remove the paper scope.</p>;
   }
 
   return (
