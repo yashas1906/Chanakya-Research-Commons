@@ -1854,6 +1854,26 @@ def ask_research_assistant(req: AskAssistantRequest):
         passages = cur.fetchall()
         cur.close()
 
+    if not passages and req.paper_id:
+        # Fallback to the paper's abstract if chunk index has no rows for this paper
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT paper_id, canonical_title, abstract, publication_year FROM papers WHERE paper_id = %s::uuid",
+                (str(req.paper_id),),
+            )
+            p_row = cur.fetchone()
+            cur.close()
+            if p_row and p_row.get("abstract"):
+                passages = [{
+                    "chunk_id": str(p_row["paper_id"]),
+                    "chunk_text": p_row["abstract"],
+                    "paper_id": p_row["paper_id"],
+                    "canonical_title": p_row["canonical_title"],
+                    "publication_year": p_row["publication_year"],
+                    "similarity": 1.0,
+                }]
+
     if not passages:
         return {
             "question": req.question,
@@ -1861,8 +1881,13 @@ def ask_research_assistant(req: AskAssistantRequest):
             "citations": []
         }
 
-    # Similarity floor: decline to hallucinate if confidence is low (< 0.32)
-    relevant_passages = [p for p in passages if float(p.get("similarity", 0.0)) >= 0.32]
+    # Similarity floor: decline to hallucinate if confidence is low.
+    # When scoped to a specific paper, passages are already explicitly targeted to that paper.
+    if req.paper_id:
+        relevant_passages = passages
+    else:
+        relevant_passages = [p for p in passages if float(p.get("similarity", 0.0)) >= 0.25]
+
     if not relevant_passages:
         return {
             "question": req.question,
@@ -1884,7 +1909,7 @@ def ask_research_assistant(req: AskAssistantRequest):
         resp = requests.post(
             f"{OLLAMA_BASE_URL}/api/generate",
             json={"model": OLLAMA_MODEL, "prompt": prompt, "stream": False},
-            timeout=60,
+            timeout=120,
         )
         answer_text = resp.json().get("response", "Model returned an empty response.") if resp.status_code == 200 else f"Ollama error: {resp.status_code}"
     except Exception as exc:
