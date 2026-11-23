@@ -71,7 +71,9 @@ def test_full_pipeline():
 
     print("Testing Grounded Assistant Refusal Gate (Trap Query)...")
     ask_resp = client.post("/api/assistant/ask", json={
-        "question": "What is the secret recipe for traditional sourdough bread in Roman military camps?"
+        "question": "What is the secret recipe for traditional sourdough bread in Roman military camps?",
+        # Library-only keeps the strict refusal; without it the assistant answers open questions from general knowledge.
+        "library_only": True,
     })
     assert ask_resp.status_code == 200
     resp_body = ask_resp.json()

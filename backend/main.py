@@ -1808,6 +1808,43 @@ def _clean_passage(text: str) -> str:
     return t.strip()
 
 
+_GREETING_RE = re.compile(r"^\s*(hi+|hello+|hey+|hiya|yo|namaste|good\s+(morning|afternoon|evening)|greetings)(\s+(there|assistant|bot|crc))?\s*[!.?]*\s*$", re.I)
+_THANKS_RE = re.compile(r"^\s*(thanks?( you)?( so much)?|thx|ty|cheers|great|nice|cool|ok(ay)?|got it|perfect|awesome)\s*[!.]*\s*$", re.I)
+_ABOUT_RE = re.compile(r"^\s*(who|what)\s+are\s+you\b|what\s+can\s+you\s+do|how\s+(do\s+you|does\s+this)\s+work|^\s*help\s*[!?.]*\s*$|how\s+can\s+you\s+help", re.I)
+
+_EXAMPLE_QUESTIONS = (
+    "“What are the key applications and challenges of graph neural networks?”, "
+    "“How does federated learning protect privacy?” or “What methods exist for detecting anomalies in citation data?”"
+)
+
+
+def _small_talk_reply(question: str) -> Optional[str]:
+    """Greetings, thanks and 'what can you do' need no retrieval (and no model), so answer them directly."""
+    q = (question or "").strip()
+    if not q:
+        return None
+    if _GREETING_RE.match(q):
+        return (
+            "Hi! I'm the Chanakya Research Commons assistant. Ask me about a research topic and I'll answer from the papers "
+            f"in the library, with citations you can check. For example: {_EXAMPLE_QUESTIONS}"
+        )
+    if _THANKS_RE.match(q):
+        return "You're welcome! Ask another research question whenever you like."
+    if _ABOUT_RE.search(q):
+        return (
+            "I answer research questions using only the papers in the Chanakya library, and every claim carries a citation you can open. "
+            "You can ask about a topic across the whole library, or open a paper and ask about that paper alone "
+            f"(for example “Summarize this paper’s main contribution”). Try {_EXAMPLE_QUESTIONS}"
+        )
+    return None
+
+
+_REFUSAL = (
+    "Insufficient evidence in the Chanakya University repository to answer this query. "
+    "Try rephrasing with specific research terms (a method, topic or paper), or ask about a subject the library covers."
+)
+
+
 def _retrieve_for_assistant(req: AskAssistantRequest):
     """Returns (passages, refusal_message). `refusal_message` is set when there is nothing to answer from."""
     q_vec = vec_literal(req.question)
@@ -1869,7 +1906,7 @@ def _retrieve_for_assistant(req: AskAssistantRequest):
     # Similarity floor: decline to hallucinate if confidence is low (< 0.32)
     relevant = [p for p in passages if float(p.get("similarity", 0.0)) >= 0.32]
     if not relevant:
-        return [], "Insufficient evidence in the Chanakya University repository to answer this query."
+        return [], _REFUSAL
     return relevant, None
 
 
@@ -1899,6 +1936,26 @@ def _build_prompt(question: str, passages) -> str:
         "if the passages do not answer the question, say so in one sentence.\n\n"
         "Passages:\n" + "\n\n".join(blocks) + f"\n\nQuestion: {question}\nAnswer:"
     )
+
+
+def _general_prompt(question: str) -> str:
+    return (
+        "You are the Chanakya Research Commons Assistant. The university library has no passages on this question, "
+        "so answer from your general knowledge. Be accurate and concise (under about 150 words) in plain language. "
+        "If you are not sure, say so. Do not cite papers, authors or references, and do not use [1]-style markers.\n\n"
+        f"Question: {question}\nAnswer:"
+    )
+
+
+def _general_allowed(req: AskAssistantRequest) -> bool:
+    """Open questions may fall back to the model's own knowledge; paper-scoped or library-only ones may not."""
+    return not req.library_only and not req.paper_id
+
+
+_GENERAL_UNAVAILABLE = (
+    "The library has nothing on this topic and the language model isn't responding right now, so I can't answer it. "
+    "Check that Ollama is running, then try again."
+)
 
 
 def _extractive_answer(question: str, passages) -> str:
@@ -1948,9 +2005,25 @@ def ask_research_assistant(req: AskAssistantRequest):
     when retrieval confidence is insufficient. If the local model is unavailable the answer is
     assembled from the best-matching sentences of the retrieved passages.
     """
+    chat = _small_talk_reply(req.question)
+    if chat:
+        return {"question": req.question, "answer": chat, "citations": [], "mode": "chat"}
     passages, refusal = _retrieve_for_assistant(req)
     if refusal:
-        return {"question": req.question, "answer": refusal, "citations": []}
+        if not _general_allowed(req):
+            return {"question": req.question, "answer": refusal, "citations": [], "mode": "grounded"}
+        try:
+            resp = requests.post(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                json=_ollama_payload(_general_prompt(req.question), False),
+                timeout=OLLAMA_TIMEOUT,
+            )
+            text = (resp.json().get("response") or "").strip() if resp.status_code == 200 else ""
+        except Exception:
+            text = ""
+        if not text:
+            return {"question": req.question, "answer": _GENERAL_UNAVAILABLE, "citations": [], "mode": "grounded"}
+        return {"question": req.question, "answer": text, "citations": [], "mode": "general"}
 
     try:
         resp = requests.post(
@@ -1972,6 +2045,7 @@ def ask_research_assistant(req: AskAssistantRequest):
         "answer": answer_text,
         "degraded": degraded,
         "degraded_reason": reason,
+        "mode": "grounded",
         "citations": _citations_payload(passages),
     }
 
@@ -1979,7 +2053,7 @@ def ask_research_assistant(req: AskAssistantRequest):
 @app.post("/api/assistant/ask/stream")
 def ask_research_assistant_stream(req: AskAssistantRequest):
     """
-    Same contract as /api/assistant/ask but streamed as newline-delimited JSON so the page can show
+    Same contract as /api/assistant/ask (including the general-knowledge fallback when the library has nothing) but streamed as newline-delimited JSON so the page can show
     sources immediately and the answer as it is written:
       {"type":"meta","citations":[...]}  ->  {"type":"token","text":"..."} *  ->  {"type":"done","degraded":bool}
     A {"type":"replace","answer":"..."} event overwrites the text (refusals and the model-free fallback).
@@ -1988,11 +2062,49 @@ def ask_research_assistant_stream(req: AskAssistantRequest):
         return (json.dumps(obj, default=str) + "\n").encode("utf-8")
 
     def generate():
-        passages, refusal = _retrieve_for_assistant(req)
+        chat = _small_talk_reply(req.question)
+        passages, refusal = ([], None) if chat else _retrieve_for_assistant(req)
+        if chat:
+            yield emit({"type": "meta", "citations": []})
+            yield emit({"type": "replace", "answer": chat})
+            yield emit({"type": "done", "degraded": False})
+            return
         if refusal:
             yield emit({"type": "meta", "citations": []})
-            yield emit({"type": "replace", "answer": refusal})
-            yield emit({"type": "done", "degraded": False})
+            if not _general_allowed(req):
+                yield emit({"type": "replace", "answer": refusal})
+                yield emit({"type": "done", "degraded": False})
+                return
+            # Nothing in the library: let the model answer from general knowledge, and say that it did.
+            produced = 0
+            try:
+                with requests.post(
+                    f"{OLLAMA_BASE_URL}/api/generate",
+                    json=_ollama_payload(_general_prompt(req.question), True),
+                    stream=True,
+                    timeout=(10, OLLAMA_TIMEOUT),
+                ) as resp:
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"Ollama returned HTTP {resp.status_code}")
+                    for line in resp.iter_lines():
+                        if not line:
+                            continue
+                        chunk = json.loads(line)
+                        piece = chunk.get("response") or ""
+                        if piece:
+                            if produced == 0:
+                                yield emit({"type": "mode", "mode": "general"})
+                            produced += len(piece)
+                            yield emit({"type": "token", "text": piece})
+                        if chunk.get("done"):
+                            break
+                if produced == 0:
+                    raise RuntimeError("the model returned an empty response")
+                yield emit({"type": "done", "degraded": False})
+            except Exception as exc:
+                if produced == 0:
+                    yield emit({"type": "replace", "answer": _GENERAL_UNAVAILABLE})
+                yield emit({"type": "done", "degraded": False, "reason": str(exc)})
             return
 
         yield emit({"type": "meta", "citations": _citations_payload(passages)})

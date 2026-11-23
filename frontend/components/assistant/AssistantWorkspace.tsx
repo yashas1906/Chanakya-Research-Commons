@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowUp, Info, Library, Plus, RotateCw, Sparkles, Square, X } from "lucide-react";
+import { createPortal } from "react-dom";
+import { ArrowUp, Globe, History, Info, Library, Plus, RotateCw, Sparkles, Square, X } from "lucide-react";
 import { AnswerText } from "@/components/assistant/AnswerText";
+import { ChatHistory } from "@/components/assistant/ChatHistory";
 import { SourcesPanel } from "@/components/assistant/EvidenceInspector";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { ErrorState } from "@/components/ui/States";
@@ -12,6 +14,7 @@ import { getPaper, isAbort, streamAssistant } from "@/lib/api";
 import { cx } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { useAuth } from "@/context/AuthContext";
+import { historyKey, loadConversations, newConversationId, saveConversations, upsertConversation, type Conversation, type SavedTurn } from "@/lib/chat-history";
 import type { Citation } from "@/types/crc";
 
 interface Turn {
@@ -25,6 +28,8 @@ interface Turn {
   citations: Citation[];
   /** The model didn't answer, so the text was assembled from the retrieved passages. */
   degraded: boolean;
+  /** The library had nothing, so this is the model's general knowledge, not cited research. */
+  general: boolean;
   error?: unknown;
 }
 
@@ -63,10 +68,39 @@ export function AssistantWorkspace() {
   const [focus, setFocus] = useState<{ turn: number; ref: number } | null>(null);
   const [openSources, setOpenSources] = useState<Set<number>>(() => new Set());
   const [elapsed, setElapsed] = useState(0);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [chatId, setChatId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+  const loadedKeyRef = useRef<string | null>(null);
+  const savedSigRef = useRef("");
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setHistoryOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [historyOpen]);
+
+  const storageKey = historyKey(user?.user_id);
+  const userId = user?.user_id ?? null;
+
+  // Load this member's saved chats when they sign in, and start from a clean page when the member changes.
+  useEffect(() => {
+    abortRef.current?.abort();
+    setConversations(userId ? loadConversations(storageKey) : []);
+    loadedKeyRef.current = userId ? storageKey : null;
+    setTurns([]);
+    setChatId(null);
+    setFocus(null);
+    setOpenSources(new Set());
+    savedSigRef.current = "";
+  }, [userId, storageKey]);
 
   const pendingTurn = turns.find((t) => t.status === "pending" || t.status === "streaming");
 
@@ -88,6 +122,23 @@ export function AssistantWorkspace() {
 
   useEffect(() => () => abortRef.current?.abort(), []);
 
+  // Save the conversation once nothing is in flight. Finished answers only; errors and empty turns are skipped.
+  useEffect(() => {
+    if (!chatId || pendingTurn || loadedKeyRef.current !== storageKey) return;
+    const done: SavedTurn[] = turns
+      .filter((t) => t.status === "done" && t.answer)
+      .map((t) => ({ id: t.id, question: t.question, libraryOnly: t.libraryOnly, paperId: t.paperId, answer: t.answer, citations: t.citations, degraded: t.degraded, general: t.general }));
+    if (done.length === 0) return;
+    const sig = `${chatId}:${done.map((t) => `${t.id}.${t.answer.length}`).join(",")}`;
+    if (sig === savedSigRef.current) return;
+    savedSigRef.current = sig;
+    setConversations((prev) => {
+      const next = upsertConversation(prev, chatId, done);
+      saveConversations(storageKey, next);
+      return next;
+    });
+  }, [turns, chatId, pendingTurn, storageKey]);
+
   // Grow the textarea with its content, like a chat box.
   useEffect(() => {
     const el = inputRef.current;
@@ -104,11 +155,12 @@ export function AssistantWorkspace() {
         promptLogin("login");
         return;
       }
+      if (!chatId) setChatId(newConversationId());
       const id = ++idRef.current;
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       const patch = (fn: (t: Turn) => Turn) => setTurns((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
-      setTurns((prev) => [...prev, { id, question: text, libraryOnly, paperId: paperScope, status: "pending", answer: "", citations: [], degraded: false }]);
+      setTurns((prev) => [...prev, { id, question: text, libraryOnly, paperId: paperScope, status: "pending", answer: "", citations: [], degraded: false, general: false }]);
       setFocus(null);
       setQuestion("");
       try {
@@ -116,6 +168,7 @@ export function AssistantWorkspace() {
           onMeta: (citations) => patch((t) => ({ ...t, status: "streaming", citations })),
           onToken: (piece) => patch((t) => ({ ...t, status: "streaming", answer: t.answer + piece })),
           onReplace: (answer) => patch((t) => ({ ...t, answer })),
+          onGeneral: () => patch((t) => ({ ...t, status: "streaming", general: true })),
           onDone: ({ degraded }) => patch((t) => ({ ...t, status: "done", degraded })),
         });
       } catch (e) {
@@ -129,7 +182,7 @@ export function AssistantWorkspace() {
         abortRef.current = null;
       }
     },
-    [libraryOnly, paperScope, user, promptLogin],
+    [libraryOnly, paperScope, user, promptLogin, chatId],
   );
 
   useEffect(() => {
@@ -154,13 +207,46 @@ export function AssistantWorkspace() {
     setFocus((cur) => (cur?.turn === turn && cur.ref === ref ? null : { turn, ref }));
     setOpenSources((prev) => new Set(prev).add(turn));
   };
-  const newChat = () => {
+  const resetView = () => {
     abortRef.current?.abort();
     setTurns([]);
+    setChatId(null);
     setFocus(null);
     setOpenSources(new Set());
     setQuestion("");
+    savedSigRef.current = "";
+    setHistoryOpen(false);
+  };
+  const newChat = () => {
+    resetView();
     inputRef.current?.focus();
+  };
+  const openChat = (id: string) => {
+    const chat = conversations.find((c) => c.id === id);
+    if (!chat) return;
+    abortRef.current?.abort();
+    setTurns(chat.turns.map((t) => ({ ...t, status: "done" as const })));
+    idRef.current = Math.max(idRef.current, ...chat.turns.map((t) => t.id));
+    setChatId(id);
+    setFocus(null);
+    setOpenSources(new Set());
+    setQuestion("");
+    setHistoryOpen(false);
+    savedSigRef.current = `${id}:${chat.turns.map((t) => `${t.id}.${t.answer.length}`).join(",")}`;
+    window.scrollTo({ top: 0 });
+  };
+  const deleteChat = (id: string) => {
+    setConversations((prev) => {
+      const next = prev.filter((c) => c.id !== id);
+      saveConversations(storageKey, next);
+      return next;
+    });
+    if (id === chatId) resetView();
+  };
+  const clearHistory = () => {
+    setConversations([]);
+    saveConversations(storageKey, []);
+    resetView();
   };
 
   const empty = turns.length === 0;
@@ -214,18 +300,17 @@ export function AssistantWorkspace() {
           )}
         </div>
       </form>
-      <p className="px-2 text-center text-label text-stone-400">Answers come from a local model using only retrieved library passages. Check the sources.</p>
+      <p className="px-2 text-center text-label text-stone-400">Answers cite library papers when they cover the topic; otherwise the model answers from general knowledge and says so. Tick “Chanakya Library only” to stay strictly within the library.</p>
     </div>
   );
 
-  if (empty) {
-    return (
+  const mainContent = empty ? (
       <div className="mx-auto flex min-h-[calc(100dvh-9rem)] w-full max-w-[720px] flex-col justify-center gap-8 pb-10">
         <div className="text-center">
           <AssistantMark className="mx-auto h-12 w-12 text-[24px]" />
           <h1 className="mt-5 font-display text-[34px] leading-tight text-ink sm:text-[40px]">What would you like to know?</h1>
           <p className="mx-auto mt-3 max-w-lg text-body leading-relaxed text-stone-600">
-            Ask anything about Chanakya’s research. Every answer is grounded in the library’s papers, with sources you can check.
+            Ask about Chanakya’s research and get answers with sources you can check. For topics the library doesn’t cover, the model answers from general knowledge and tells you so.
           </p>
         </div>
         {composer}
@@ -244,10 +329,7 @@ export function AssistantWorkspace() {
           ))}
         </ul>
       </div>
-    );
-  }
-
-  return (
+  ) : (
     <div className="mx-auto w-full max-w-[760px]">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="font-display text-[20px] text-ink">Research assistant</h1>
@@ -307,6 +389,12 @@ export function AssistantWorkspace() {
                       </div>
                     )}
 
+                    {t.general && (
+                      <p className="inline-flex items-center gap-1.5 rounded-full border border-stone-200 bg-sunken px-3 py-1 text-label font-semibold text-stone-600">
+                        <Globe className="h-3.5 w-3.5" /> General knowledge · not from the library
+                      </p>
+                    )}
+
                     {t.answer ? (
                       <AnswerText
                         text={t.status === "streaming" ? `${t.answer}▍` : t.answer}
@@ -325,6 +413,16 @@ export function AssistantWorkspace() {
                           <Skeleton className="h-4 w-full" />
                           <Skeleton className="h-4 w-10/12" />
                         </div>
+                      </div>
+                    )}
+
+                    {t.status === "done" && t.answer && t.citations.length === 0 && !t.general && (
+                      <div className="flex flex-wrap gap-2 pt-1" aria-label="Suggested questions">
+                        {SUGGESTIONS.map((suggestion) => (
+                          <button key={suggestion} type="button" onClick={() => ask(suggestion)} className="inline-flex items-center gap-1.5 rounded-full border border-stone-200 bg-paper px-3.5 py-1.5 text-left text-meta font-medium text-stone-700 transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-800">
+                            <Sparkles className="h-3.5 w-3.5 shrink-0 text-saffron-500" /> {suggestion}
+                          </button>
+                        ))}
                       </div>
                     )}
 
@@ -348,6 +446,44 @@ export function AssistantWorkspace() {
       </section>
 
       <div className="sticky bottom-0 -mx-4 bg-gradient-to-t from-canvas via-canvas to-transparent px-4 pb-4 pt-8 sm:-mx-6 sm:px-6">{composer}</div>
+    </div>
+  );
+
+  const history = (
+    <ChatHistory conversations={conversations} activeId={chatId} onSelect={openChat} onNew={newChat} onDelete={deleteChat} onClear={clearHistory} onClose={historyOpen ? () => setHistoryOpen(false) : undefined} />
+  );
+
+  return (
+    <div className="xl:grid xl:grid-cols-[264px_minmax(0,1fr)] xl:gap-8">
+      {user && (
+        <>
+          {/* Desktop: side panel */}
+          <aside aria-label="Chat history" className="sticky top-[88px] hidden h-[calc(100dvh-7rem)] self-start overflow-hidden rounded-2xl border border-stone-200 bg-paper shadow-card xl:block">
+            {history}
+          </aside>
+          {/* Smaller screens: drawer opened from the button below (portalled so it sits above the sticky header) */}
+          {mounted &&
+            createPortal(
+              <div className="xl:hidden">
+                {historyOpen && <div aria-hidden className="fixed inset-0 z-[60] animate-fade bg-ink/50" onClick={() => setHistoryOpen(false)} />}
+                <aside
+                  aria-label="Chat history"
+                  aria-hidden={!historyOpen}
+                  className={cx("fixed inset-y-0 left-0 z-[70] w-[300px] max-w-[85vw] -translate-x-full bg-paper shadow-pop transition-transform duration-200 ease-out", historyOpen && "translate-x-0")}
+                >
+                  {historyOpen && history}
+                </aside>
+              </div>,
+              document.body,
+            )}
+          <div className="mb-3 flex justify-end xl:hidden">
+            <button type="button" onClick={() => setHistoryOpen(true)} className="btn h-9">
+              <History className="h-4 w-4" /> History{conversations.length > 0 && <span className="num text-stone-400">{conversations.length}</span>}
+            </button>
+          </div>
+        </>
+      )}
+      <div className="min-w-0">{mainContent}</div>
     </div>
   );
 }

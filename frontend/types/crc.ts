@@ -279,6 +279,8 @@ export interface AssistantAnswer {
   citations: Citation[];
   /** True when the backend could not reach Ollama and only passages are real. */
   degraded: boolean;
+  /** "general" = the library had nothing and the model answered from its own knowledge. */
+  mode?: "grounded" | "general";
 }
 
 /* ------------------------------------------------------------------ */

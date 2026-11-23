@@ -306,6 +306,7 @@ export function normalizeAssistant(raw: unknown, question: string): AssistantAns
     answer,
     citations,
     degraded: o.degraded === true || DEGRADED.test(answer.trim()),
+    mode: o.mode === "general" ? "general" : "grounded",
   };
 }
 

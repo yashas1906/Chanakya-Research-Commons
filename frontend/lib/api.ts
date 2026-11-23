@@ -579,6 +579,8 @@ export interface AssistantStreamHandlers {
   onToken: (text: string) => void;
   /** Replaces the whole answer (refusals and the model-free fallback). */
   onReplace: (answer: string) => void;
+  /** The library had nothing, so the model is answering from general knowledge. */
+  onGeneral: () => void;
   onDone: (info: { degraded: boolean; reason?: string }) => void;
 }
 
@@ -620,6 +622,7 @@ export async function streamAssistant(
   if (res.status === 404 || res.status === 405) {
     const full = await askAssistant(question, libraryOnly, signal, paperId);
     handlers.onMeta(full.citations);
+    if (full.mode === "general") handlers.onGeneral();
     handlers.onReplace(full.answer);
     handlers.onDone({ degraded: full.degraded });
     return;
@@ -643,6 +646,7 @@ export async function streamAssistant(
     }
     if (!isRecord(event)) return;
     if (event.type === "meta") handlers.onMeta(normalizeAssistant({ citations: event.citations }, question).citations);
+    else if (event.type === "mode" && event.mode === "general") handlers.onGeneral();
     else if (event.type === "token" && typeof event.text === "string") handlers.onToken(event.text);
     else if (event.type === "replace" && typeof event.answer === "string") handlers.onReplace(event.answer);
     else if (event.type === "done") {
