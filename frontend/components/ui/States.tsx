@@ -18,7 +18,7 @@ export function EmptyState({
   return (
     <div className={cx("flex flex-col items-center px-6 py-10 text-center", className)}>
       <div className="mb-3 text-stone-300">{icon ?? <Inbox className="h-6 w-6" strokeWidth={1.5} />}</div>
-      <p className="font-serif text-[17px] leading-snug text-stone-700">{title}</p>
+      <p className="font-display text-[17px] leading-snug text-stone-700">{title}</p>
       {hint && <p className="mt-1 max-w-sm text-meta leading-relaxed text-stone-500">{hint}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
@@ -60,7 +60,7 @@ export function ErrorState({
         className={cx("mb-3 h-6 w-6", kind === "unsupported" ? "text-stone-300" : "text-terracotta-500")}
         strokeWidth={1.5}
       />
-      <p className="font-serif text-[17px] leading-snug text-stone-800">{title}</p>
+      <p className="font-display text-[17px] leading-snug text-stone-800">{title}</p>
       <p className="mt-1 max-w-md text-meta leading-relaxed text-stone-500">{describeError(error)}</p>
       {error instanceof ApiError && kind === "unsupported" && (
         <code className="mt-2 rounded bg-sunken px-1.5 py-0.5 font-mono text-meta text-stone-500">{error.path}</code>

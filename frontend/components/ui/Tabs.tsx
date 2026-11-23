@@ -40,7 +40,7 @@ export function Tabs<T extends string>({
             {t.count !== undefined && <span className="num ml-1.5 text-meta text-stone-400">{t.count}</span>}
             <span
               className={cx(
-                "absolute inset-x-0 -bottom-px h-0.5 origin-left rounded-full bg-ink transition-transform duration-200",
+                "absolute inset-x-0 -bottom-px h-0.5 origin-left rounded-full bg-brand-600 transition-transform duration-200",
                 active ? "scale-x-100" : "scale-x-0",
               )}
             />

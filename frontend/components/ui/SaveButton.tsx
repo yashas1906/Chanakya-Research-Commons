@@ -25,7 +25,7 @@ export function SaveButton({
 
   const onClick = async () => {
     if (!user) {
-      promptLogin();
+      promptLogin("login");
       return;
     }
     if (saved || busy) return;
@@ -50,11 +50,11 @@ export function SaveButton({
         aria-pressed={saved}
         title={saved ? "In your library" : "Save to your library"}
         className={cx(
-          "inline-flex items-center gap-1.5 rounded-lg border font-medium transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-50",
-          size === "sm" ? "px-2.5 py-1 text-meta" : "px-3 py-1.5 text-meta",
+          "inline-flex items-center gap-1.5 rounded-full font-semibold transition duration-150 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50",
+          size === "sm" ? "h-9 px-3.5 text-meta" : "h-10 px-4 text-ui",
           saved
-            ? "border-sage-200 bg-sage-50 text-sage-700"
-            : "border-stone-200/90 bg-paper text-stone-700 hover:border-stone-300 hover:bg-sunken",
+            ? "bg-brand-50 text-brand-700 hover:bg-brand-100"
+            : "bg-stone-100 text-stone-700 hover:bg-stone-200",
         )}
       >
         <Icon className={cx("h-3.5 w-3.5", busy && "animate-spin")} strokeWidth={1.75} />

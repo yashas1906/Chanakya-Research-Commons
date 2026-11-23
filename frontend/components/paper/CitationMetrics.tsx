@@ -10,7 +10,7 @@ export function CitationMetrics({ paper }: { paper: PaperDetail }) {
   return (
     <section className="space-y-4">
       <div className="grid grid-cols-2 gap-3">
-        {rows.map((row) => <div key={row.title} className="rounded-xl border border-stone-200 bg-canvas p-4"><p className="num font-serif text-2xl text-ink">{row.count}</p><p className="mt-1 text-meta text-stone-500">{row.title}</p></div>)}
+        {rows.map((row) => <div key={row.title} className="rounded-xl border border-stone-200 bg-canvas p-4"><p className="num font-display text-2xl text-ink">{row.count}</p><p className="mt-1 text-meta text-stone-500">{row.title}</p></div>)}
       </div>
       {rows.map((row) => <div key={row.title}>
         <h3 className="text-ui font-medium text-ink">{row.title} in this corpus</h3>

@@ -121,7 +121,7 @@ export function WarehouseActivityCard() {
                   return (
                     <div key={m.key}>
                       <p className="text-meta text-stone-500">{m.label}</p>
-                      <p className="num font-serif text-[28px] leading-tight text-ink">{fmtInt(total)}</p>
+                      <p className="num font-display text-[28px] leading-tight text-ink">{fmtInt(total)}</p>
                       <p className="num mb-2 h-4 text-meta text-stone-500">{delta?.text ?? ""}</p>
                       <Sparkline points={pts} name={m.label} />
                     </div>

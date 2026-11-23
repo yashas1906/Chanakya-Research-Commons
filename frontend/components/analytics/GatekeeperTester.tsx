@@ -83,7 +83,7 @@ export function GatekeeperTester() {
         <span className="flex items-center gap-2.5">
           <Gauge className="h-4 w-4 text-stone-400" strokeWidth={1.5} />
           <span>
-            <span className="block font-serif text-[16px] leading-tight text-ink">Live submission gatekeeper</span>
+            <span className="block font-display text-[16px] leading-tight text-ink">Live submission gatekeeper</span>
             <span className="block text-meta text-stone-500">Score sample metadata against the Isolation Forest — target under 5 ms</span>
           </span>
         </span>
@@ -138,7 +138,7 @@ export function GatekeeperTester() {
                       <CheckCircle2 className="h-6 w-6 shrink-0 text-sage-600" strokeWidth={1.5} />
                     )}
                     <div>
-                      <p className={cx("font-serif text-[20px] leading-tight", verdict.flagged ? "text-terracotta-700" : "text-sage-700")}>
+                      <p className={cx("font-display text-[20px] leading-tight", verdict.flagged ? "text-terracotta-700" : "text-sage-700")}>
                         {verdict.flagged ? "Held for integrity review" : "Cleared for submission"}
                       </p>
                       {verdict.score !== null && <p className="num text-meta text-stone-600">Anomaly score {verdict.score.toFixed(3)}</p>}

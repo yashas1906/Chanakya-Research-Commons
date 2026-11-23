@@ -8,59 +8,91 @@
 
 @layer base {
   html {
-    background: #faf9f6;
+    background: #eff1f5;
+    scroll-behavior: smooth;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
   }
   body {
     @apply bg-canvas font-sans text-ink antialiased;
-    font-feature-settings: "cv11", "ss01";
+    font-feature-settings: "cv11", "ss03";
   }
   ::selection {
-    background: #e7e5df;
+    background: #dfe6fe;
   }
   :focus-visible {
-    outline: 2px solid #18181b;
+    outline: 2px solid #3449cc;
     outline-offset: 2px;
-    border-radius: 4px;
+    border-radius: 6px;
+  }
+  /* Thin, quiet scrollbars (sidebar, dropdowns, long lists). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 999px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
   }
 }
 
 @layer components {
   .eyebrow {
-    @apply font-sans text-label font-medium uppercase tracking-eyebrow text-stone-500;
+    @apply font-sans text-label font-semibold text-brand-600;
   }
   .hairline {
-    @apply border border-stone-200/90;
+    @apply border border-stone-200;
   }
   .num {
     font-variant-numeric: tabular-nums;
     font-feature-settings: "tnum";
   }
   .card {
-    @apply rounded-xl border border-stone-200/90 bg-paper transition-colors duration-150;
+    @apply rounded-xl border border-stone-200 bg-paper shadow-card transition duration-200;
+  }
+  .card-hover {
+    @apply cursor-pointer;
   }
   .card-hover:hover {
-    @apply border-stone-300;
+    @apply -translate-y-px border-stone-300 shadow-lift;
   }
   .btn {
-    @apply inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-200/90 bg-paper px-3 text-ui font-medium text-stone-700 transition-colors duration-150 hover:border-stone-300 hover:bg-sunken disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full border border-stone-300 bg-paper px-4 text-ui font-semibold text-stone-800 transition duration-150 hover:border-stone-400 hover:bg-stone-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-ink bg-ink px-3.5 text-ui font-medium text-white transition-colors duration-150 hover:bg-stone-800 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full border border-brand-600 bg-brand-600 px-4 text-ui font-semibold text-white shadow-sm transition duration-150 hover:border-brand-700 hover:bg-brand-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-ghost {
+    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full px-3 text-ui font-medium text-stone-600 transition duration-150 hover:bg-stone-200/70 hover:text-ink;
   }
   .input {
-    @apply min-h-10 w-full rounded-lg border border-stone-200/90 bg-paper px-3 py-2 text-ui text-ink placeholder:text-stone-400 transition-colors duration-150 hover:border-stone-300 focus:border-stone-400 focus:outline-none;
+    @apply min-h-10 w-full rounded-lg border border-stone-300 bg-paper px-3 py-2 text-ui text-ink placeholder:text-stone-400 transition duration-150 hover:border-stone-400 focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-100;
   }
   .skeleton {
-    @apply relative overflow-hidden rounded-md bg-stone-200/60;
+    @apply relative overflow-hidden rounded-md bg-stone-200/70;
   }
   .skeleton::after {
     content: "";
     @apply absolute inset-0 -translate-x-full;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.7), transparent);
     animation: shimmer 1.4s infinite;
+  }
+}
+
+@layer utilities {
+  /* Display type: the UI face, set heavier and tighter. Replaces the old serif headings. */
+  .font-display {
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    font-weight: 650;
+    letter-spacing: -0.018em;
   }
 }
 
@@ -70,5 +102,6 @@
   *::after {
     animation-duration: 0.001ms !important;
     transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
   }
 }

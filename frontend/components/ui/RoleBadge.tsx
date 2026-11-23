@@ -1,3 +1,4 @@
+import { cx } from "@/lib/format";
 import type { Role } from "@/types/crc";
 
 const LABEL: Record<Role, string> = {
@@ -7,6 +8,13 @@ const LABEL: Record<Role, string> = {
   admin: "Admin",
 };
 
+const TONE: Record<Role, string> = {
+  student: "bg-stone-100 text-stone-600",
+  faculty: "bg-brand-50 text-brand-700",
+  researcher: "bg-brand-50 text-brand-700",
+  admin: "bg-saffron-100 text-saffron-600",
+};
+
 export function RoleBadge({ role }: { role: Role }) {
-  return <span className="inline-flex rounded-full border border-stone-200 bg-sunken px-2 py-0.5 text-label font-medium text-stone-600">{LABEL[role]}</span>;
+  return <span className={cx("inline-flex rounded-full px-2 py-0.5 text-label font-semibold", TONE[role])}>{LABEL[role]}</span>;
 }

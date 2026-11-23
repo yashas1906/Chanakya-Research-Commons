@@ -1,47 +1,81 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronDown, LogOut, UserRound } from "lucide-react";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import { BookMarked, ChevronDown, LogOut, UserRound, Users } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { LoginModal } from "@/components/auth/LoginModal";
 import { Avatar } from "@/components/ui/Section";
 import { RoleBadge } from "@/components/ui/RoleBadge";
+import { cx } from "@/lib/format";
 
 export function AccountMenu() {
-  const { user, promptLogin, logout } = useAuth();
+  const { user, status, promptLogin, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  const root = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (event: MouseEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  if (!user) {
+    return (
+      <div className={cx("flex shrink-0 items-center gap-2", status === "loading" && "opacity-0")}>
+        <button type="button" onClick={() => promptLogin("login")} className="btn h-9">Log in</button>
+        <button type="button" onClick={() => promptLogin("register")} className="btn-primary hidden h-9 sm:inline-flex">Sign up</button>
+      </div>
+    );
+  }
+
+  const row = "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-ui text-stone-700 transition hover:bg-stone-100 hover:text-ink";
 
   return (
-    <div className="relative shrink-0">
-      {!user ? (
-        <button type="button" onClick={promptLogin} className="btn-primary h-10 px-4">Sign in</button>
-      ) : (
-        <>
-          <button type="button" onClick={() => setOpen((v) => !v)} className="flex items-center gap-2 rounded-full p-1.5 pr-2.5 hover:bg-sunken" aria-expanded={open} aria-label="Account menu">
-            <Avatar name={user.full_name} size={32} />
-            <span className="hidden max-w-32 text-left sm:block">
-              <span className="block truncate text-ui font-medium leading-5 text-ink">{user.full_name}</span>
-              <RoleBadge role={user.role} />
-            </span>
-            <ChevronDown className="hidden h-4 w-4 text-stone-500 sm:block" />
-          </button>
-          {open && (
-            <div className="absolute right-0 top-full z-50 mt-2 w-64 rounded-xl border border-stone-200 bg-paper p-2 shadow-lg">
-              <div className="px-3 py-2">
-                <p className="text-ui font-medium text-ink">{user.full_name}</p>
-                <p className="mt-0.5 text-meta text-stone-500">{user.department}</p>
-              </div>
-              <button type="button" onClick={() => { setOpen(false); promptLogin(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-ui text-stone-700 hover:bg-sunken">
-                <UserRound className="h-4 w-4" /> Switch account
-              </button>
-              <button type="button" onClick={() => { setOpen(false); logout(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-ui text-stone-700 hover:bg-sunken">
-                <LogOut className="h-4 w-4" /> Sign out
-              </button>
+    <div ref={root} className="relative shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={cx("flex items-center gap-2 rounded-full border border-transparent p-1 pr-2 transition hover:bg-stone-100", open && "border-stone-200 bg-stone-100")}
+        aria-expanded={open}
+        aria-haspopup="menu"
+        aria-label="Account menu"
+      >
+        <Avatar name={user.full_name} size={32} />
+        <span className="hidden max-w-36 text-left lg:block">
+          <span className="block truncate text-meta font-semibold leading-4 text-ink">{user.full_name}</span>
+          <span className="block text-label capitalize leading-4 text-stone-500">{user.role}</span>
+        </span>
+        <ChevronDown className={cx("hidden h-4 w-4 text-stone-500 transition-transform lg:block", open && "rotate-180")} />
+      </button>
+      {open && (
+        <div role="menu" className="absolute right-0 top-full z-50 mt-2 w-72 animate-pop rounded-2xl border border-stone-200 bg-paper p-2 shadow-pop">
+          <div className="flex items-center gap-3 rounded-xl bg-stone-50 p-3">
+            <Avatar name={user.full_name} size={44} />
+            <div className="min-w-0">
+              <p className="truncate font-display text-ui text-ink">{user.full_name}</p>
+              <p className="truncate text-label text-stone-500">{user.department}</p>
+              <div className="mt-1"><RoleBadge role={user.role} /></div>
             </div>
-          )}
-        </>
+          </div>
+          <div className="mt-2 space-y-0.5">
+            <Link href={`/u/${user.user_id}`} role="menuitem" onClick={() => setOpen(false)} className={row}><UserRound className="h-4 w-4" /> View profile</Link>
+            <Link href="/library?tab=saves" role="menuitem" onClick={() => setOpen(false)} className={row}><BookMarked className="h-4 w-4" /> Saved papers</Link>
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); promptLogin("login"); }} className={row}><Users className="h-4 w-4" /> Switch account</button>
+            <div className="my-1 border-t border-stone-100" />
+            <button type="button" role="menuitem" onClick={() => { setOpen(false); logout(); }} className={row}><LogOut className="h-4 w-4" /> Log out</button>
+          </div>
+        </div>
       )}
-      <LoginModal />
     </div>
   );
 }

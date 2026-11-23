@@ -1,17 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { FolderOpen, Search } from "lucide-react";
+import { useCallback, useMemo } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { FolderOpen, X } from "lucide-react";
 import { PaperRow } from "@/components/library/PaperRow";
 import { PaperCard } from "@/components/paper/PaperCard";
+import { FilterOption, FilterToggle, SidebarPortal, SidebarSection } from "@/components/shell/SidebarSlot";
 import { PageHeader, Panel } from "@/components/ui/Section";
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { SkeletonCard, SkeletonList } from "@/components/ui/Skeleton";
 import { Tabs } from "@/components/ui/Tabs";
 import { ApiError, getCollections, getHoldings, getRecommendations } from "@/lib/api";
-import { authorsLine } from "@/lib/format";
-import { useAsync, useDebounced } from "@/lib/hooks";
+import { authorsLine, shortSchool } from "@/lib/format";
+import { useAsync } from "@/lib/hooks";
 import { useAuth } from "@/context/AuthContext";
 import { useSaves } from "@/lib/saves-context";
 import { SCHOOLS, type Collection, type Paper, type RecommendedPaper } from "@/types/crc";
@@ -19,8 +20,14 @@ import { SCHOOLS, type Collection, type Paper, type RecommendedPaper } from "@/t
 type View = "holdings" | "saves" | "collections";
 type SortKey = "saves" | "prestige" | "year";
 type RankFilter = "all" | "top1" | "top10" | "top25";
+
 const isView = (value: string | null): value is View => value === "holdings" || value === "saves" || value === "collections";
-const decade = (year: number | null) => year === null ? "" : `${Math.floor(year / 10) * 10}s`;
+const isSort = (value: string | null): value is SortKey => value === "saves" || value === "prestige" || value === "year";
+const isTier = (value: string | null): value is Exclude<RankFilter, "all"> => value === "top1" || value === "top10" || value === "top25";
+const decade = (year: number | null) => (year === null ? "" : `${Math.floor(year / 10) * 10}s`);
+
+const SORT_LABELS: Record<SortKey, string> = { saves: "Most saved", prestige: "PageRank tier", year: "Newest" };
+const TIER_LABELS: Record<RankFilter, string> = { all: "All tiers", top1: "Top 1%", top10: "Top 10%", top25: "Top 25%" };
 
 function withPercentiles<T extends Paper>(papers: T[]): T[] {
   const sorted = [...papers].sort((a, b) => a.pagerank_score - b.pagerank_score);
@@ -47,127 +54,252 @@ function dedupeRecommendations(papers: RecommendedPaper[]): RecommendedPaper[] {
   });
 }
 
+function RemovableChip({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onRemove}
+      aria-label={`Remove filter ${label}`}
+      className="inline-flex items-center gap-1 rounded-full border border-brand-100 bg-brand-50 py-1 pl-2.5 pr-1.5 text-meta font-medium text-brand-700 transition hover:bg-brand-100"
+    >
+      {label}
+      <X className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
 export function LibraryWorkspace() {
   const { user, status: authStatus, promptLogin } = useAuth();
   const saves = useSaves();
   const params = useSearchParams();
   const router = useRouter();
-  const [view, setView] = useState<View>(() => isView(params.get("tab")) ? params.get("tab") as View : "holdings");
-  const [filter, setFilter] = useState(() => params.get("q") ?? "");
-  const [sort, setSort] = useState<SortKey>(() => params.get("sort") === "year" || params.get("sort") === "prestige" ? params.get("sort") as SortKey : "saves");
-  const [school, setSchool] = useState(() => params.get("school") ?? "ALL");
-  const [year, setYear] = useState(() => params.get("year") ?? "ALL");
-  const [tier, setTier] = useState<RankFilter>(() => ["top1", "top10", "top25"].includes(params.get("tier") ?? "") ? params.get("tier") as RankFilter : "all");
-  const delayedFilter = useDebounced(filter, 200);
+  const pathname = usePathname();
+
+  // Every filter lives in the URL, so links are shareable and the top search bar can drive `q`.
+  const tabParam = params.get("tab");
+  const view: View = isView(tabParam) ? tabParam : "holdings";
+  const sortParam = params.get("sort");
+  const sort: SortKey = isSort(sortParam) ? sortParam : "saves";
+  const school = params.get("school") ?? "ALL";
+  const year = params.get("year") ?? "ALL";
+  const tierParam = params.get("tier");
+  const tier: RankFilter = isTier(tierParam) ? tierParam : "all";
+  const query = (params.get("q") ?? "").trim();
   const userId = user?.user_id ?? null;
-  const searchKey = params.toString();
+
+  const update = useCallback(
+    (patch: Record<string, string | null>) => {
+      const next = new URLSearchParams(params.toString());
+      Object.entries(patch).forEach(([key, value]) => {
+        if (value === null || value === "ALL" || value === "all") next.delete(key);
+        else next.set(key, value);
+      });
+      const qs = next.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [params, pathname, router],
+  );
 
   const holdings = useAsync((signal) => getHoldings(100, signal), []);
   const recs = useAsync((signal) => getRecommendations(userId!, signal), [userId], authStatus === "authenticated" && !!userId);
   const collections = useAsync((signal) => getCollections(userId!, signal), [userId], view === "collections" && authStatus === "authenticated" && !!userId);
 
-  useEffect(() => {
-    const query = new URLSearchParams(searchKey);
-    setView(isView(query.get("tab")) ? query.get("tab") as View : "holdings");
-    setFilter(query.get("q") ?? "");
-    setSchool(query.get("school") ?? "ALL");
-    setYear(query.get("year") ?? "ALL");
-    setTier(["top1", "top10", "top25"].includes(query.get("tier") ?? "") ? query.get("tier") as RankFilter : "all");
-    setSort(query.get("sort") === "year" || query.get("sort") === "prestige" ? query.get("sort") as SortKey : "saves");
-  }, [searchKey]);
-
-  useEffect(() => {
-    const query = new URLSearchParams();
-    query.set("tab", view);
-    if (delayedFilter) query.set("q", delayedFilter);
-    if (school !== "ALL") query.set("school", school);
-    if (year !== "ALL") query.set("year", year);
-    if (tier !== "all") query.set("tier", tier);
-    query.set("sort", sort);
-    const next = `?${query.toString()}`;
-    if (window.location.search !== next) router.replace(`/library${next}`, { scroll: false });
-  }, [view, delayedFilter, school, year, tier, sort, router]);
-
   const fullHoldings = useMemo(() => withPercentiles(holdings.data ?? []), [holdings.data]);
   const fullSaves = useMemo(() => withPercentiles(saves.saves), [saves.saves]);
-  const matches = (paper: Paper) => {
-    const query = delayedFilter.trim().toLowerCase();
-    const fields = `${paper.canonical_title} ${authorsLine(paper.authors, 20)} ${paper.venue ?? ""} ${(paper.topics ?? []).join(" ")}`.toLowerCase();
-    return (!query || fields.includes(query))
-      && (school === "ALL" || paper.school === school)
-      && (year === "ALL" || decade(paper.publication_year) === year)
-      && matchesRank(paper.pagerank_percentile, tier);
-  };
-  const holdingRows = useMemo(() => fullHoldings.filter(matches), [fullHoldings, delayedFilter, school, year, tier]); // eslint-disable-line react-hooks/exhaustive-deps
-  const saveRows = useMemo(() => fullSaves.filter(matches), [fullSaves, delayedFilter, school, year, tier]); // eslint-disable-line react-hooks/exhaustive-deps
+  const source = view === "saves" ? fullSaves : fullHoldings;
+
+  const matchesText = useCallback(
+    (paper: Paper) => {
+      if (!query) return true;
+      const fields = `${paper.canonical_title} ${authorsLine(paper.authors, 20)} ${paper.venue ?? ""} ${(paper.topics ?? []).join(" ")}`.toLowerCase();
+      return fields.includes(query.toLowerCase());
+    },
+    [query],
+  );
+  const matches = useCallback(
+    (paper: Paper, skip?: "school" | "year" | "tier") =>
+      matchesText(paper) &&
+      (skip === "school" || school === "ALL" || paper.school === school) &&
+      (skip === "year" || year === "ALL" || decade(paper.publication_year) === year) &&
+      (skip === "tier" || matchesRank(paper.pagerank_percentile, tier)),
+    [matchesText, school, year, tier],
+  );
+
   const sortedRows = useMemo(() => {
-    const rows = [...(view === "holdings" ? holdingRows : saveRows)];
+    if (view === "collections") return [];
+    const rows = source.filter((paper) => matches(paper));
     if (sort === "saves") rows.sort((a, b) => b.save_count - a.save_count);
     if (sort === "prestige") rows.sort((a, b) => (b.pagerank_percentile ?? 0) - (a.pagerank_percentile ?? 0));
     if (sort === "year") rows.sort((a, b) => (b.publication_year ?? 0) - (a.publication_year ?? 0));
     return rows;
-  }, [view, holdingRows, saveRows, sort]);
+  }, [view, source, matches, sort]);
 
-  const derivedCollections = collections.data ?? [];
-  const collectionList: Collection[] = derivedCollections;
+  // Facet counts: each group counts papers that match every *other* filter.
+  const schoolCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    source.filter((p) => matches(p, "school")).forEach((p) => {
+      const key = p.school ?? "";
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+    return counts;
+  }, [source, matches]);
+  const decadeCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    source.filter((p) => matches(p, "year")).forEach((p) => {
+      const key = decade(p.publication_year);
+      if (key) counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+    return counts;
+  }, [source, matches]);
+  const tierCount = (value: RankFilter) => source.filter((p) => matchesText(p) && (school === "ALL" || p.school === school) && (year === "ALL" || decade(p.publication_year) === year) && matchesRank(p.pagerank_percentile, value)).length;
+
+  const schoolOptions = useMemo(() => [...SCHOOLS, ...[...schoolCounts.keys()].filter((item) => item && !(SCHOOLS as readonly string[]).includes(item))], [schoolCounts]);
+  const decades = useMemo(() => [...new Set([...source.map((p) => decade(p.publication_year)).filter(Boolean)])].sort().reverse(), [source]);
+
+  const collectionList: Collection[] = collections.data ?? [];
   const collectionsUnsupported = collections.error instanceof ApiError && collections.error.kind === "unsupported";
   const tabs = [
     { id: "holdings" as const, label: "Chanakya holdings", count: fullHoldings.length },
     { id: "saves" as const, label: "My saves", count: authStatus === "authenticated" ? saves.saves.length : undefined },
     { id: "collections" as const, label: "Collections" },
   ];
-  const rankSource = view === "holdings" ? fullHoldings : fullSaves;
-  const years = [...new Set(rankSource.map((paper) => decade(paper.publication_year)).filter(Boolean))].sort().reverse();
   const listLoading = view === "holdings" ? holdings.loading && !holdings.data : authStatus === "loading" || (saves.status === "loading" && saves.saves.length === 0);
   const listError = view === "holdings" ? holdings.error : saves.status === "error" ? saves.error : null;
 
-  const clearFilters = () => { setFilter(""); setSchool("ALL"); setYear("ALL"); setTier("all"); };
+  const activeCount = (school !== "ALL" ? 1 : 0) + (year !== "ALL" ? 1 : 0) + (tier !== "all" ? 1 : 0);
+  const anyFilter = activeCount > 0 || !!query;
+  const clearFilters = () => update({ school: null, year: null, tier: null, q: null });
 
   return (
-    <div className="space-y-8">
-      <PageHeader eyebrow="Repository" title="Chanakya Library" description="Explore the university’s shared collection, your saved papers and topic-organised reading." />
-      <div className="grid min-w-0 grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="min-w-0 space-y-4">
-          <Tabs tabs={tabs} value={view} onChange={setView} />
-          {view !== "collections" && <div className="space-y-3">
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="relative min-w-[220px] flex-1"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" /><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Filter title, authors, venue or topics" aria-label="Filter papers" className="input pl-10" /></label>
-              <select aria-label="Sort papers" value={sort} onChange={(event) => setSort(event.target.value as SortKey)} className="input w-auto"><option value="saves">Most saved</option><option value="prestige">PageRank tier</option><option value="year">Newest</option></select>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <select aria-label="Filter by school" value={school} onChange={(event) => setSchool(event.target.value)} className="rounded-full border border-stone-200 bg-paper px-3 py-2 text-meta text-stone-700"><option value="ALL">All schools</option>{SCHOOLS.map((name) => <option key={name}>{name}</option>)}</select>
-              <select aria-label="Filter by decade" value={year} onChange={(event) => setYear(event.target.value)} className="rounded-full border border-stone-200 bg-paper px-3 py-2 text-meta text-stone-700"><option value="ALL">All years</option>{years.map((decadeName) => <option key={decadeName}>{decadeName}</option>)}</select>
-              <select aria-label="Filter by PageRank tier" value={tier} onChange={(event) => setTier(event.target.value as RankFilter)} className="rounded-full border border-stone-200 bg-paper px-3 py-2 text-meta text-stone-700"><option value="all">All tiers</option><option value="top1">Top 1%</option><option value="top10">Top 10%</option><option value="top25">Top 25%</option></select>
-              <span className="self-center text-meta text-stone-500">{sortedRows.length} results</span>
-            </div>
-          </div>}
+    <>
+      {view !== "collections" && (
+        <SidebarPortal>
+          <div className="border-t border-stone-100">
+            <p className="px-4 pb-1 pt-4 font-display text-[15px] text-ink">Filter library</p>
+            <SidebarSection title="Sort by">
+              <div role="radiogroup" aria-label="Sort papers" className="space-y-0.5">
+                {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+                  <FilterOption key={key} label={SORT_LABELS[key]} active={sort === key} onClick={() => update({ sort: key === "saves" ? null : key })} />
+                ))}
+              </div>
+            </SidebarSection>
+            <SidebarSection title="School" onClear={school !== "ALL" ? () => update({ school: null }) : undefined}>
+              <div role="radiogroup" aria-label="Filter by school" className="space-y-0.5">
+                <FilterOption label="All schools" active={school === "ALL"} count={source.filter((p) => matches(p, "school")).length} onClick={() => update({ school: null })} />
+                {schoolOptions.map((name) => (
+                  <FilterOption key={name} label={shortSchool(name)} count={schoolCounts.get(name) ?? 0} active={school === name} onClick={() => update({ school: school === name ? null : name })} />
+                ))}
+              </div>
+            </SidebarSection>
+            <SidebarSection title="Publication decade" onClear={year !== "ALL" ? () => update({ year: null }) : undefined}>
+              <div role="radiogroup" aria-label="Filter by decade" className="space-y-0.5">
+                <FilterOption label="Any decade" active={year === "ALL"} onClick={() => update({ year: null })} />
+                {decades.map((name) => (
+                  <FilterOption key={name} label={name} count={decadeCounts.get(name) ?? 0} active={year === name} onClick={() => update({ year: year === name ? null : name })} />
+                ))}
+              </div>
+            </SidebarSection>
+            <SidebarSection title="PageRank tier" onClear={tier !== "all" ? () => update({ tier: null }) : undefined}>
+              <div role="radiogroup" aria-label="Filter by PageRank tier" className="space-y-0.5">
+                {(Object.keys(TIER_LABELS) as RankFilter[]).map((key) => (
+                  <FilterOption key={key} label={TIER_LABELS[key]} count={tierCount(key)} active={tier === key} onClick={() => update({ tier: key === "all" ? null : key })} />
+                ))}
+              </div>
+            </SidebarSection>
+            {anyFilter && (
+              <div className="px-4 pb-4 pt-1">
+                <button type="button" onClick={clearFilters} className="btn w-full">Clear all filters</button>
+              </div>
+            )}
+          </div>
+        </SidebarPortal>
+      )}
 
-          <div className="card min-w-0 overflow-hidden">
-            {view === "collections" ? authStatus !== "authenticated" ? <EmptyState className="py-12" title="Sign in to view collections" action={<button type="button" className="btn-primary" onClick={promptLogin}>Sign in</button>} />
-              : collections.loading && !collections.data ? <SkeletonList rows={3} />
-                : collections.error ? collectionsUnsupported ? <ErrorState error={collections.error} /> : <ErrorState error={collections.error} onRetry={collections.reload} />
-                  : collectionList.length > 0 ? <ul className="divide-y divide-stone-100">{collectionList.map((collection) => <li key={collection.collection_id} className="p-5">
-                    <h3 className="flex items-center gap-2 font-serif text-h3 text-ink"><FolderOpen className="h-5 w-5 text-stone-500" />{collection.name}</h3>
-                    <p className="mt-1 text-meta text-stone-500">{collection.paper_count ?? 0} papers{collection.description ? ` · ${collection.description}` : ""}</p>
-                  </li>)}</ul> : <EmptyState icon={<FolderOpen className="h-6 w-6" />} title="No collections yet" hint="Collections you create to organise saved papers will appear here." />
-              : listLoading ? <SkeletonList rows={4} />
-                : listError ? <ErrorState error={listError} onRetry={view === "holdings" ? holdings.reload : saves.refresh} />
-                  : sortedRows.length === 0 ? <EmptyState title={delayedFilter || school !== "ALL" || year !== "ALL" || tier !== "all" ? "No papers match those filters" : view === "saves" ? "You haven’t saved anything yet" : "The library is empty"} hint="Try clearing filters or explore the research feed." action={delayedFilter || school !== "ALL" || year !== "ALL" || tier !== "all" ? <button className="btn" type="button" onClick={clearFilters}>Clear filters</button> : undefined} />
-                    : <ul className="divide-y divide-stone-100">{sortedRows.map((paper) => <PaperRow key={paper.paper_id} paper={paper} />)}</ul>}
+      <div className="space-y-5">
+        <PageHeader eyebrow="Repository" title="Chanakya Library" description="The university’s shared collection, your saved papers and topic-organised reading." />
+        <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-w-0 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <Tabs className="min-w-0 flex-1" tabs={tabs} value={view} onChange={(next) => update({ tab: next === "holdings" ? null : next })} />
+              {view !== "collections" && <FilterToggle activeCount={activeCount} />}
+            </div>
+
+            {view !== "collections" && (
+              <div className="flex flex-wrap items-center gap-2" aria-label="Active filters">
+                {query && <RemovableChip label={`Search: “${query}”`} onRemove={() => update({ q: null })} />}
+                {school !== "ALL" && <RemovableChip label={shortSchool(school)} onRemove={() => update({ school: null })} />}
+                {year !== "ALL" && <RemovableChip label={year} onRemove={() => update({ year: null })} />}
+                {tier !== "all" && <RemovableChip label={TIER_LABELS[tier]} onRemove={() => update({ tier: null })} />}
+                <span className="num text-meta text-stone-500">{sortedRows.length} {sortedRows.length === 1 ? "paper" : "papers"} · {SORT_LABELS[sort].toLowerCase()}</span>
+              </div>
+            )}
+
+            <div className="card min-w-0 overflow-hidden">
+              {view === "collections" ? (
+                authStatus !== "authenticated" ? (
+                  <EmptyState className="py-12" title="Log in to view collections" action={<button type="button" className="btn-primary" onClick={() => promptLogin("login")}>Log in</button>} />
+                ) : collections.loading && !collections.data ? (
+                  <SkeletonList rows={3} />
+                ) : collections.error ? (
+                  collectionsUnsupported ? <ErrorState error={collections.error} /> : <ErrorState error={collections.error} onRetry={collections.reload} />
+                ) : collectionList.length > 0 ? (
+                  <ul className="divide-y divide-stone-100">
+                    {collectionList.map((collection) => (
+                      <li key={collection.collection_id} className="p-5">
+                        <h3 className="flex items-center gap-2 font-display text-h3 text-ink"><FolderOpen className="h-5 w-5 text-stone-500" />{collection.name}</h3>
+                        <p className="mt-1 text-meta text-stone-500">{collection.paper_count ?? 0} papers{collection.description ? ` · ${collection.description}` : ""}</p>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <EmptyState icon={<FolderOpen className="h-6 w-6" />} title="No collections yet" hint="Collections you create to organise saved papers will appear here." />
+                )
+              ) : view === "saves" && authStatus === "anonymous" ? (
+                <EmptyState className="py-12" title="Log in to see your saved papers" hint="Saved papers also tune your recommendations." action={<button type="button" className="btn-primary" onClick={() => promptLogin("login")}>Log in</button>} />
+              ) : listLoading ? (
+                <SkeletonList rows={4} />
+              ) : listError ? (
+                <ErrorState error={listError} onRetry={view === "holdings" ? holdings.reload : saves.refresh} />
+              ) : sortedRows.length === 0 ? (
+                <EmptyState
+                  title={anyFilter ? "No papers match those filters" : view === "saves" ? "You haven’t saved anything yet" : "The library is empty"}
+                  hint="Try different words, clear a filter, or explore the research feed."
+                  action={anyFilter ? <button className="btn" type="button" onClick={clearFilters}>Clear filters</button> : undefined}
+                />
+              ) : (
+                <ul className="divide-y divide-stone-100">{sortedRows.map((paper) => <PaperRow key={paper.paper_id} paper={paper} />)}</ul>
+              )}
+            </div>
           </div>
+
+          <aside className="min-w-0">
+            <div className="lg:sticky lg:top-[72px]">
+              <Panel eyebrow="For you" title="Recommended reading" bodyClassName="max-h-[640px] overflow-y-auto">
+                {authStatus !== "authenticated" ? (
+                  <EmptyState className="py-8" title="Log in for recommendations" hint="Your saved papers help personalise this list." />
+                ) : recs.loading && !recs.data ? (
+                  <SkeletonCard rows={3} className="border-0" />
+                ) : recs.error ? (
+                  <ErrorState compact error={recs.error} onRetry={recs.reload} />
+                ) : !recs.data || recs.data.papers.length === 0 ? (
+                  <EmptyState className="py-8" title="Nothing to recommend yet" hint="Save a few papers to tune your profile." />
+                ) : (
+                  <ul className="divide-y divide-stone-100">
+                    {dedupeRecommendations(recs.data.papers).slice(0, 6).map((paper) => (
+                      <li key={paper.paper_id} className="p-3">
+                        <PaperCard
+                          paper={{ paper_id: paper.paper_id, canonical_title: paper.canonical_title, abstract: null, authors: null, publication_year: paper.publication_year, venue: paper.venue, topics: paper.topics, save_count: paper.save_count, pagerank_score: paper.pagerank_score }}
+                          className="border-0 p-2"
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Panel>
+            </div>
+          </aside>
         </div>
-        <aside className="min-w-0 lg:col-span-1">
-          <div className="lg:sticky lg:top-24">
-            <Panel eyebrow="For you" title="Recommended reading" bodyClassName="max-h-[720px] overflow-y-auto">
-              {authStatus !== "authenticated" ? <EmptyState className="py-8" title="Sign in for recommendations" hint="Your saved papers help personalise this list." />
-                : recs.loading && !recs.data ? <SkeletonCard rows={3} className="border-0" />
-                  : recs.error ? <ErrorState compact error={recs.error} onRetry={recs.reload} />
-                    : !recs.data || recs.data.papers.length === 0 ? <EmptyState className="py-8" title="Nothing to recommend yet" hint="Save a few papers to tune your profile." />
-                      : <ul className="divide-y divide-stone-100">{dedupeRecommendations(recs.data.papers).slice(0, 6).map((paper) => <li key={paper.paper_id} className="p-3"><PaperCard paper={{ paper_id: paper.paper_id, canonical_title: paper.canonical_title, abstract: null, authors: null, publication_year: paper.publication_year, venue: paper.venue, topics: paper.topics, save_count: paper.save_count, pagerank_score: paper.pagerank_score }} className="border-0 p-2" /></li>)}</ul>}
-            </Panel>
-          </div>
-        </aside>
       </div>
-    </div>
+    </>
   );
 }

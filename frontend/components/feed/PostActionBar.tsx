@@ -23,7 +23,7 @@ export function PostActionBar({
   return (
     <div className="relative z-10 flex min-w-0 flex-wrap items-center gap-2">
       <VoteButtons score={score} vote={vote} busy={busy} onVote={onVote} />
-      <Link href={`/feed/${post.post_id}#comments`} className="inline-flex h-9 items-center gap-1.5 rounded-full border border-stone-200 px-3 text-meta font-medium text-stone-700 hover:bg-sunken">
+      <Link href={`/feed/${post.post_id}#comments`} className="inline-flex h-9 items-center gap-1.5 rounded-full bg-stone-100 px-3.5 text-meta font-semibold text-stone-700 transition hover:bg-stone-200 active:scale-[0.97]">
         <MessageSquare className="h-4 w-4" />{post.comment_count}
       </Link>
       <ShareButton url={`/feed/${post.post_id}`} />

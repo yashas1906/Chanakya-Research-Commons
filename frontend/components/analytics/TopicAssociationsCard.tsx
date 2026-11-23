@@ -141,7 +141,7 @@ export function TopicAssociationsCard() {
           <section>
             <div className="mb-3 flex items-baseline justify-between gap-3">
               <div>
-                <h3 className="font-serif text-[18px] text-ink">Maximal thematic bundles</h3>
+                <h3 className="font-display text-[18px] text-ink">Maximal thematic bundles</h3>
                 <p className="text-meta text-stone-500">Longest keyword sets that appear together, with no larger set containing them (FP-Max).</p>
               </div>
               {bundles.length > 6 && (
@@ -166,7 +166,7 @@ export function TopicAssociationsCard() {
           <section>
             <div className="mb-3 flex flex-wrap items-baseline justify-between gap-3">
               <div>
-                <h3 className="font-serif text-[18px] text-ink">High-lift topic associations</h3>
+                <h3 className="font-display text-[18px] text-ink">High-lift topic associations</h3>
                 <p className="text-meta text-stone-500">
                   Topics that co-occur more than chance: lift ≥ {MIN_RULE_LIFT.toFixed(1)}× (FP-Growth).
                 </p>

@@ -16,18 +16,17 @@ export function PageHeader({
   return (
     <header className={cx("flex flex-wrap items-end justify-between gap-4", className)}>
       <div className="max-w-2xl">
-        {eyebrow && <p className="eyebrow mb-2">{eyebrow}</p>}
-        <h1 className="font-serif text-[34px] leading-[1.1] tracking-tight text-ink">{title}</h1>
-        {description && <p className="mt-2.5 text-[15px] leading-relaxed text-stone-500">{description}</p>}
+        {eyebrow && <p className="eyebrow mb-1">{eyebrow}</p>}
+        <h1 className="font-display text-h1 text-ink">{title}</h1>
+        {description && <p className="mt-1.5 text-ui leading-relaxed text-stone-600">{description}</p>}
       </div>
       {actions}
     </header>
   );
 }
 
-/** Card with an eyebrow + serif title strip. */
+/** White card with a compact title strip. The `eyebrow` prop is accepted for older call sites but no longer rendered. */
 export function Panel({
-  eyebrow,
   title,
   meta,
   actions,
@@ -45,14 +44,11 @@ export function Panel({
 }) {
   return (
     <section className={cx("card flex min-w-0 flex-col", className)}>
-      <header className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2 border-b border-stone-100 px-4 py-3">
-        <div className="min-w-0 flex-1 basis-56">
-          {eyebrow && <p className="eyebrow mb-0.5">{eyebrow}</p>}
-          <h2 className="font-serif text-[17px] leading-snug text-ink">
-            {title}
-            {meta !== undefined && <span className="num ml-2 font-sans text-xs font-normal text-stone-400">{meta}</span>}
-          </h2>
-        </div>
+      <header className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-stone-100 px-4 py-3">
+        <h2 className="min-w-0 flex-1 basis-40 font-display text-[16px] leading-snug text-ink">
+          {title}
+          {meta !== undefined && <span className="num ml-2 font-sans text-meta font-normal text-stone-400">{meta}</span>}
+        </h2>
         {actions}
       </header>
       <div className={cx("min-h-0 flex-1", bodyClassName)}>{children}</div>
@@ -60,12 +56,20 @@ export function Panel({
   );
 }
 
-export function Avatar({ name, size = 28 }: { name: string; size?: number }) {
+/** Deterministic, friendly avatar colour per person so lists are easy to scan. */
+const AVATAR_HUES = ["#4A63E3", "#0E8F7E", "#D9730D", "#B4408F", "#2F855A", "#C2410C", "#7C5CE6", "#0B7285", "#A16207", "#BE185D"];
+function hueFor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return AVATAR_HUES[hash % AVATAR_HUES.length];
+}
+
+export function Avatar({ name, size = 28, className }: { name: string; size?: number; className?: string }) {
   return (
     <span
       aria-hidden
-      className="inline-flex shrink-0 items-center justify-center rounded-full border border-stone-200/90 bg-sunken font-sans text-meta font-semibold tracking-wide text-stone-600"
-      style={{ width: size, height: size }}
+      className={cx("inline-flex shrink-0 select-none items-center justify-center rounded-full font-sans font-semibold text-white", className)}
+      style={{ width: size, height: size, backgroundColor: hueFor(name), fontSize: Math.max(11, Math.round(size * 0.38)) }}
     >
       {initials(name)}
     </span>

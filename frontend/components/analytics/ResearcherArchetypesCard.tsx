@@ -54,10 +54,10 @@ function ClusterCard({ c, total, maxima, rules }: { c: ClusterSummary; total: nu
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="eyebrow">Cluster {c.cluster_id}</p>
-          <h4 className="font-serif text-[18px] leading-snug text-ink">{c.label ?? `Archetype ${c.cluster_id}`}</h4>
+          <h4 className="font-display text-[18px] leading-snug text-ink">{c.label ?? `Archetype ${c.cluster_id}`}</h4>
         </div>
         <div className="text-right">
-          <p className="num font-serif text-[22px] leading-none text-ink">{fmtInt(c.size)}</p>
+          <p className="num font-display text-[22px] leading-none text-ink">{fmtInt(c.size)}</p>
           <p className="num mt-0.5 text-meta text-stone-500">{fmtPct(share)} of cohort</p>
         </div>
       </div>

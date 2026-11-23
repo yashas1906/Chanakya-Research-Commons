@@ -1,21 +1,27 @@
 "use client";
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
-import { ApiError, getMe, login as loginRequest } from "@/lib/api";
+import { ApiError, getMe, login as loginRequest, register as registerRequest, type RegisterInput } from "@/lib/api";
 import type { AuthUser, Role } from "@/types/crc";
 
 const STORAGE_KEY = "crc.auth.token";
 const ROLE_RANK: Record<Role, number> = { student: 1, faculty: 2, researcher: 2, admin: 3 };
+
+export type AuthMode = "login" | "register";
 
 interface AuthContextValue {
   user: AuthUser | null;
   token: string | null;
   status: "loading" | "anonymous" | "authenticated";
   login: (identifier: string, passcode: string) => Promise<void>;
+  register: (input: RegisterInput) => Promise<void>;
   logout: () => void;
   can: (minimum: Role) => boolean;
   loginOpen: boolean;
-  promptLogin: () => void;
+  authMode: AuthMode;
+  setAuthMode: (mode: AuthMode) => void;
+  /** Opens the sign-in dialog. Safe to pass straight to onClick (non-string arguments are ignored). */
+  promptLogin: (mode?: AuthMode | unknown) => void;
   closeLogin: () => void;
 }
 
@@ -26,6 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
   const [status, setStatus] = useState<AuthContextValue["status"]>("loading");
   const [loginOpen, setLoginOpen] = useState(false);
+  const [authMode, setAuthMode] = useState<AuthMode>("login");
 
   const clearSession = useCallback(() => {
     try {
@@ -80,8 +87,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => window.removeEventListener("crc:auth-expired", onExpired);
   }, [clearSession, token]);
 
-  const login = useCallback(async (identifier: string, passcode: string) => {
-    const result = await loginRequest(identifier, passcode);
+  const startSession = useCallback((result: { token: string; user: AuthUser }) => {
     try {
       window.localStorage.setItem(STORAGE_KEY, result.token);
     } catch {
@@ -93,6 +99,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setLoginOpen(false);
   }, []);
 
+  const login = useCallback(
+    async (identifier: string, passcode: string) => startSession(await loginRequest(identifier, passcode)),
+    [startSession],
+  );
+
+  const register = useCallback(
+    async (input: RegisterInput) => startSession(await registerRequest(input)),
+    [startSession],
+  );
+
   const logout = useCallback(() => {
     clearSession();
     window.dispatchEvent(new CustomEvent("crc:toast", { detail: "You’ve signed out." }));
@@ -103,12 +119,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     token,
     status,
     login,
+    register,
     logout,
     can: (minimum) => !!user && ROLE_RANK[user.role] >= ROLE_RANK[minimum],
     loginOpen,
-    promptLogin: () => setLoginOpen(true),
+    authMode,
+    setAuthMode,
+    promptLogin: (mode) => {
+      setAuthMode(mode === "register" ? "register" : "login");
+      setLoginOpen(true);
+    },
     closeLogin: () => setLoginOpen(false),
-  }), [user, token, status, login, logout, loginOpen]);
+  }), [user, token, status, login, register, logout, loginOpen, authMode]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

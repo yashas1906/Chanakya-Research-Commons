@@ -93,7 +93,7 @@ export function AnswerText({
   const blocks = parseBlocks(text);
 
   return (
-    <div className="space-y-3.5 font-serif text-[17px] leading-[1.75] text-stone-800">
+    <div className="space-y-3.5 font-sans text-[16px] leading-[1.75] text-stone-800">
       {blocks.map((b, bi) => {
         if (b.type === "list") {
           const Tag = b.ordered ? "ol" : "ul";

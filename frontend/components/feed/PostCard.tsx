@@ -26,7 +26,7 @@ export function PostCard({ post, onTagClick }: { post: FeedPost; onTagClick?: (t
 
   const updateVote = async (next: -1 | 0 | 1) => {
     if (!user) {
-      promptLogin();
+      promptLogin("login");
       return;
     }
     if (busy) return;
@@ -48,31 +48,47 @@ export function PostCard({ post, onTagClick }: { post: FeedPost; onTagClick?: (t
     }
   };
 
+  const flair = post.tags?.[0];
   return (
-    <article className="card card-hover relative min-w-0 overflow-hidden p-5 sm:p-6">
-      <header className="relative z-10 flex min-w-0 items-center gap-3">
-        <Avatar name={post.author_name} size={38} />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-ui font-medium text-ink">{post.author_name}</p>
-          <p className="truncate text-meta text-stone-500">{shortSchool(post.author_dept)} · <span className="capitalize">{post.author_role}</span> · {relTime(post.created_at)}</p>
-        </div>
+    <article className="group card card-hover relative min-w-0 overflow-hidden px-4 pb-3 pt-3.5 sm:px-5">
+      <header className="relative z-10 flex min-w-0 items-center gap-2.5">
+        <Link href={`/u/${post.author_id}`} className="shrink-0" aria-label={`Open ${post.author_name}'s profile`}>
+          <Avatar name={post.author_name} size={32} />
+        </Link>
+        <p className="min-w-0 flex-1 truncate text-meta text-stone-500">
+          <Link href={`/u/${post.author_id}`} className="font-semibold text-ink hover:text-brand-700 hover:underline">{post.author_name}</Link>
+          <span className="mx-1.5 text-stone-300">•</span>
+          {shortSchool(post.author_dept)}
+          <span className="mx-1.5 text-stone-300">•</span>
+          {relTime(post.created_at)}
+        </p>
+        {flair && (
+          <button type="button" onClick={() => onTagClick?.(flair)} className="shrink-0" aria-label={`Filter by ${flair}`}>
+            <Tag>{flair}</Tag>
+          </button>
+        )}
       </header>
-      {post.tags?.[0] && <button type="button" onClick={() => onTagClick?.(post.tags?.[0] ?? "")} className="relative z-10 mt-4"><Tag>{post.tags[0]}</Tag></button>}
-      <h2 className="mt-2 font-serif text-h3 text-ink">
-        <Link href={`/feed/${post.post_id}`} className="after:absolute after:inset-0 after:z-0">{post.title}</Link>
+      <h2 className="mt-2.5 font-display text-[19px] leading-snug text-ink">
+        <Link href={`/feed/${post.post_id}`} className="after:absolute after:inset-0 after:z-0 group-hover:text-brand-700">{post.title}</Link>
       </h2>
-      <p className="mt-2 line-clamp-3 whitespace-pre-line text-body leading-relaxed text-stone-700">{post.body}</p>
+      <p className="mt-1.5 line-clamp-3 whitespace-pre-line text-ui leading-relaxed text-stone-600">{post.body}</p>
       {post.attached_paper_id && post.attached_paper_title && (
-        <Link href={`/papers/${post.attached_paper_id}`} className="relative z-10 mt-4 flex min-w-0 items-center gap-2.5 rounded-xl border border-stone-200 bg-sunken p-3 hover:border-stone-300">
-          <FileText className="h-4 w-4 shrink-0 text-stone-500" />
-          <span className="min-w-0 truncate font-serif text-ui text-ink">{post.attached_paper_title}</span>
-          <span className="shrink-0 text-meta text-stone-500">View paper →</span>
+        <Link href={`/papers/${post.attached_paper_id}`} className="relative z-10 mt-3 flex min-w-0 items-center gap-2.5 rounded-lg bg-stone-50 px-3 py-2 ring-1 ring-inset ring-stone-200 transition hover:bg-brand-50 hover:ring-brand-200">
+          <FileText className="h-4 w-4 shrink-0 text-brand-600" />
+          <span className="min-w-0 flex-1 truncate text-meta font-medium text-ink">{post.attached_paper_title}</span>
+          <span className="shrink-0 text-label font-semibold text-brand-600">Open paper →</span>
         </Link>
       )}
-      <footer className="relative z-10 mt-5 border-t border-stone-100 pt-4">
+      <footer className="relative z-10 mt-3">
         <PostActionBar post={post} score={score} vote={vote} busy={busy} onVote={updateVote} />
       </footer>
-      {post.tags && post.tags.length > 1 && <div className="relative z-10 mt-3 flex flex-wrap gap-1.5">{post.tags.slice(1).map((tag) => <button key={tag} type="button" onClick={() => onTagClick?.(tag)}><Tag>{tag}</Tag></button>)}</div>}
+      {post.tags && post.tags.length > 1 && (
+        <div className="relative z-10 mt-2.5 flex flex-wrap gap-x-3 gap-y-1">
+          {post.tags.slice(1).map((tag) => (
+            <button key={tag} type="button" onClick={() => onTagClick?.(tag)} className="text-label font-medium text-stone-500 hover:text-brand-700">#{tag.replace(/\s+/g, "-")}</button>
+          ))}
+        </div>
+      )}
     </article>
   );
 }

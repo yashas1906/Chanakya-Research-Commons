@@ -23,7 +23,7 @@ function PaperView({ paper }: { paper: PaperType }) {
       <Link href="/library" className="inline-flex items-center gap-2 text-ui font-medium text-stone-600 hover:text-ink"><ArrowLeft className="h-4 w-4" />Library</Link>
       <header className="max-w-4xl">
         <p className="eyebrow">Research paper</p>
-        <h1 className="mt-2 font-serif text-h1 tracking-tight text-ink">{paper.canonical_title}</h1>
+        <h1 className="mt-2 font-display text-h1 tracking-tight text-ink">{paper.canonical_title}</h1>
         <p className="mt-3 text-body text-stone-700">{authors.join(", ") || "Authors not listed"}</p>
         <p className="mt-1 text-meta text-stone-500">{[paper.venue, paper.publication_year].filter(Boolean).join(" · ") || "Publication details unavailable"}</p>
         <div className="mt-3 flex flex-wrap gap-4 text-meta">
@@ -39,14 +39,14 @@ function PaperView({ paper }: { paper: PaperType }) {
             <p className="mt-3 max-w-prose whitespace-pre-wrap text-body leading-7 text-stone-700">{paper.abstract || "No abstract is available for this paper."}</p>
             {paper.topics && paper.topics.length > 0 && <div className="mt-5 flex flex-wrap gap-2">{paper.topics.map((topic) => <Link key={topic} href={`/search?q=${encodeURIComponent(topic)}`} className="rounded-full border border-stone-200 bg-canvas px-3 py-1.5 text-meta text-stone-700 hover:bg-sunken">{topic}</Link>)}</div>}
           </section>
-          <section className="card space-y-5 p-5 sm:p-7"><div><p className="eyebrow">Citation graph</p><h2 className="mt-1 font-serif text-h2 text-ink">Influence in the corpus</h2></div><CitationMetrics paper={paper} /></section>
+          <section className="card space-y-5 p-5 sm:p-7"><div><p className="eyebrow">Citation graph</p><h2 className="mt-1 font-display text-h2 text-ink">Influence in the corpus</h2></div><CitationMetrics paper={paper} /></section>
           <LinkedDiscussions paper={paper} />
           <section className="card p-5 sm:p-7">
-            <p className="eyebrow">Reader activity</p><h2 className="mt-1 font-serif text-h2 text-ink">Readers also saved</h2>
+            <p className="eyebrow">Reader activity</p><h2 className="mt-1 font-display text-h2 text-ink">Readers also saved</h2>
             {alsoSaved.loading && !alsoSaved.data ? <SkeletonCard rows={3} className="mt-4 border-0" />
               : alsoSaved.error ? <ErrorState className="mt-4" error={alsoSaved.error} onRetry={alsoSaved.reload} />
                 : !alsoSaved.data?.length ? <EmptyState title="No related saves yet" hint="More suggestions appear as readers organise their libraries." />
-                  : <ul className="mt-4 divide-y divide-stone-100">{alsoSaved.data.map((item) => <li key={item.paper_id} className="py-3"><Link href={`/papers/${item.paper_id}`} className="font-serif text-h3 text-ink hover:underline">{item.canonical_title}</Link><p className="mt-1 text-meta text-stone-500">{item.publication_year ?? "Year unavailable"} · {fmtInt(item.save_count)} saves</p></li>)}</ul>}
+                  : <ul className="mt-4 divide-y divide-stone-100">{alsoSaved.data.map((item) => <li key={item.paper_id} className="py-3"><Link href={`/papers/${item.paper_id}`} className="font-display text-h3 text-ink hover:underline">{item.canonical_title}</Link><p className="mt-1 text-meta text-stone-500">{item.publication_year ?? "Year unavailable"} · {fmtInt(item.save_count)} saves</p></li>)}</ul>}
           </section>
         </main>
         <aside className="min-w-0 space-y-5">

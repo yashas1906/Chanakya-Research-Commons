@@ -1,16 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, Newsreader } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
-import { Navbar } from "@/components/Navbar";
+import { AppShell } from "@/components/shell/AppShell";
 import { AuthProvider } from "@/context/AuthContext";
 import { SavesProvider } from "@/lib/saves-context";
 import { ToastProvider } from "@/components/ui/Toast";
-
-const serif = Newsreader({
-  subsets: ["latin"],
-  variable: "--font-serif",
-  display: "swap",
-});
 
 const sans = Inter({
   subsets: ["latin"],
@@ -25,19 +19,18 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#FAF9F6",
+  themeColor: "#3449CC",
   colorScheme: "light",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${serif.variable} ${sans.variable}`}>
+    <html lang="en" className={sans.variable}>
       <body>
         <ToastProvider>
           <AuthProvider>
             <SavesProvider>
-              <Navbar />
-              <main className="mx-auto w-full max-w-7xl px-4 pb-24 pt-8 sm:px-6 lg:px-8">{children}</main>
+              <AppShell>{children}</AppShell>
             </SavesProvider>
           </AuthProvider>
         </ToastProvider>

@@ -47,7 +47,7 @@ function Ledger({
         <p className={cx("eyebrow mb-0.5 flex items-center gap-1.5 !text-current", headText)}>
           {icon} {eyebrow}
         </p>
-        <h3 className="flex items-baseline justify-between gap-3 font-serif text-[18px] leading-snug text-ink">
+        <h3 className="flex items-baseline justify-between gap-3 font-display text-[18px] leading-snug text-ink">
           {title}
           <span className="num font-sans text-meta font-normal text-stone-500">{items.length}</span>
         </h3>
@@ -61,7 +61,7 @@ function Ledger({
             <li key={it.id} className="relative px-4 py-3.5 pl-5">
               <span aria-hidden className={cx("absolute inset-y-3 left-0 w-0.5 rounded-full", rail)} />
               <div className="flex items-start justify-between gap-3">
-                <h4 className="font-serif text-[16px] leading-snug text-ink">{it.title}</h4>
+                <h4 className="font-display text-[16px] leading-snug text-ink">{it.title}</h4>
                 {showSeverity ? (
                   <span
                     className={cx("inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-meta font-semibold leading-4", SEVERITY[it.severity].cls)}

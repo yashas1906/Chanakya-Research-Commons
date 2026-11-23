@@ -91,26 +91,52 @@ except Exception as exc:
 
 @contextmanager
 def get_db():
-    """Connection context manager with connection pooling and guaranteed return/closure."""
+    """Connection context manager with connection pooling and stale-connection recovery."""
     if db_pool:
         conn = db_pool.getconn()
-        conn.cursor_factory = RealDictCursor
+        # If the pool returned a stale/closed connection, replace it with a fresh one.
+        if conn.closed:
+            try:
+                db_pool.putconn(conn, close=True)
+            except Exception:
+                pass
+            conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
+            conn.cursor_factory = RealDictCursor
+            use_pool = False
+        else:
+            conn.cursor_factory = RealDictCursor
+            use_pool = True
         try:
             yield conn
         except Exception:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             raise
         finally:
-            db_pool.putconn(conn)
+            try:
+                if use_pool:
+                    db_pool.putconn(conn)
+                else:
+                    conn.close()
+            except Exception:
+                pass
     else:
         conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
         try:
             yield conn
         except Exception:
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass
             raise
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def get_conn():
@@ -372,8 +398,12 @@ def register(payload: RegisterRequest):
         salt = bcrypt.gensalt()
         pw_hash = "bcrypt$" + bcrypt.hashpw(payload.password.encode("utf-8"), salt).decode("utf-8")
 
+        # Self-registration always creates a student. Faculty / researcher / admin access is
+        # granted by the university (an admin updates users.role); a client-supplied role is ignored.
+        self_role = "student"
+
         # Initial profile embedding computed from role, department, tags & bio
-        bio_text = f"{payload.role.title()} in {payload.department}. {payload.bio or ''}"
+        bio_text = f"{self_role.title()} in {payload.department}. {payload.bio or ''}"
         emb = embed_model.encode(bio_text).tolist()
 
         cur.execute(
@@ -387,7 +417,7 @@ def register(payload: RegisterRequest):
                 payload.full_name.strip(),
                 payload.email.strip(),
                 pw_hash,
-                payload.role,
+                self_role,
                 payload.department.strip(),
                 payload.bio or "",
                 payload.interest_tags or [],
@@ -525,6 +555,87 @@ def get_my_follows(user=Depends(current_user)):
         followed_users = cur.fetchall()
         cur.close()
     return {"followed_topics": topics, "followed_users": followed_users}
+
+
+@app.get("/api/users/{user_id}")
+def get_user_profile(user_id: UUID, viewer=Depends(current_user_optional)):
+    """Public profile: identity, activity counts and recent posts/comments (no email)."""
+    viewer_id = str(viewer["user_id"]) if viewer else None
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT user_id, university_id, full_name, role, department, bio, interest_tags, profile_url, created_at
+            FROM users WHERE user_id = %s::uuid AND is_flagged_spam = FALSE
+            """,
+            (str(user_id),),
+        )
+        person = cur.fetchone()
+        if not person:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Member not found")
+
+        cur.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM posts WHERE author_id = %(u)s::uuid AND is_flagged_spam = FALSE) AS post_count,
+              (SELECT COUNT(*) FROM comments WHERE author_id = %(u)s::uuid) AS comment_count,
+              (SELECT COALESCE(SUM(upvote_count), 0) FROM posts WHERE author_id = %(u)s::uuid AND is_flagged_spam = FALSE) AS karma,
+              (SELECT COUNT(*) FROM user_follows WHERE followee_id = %(u)s::uuid) AS follower_count,
+              (SELECT COUNT(*) FROM user_follows WHERE follower_id = %(u)s::uuid) AS following_count,
+              (SELECT COUNT(*) FROM library_saves WHERE user_id = %(u)s::uuid) AS saved_count
+            """,
+            {"u": str(user_id)},
+        )
+        stats = cur.fetchone()
+
+        cur.execute(
+            """
+            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+                   u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
+                   pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
+                   COALESCE(mine.value, 0) AS my_vote
+            FROM posts p
+            JOIN users u ON u.user_id = p.author_id
+            LEFT JOIN papers pa ON pa.paper_id = p.attached_paper_id
+            LEFT JOIN post_upvotes mine ON mine.post_id = p.post_id AND mine.user_id = %s::uuid
+            WHERE p.author_id = %s::uuid AND p.is_flagged_spam = FALSE
+            ORDER BY p.created_at DESC
+            LIMIT 40
+            """,
+            (viewer_id, str(user_id)),
+        )
+        posts = cur.fetchall()
+
+        cur.execute(
+            """
+            SELECT c.comment_id, c.post_id, p.title AS post_title, c.body, c.created_at
+            FROM comments c JOIN posts p ON p.post_id = c.post_id
+            WHERE c.author_id = %s::uuid AND p.is_flagged_spam = FALSE
+            ORDER BY c.created_at DESC
+            LIMIT 40
+            """,
+            (str(user_id),),
+        )
+        comments = cur.fetchall()
+
+        is_following = False
+        if viewer_id and viewer_id != str(user_id):
+            cur.execute(
+                "SELECT 1 FROM user_follows WHERE follower_id = %s::uuid AND followee_id = %s::uuid",
+                (viewer_id, str(user_id)),
+            )
+            is_following = cur.fetchone() is not None
+        cur.close()
+
+    return {
+        "user": {**person, "user_id": str(person["user_id"])},
+        "stats": stats,
+        "posts": posts,
+        "comments": comments,
+        "is_following": is_following,
+    }
 
 
 @app.get("/api/users")

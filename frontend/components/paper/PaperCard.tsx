@@ -8,7 +8,7 @@ export function PaperCard({ paper, className }: { paper: Paper; className?: stri
   return (
     <article className={cx("card flex min-w-0 items-start gap-3 p-4 sm:p-5", className)}>
       <div className="min-w-0 flex-1">
-        <Link href={`/papers/${paper.paper_id}`} className="font-serif text-h3 leading-snug text-ink hover:underline hover:decoration-stone-300 hover:underline-offset-4">
+        <Link href={`/papers/${paper.paper_id}`} className="font-display text-h3 leading-snug text-ink hover:underline hover:decoration-stone-300 hover:underline-offset-4">
           {paper.canonical_title}
         </Link>
         <p className="mt-1 truncate text-meta text-stone-600">{authorsLine(paper.authors, 3)}</p>

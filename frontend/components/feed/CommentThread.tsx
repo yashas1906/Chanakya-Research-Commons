@@ -173,7 +173,7 @@ export function CommentThread({ postId, onCountKnown }: { postId: string; onCoun
   return (
     <section id="comments" className="scroll-mt-24 space-y-5 border-t border-stone-200 pt-6">
       <div className="flex flex-wrap items-end justify-between gap-3">
-        <div><p className="eyebrow">Community</p><h2 className="mt-1 font-serif text-h2 text-ink">Join the conversation</h2></div>
+        <div><p className="eyebrow">Community</p><h2 className="mt-1 font-display text-h2 text-ink">Join the conversation</h2></div>
         <label className="text-meta text-stone-600">Sort
           <select value={sortMode} onChange={(event) => setSortMode(event.target.value as SortMode)} className="ml-2 rounded-lg border border-stone-200 bg-paper px-2 py-2 text-meta">
             <option value="best">Top-level first</option><option value="newest">Newest</option><option value="oldest">Oldest</option>

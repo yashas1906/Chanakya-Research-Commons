@@ -129,7 +129,7 @@ export function AssistantWorkspace() {
                       <button
                         type="button"
                         onClick={() => ask(s)}
-                        className="w-full rounded-lg px-3 py-2 text-left font-serif text-[17px] leading-snug text-stone-700 transition-colors hover:bg-sunken hover:text-ink"
+                        className="w-full rounded-lg px-3 py-2 text-left font-medium text-[17px] leading-snug text-stone-700 transition-colors hover:bg-sunken hover:text-ink"
                       >
                         {s}
                       </button>
@@ -155,7 +155,7 @@ export function AssistantWorkspace() {
                     }
                   }}
                 >
-                  <h2 className="font-serif text-[24px] leading-snug tracking-tight text-ink">{t.question}</h2>
+                  <h2 className="font-display text-[24px] leading-snug tracking-tight text-ink">{t.question}</h2>
                   {t.libraryOnly && <p className="eyebrow">Restricted to Chanakya Library</p>}
                   {t.paperId && <p className="eyebrow">Scoped to a paper</p>}
 

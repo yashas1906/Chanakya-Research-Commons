@@ -57,7 +57,7 @@ export function EvidenceInspector({
         <p className="eyebrow mb-0.5 flex items-center gap-1.5">
           <ShieldCheck className="h-3 w-3" strokeWidth={1.75} /> Grounding
         </p>
-        <h2 className="font-serif text-[17px] leading-snug text-ink">Evidence inspector</h2>
+        <h2 className="font-display text-[17px] leading-snug text-ink">Evidence inspector</h2>
         <p className="mt-1 text-meta leading-relaxed text-stone-500">
           The top retrieved passages the answer was allowed to use, with cosine similarity from the vector index.
         </p>
@@ -77,12 +77,12 @@ export function EvidenceInspector({
           </ul>
         ) : !turn ? (
           <div className="px-6 py-12 text-center">
-            <p className="font-serif text-[16px] text-stone-600">Nothing retrieved yet</p>
+            <p className="font-display text-[16px] text-stone-600">Nothing retrieved yet</p>
             <p className="mt-1 text-meta leading-relaxed text-stone-500">Ask a question and the supporting passages will appear here.</p>
           </div>
         ) : turn.citations.length === 0 ? (
           <div className="px-6 py-12 text-center">
-            <p className="font-serif text-[16px] text-stone-600">No passages retrieved</p>
+            <p className="font-display text-[16px] text-stone-600">No passages retrieved</p>
             <p className="mt-1 text-meta leading-relaxed text-stone-500">
               Nothing in the corpus was close enough to this question, so there is nothing to ground an answer on.
             </p>
@@ -116,7 +116,7 @@ export function EvidenceInspector({
                       {c.ref_index}
                     </span>
                     <span className="min-w-0 flex-1">
-                      <span className="block font-serif text-[15.5px] leading-snug text-ink">{c.title}</span>
+                      <span className="block font-display text-[15.5px] leading-snug text-ink">{c.title}</span>
                       <span className="num mt-0.5 block text-meta text-stone-500">{c.year ?? "Year unknown"}</span>
                     </span>
                   </button>

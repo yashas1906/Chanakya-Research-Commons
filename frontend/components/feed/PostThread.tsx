@@ -80,14 +80,14 @@ export function PostThread({ postId }: { postId: string }) {
               <RoleBadge role={post.author.role} />
             </header>
             {post.tags && post.tags.length > 0 && <div className="mt-5 flex flex-wrap gap-2">{post.tags.map((tag) => <Link key={tag} href={`/search?q=${encodeURIComponent(tag)}`}><Tag>{tag}</Tag></Link>)}</div>}
-            <h1 className="mt-4 font-serif text-h1 tracking-tight text-ink">{post.title}</h1>
+            <h1 className="mt-4 font-display text-h1 tracking-tight text-ink">{post.title}</h1>
             <p className="mt-5 whitespace-pre-wrap text-body leading-7 text-stone-700">{post.body}</p>
             <div className="mt-6 border-t border-stone-100 pt-4"><PostActionBar post={actionPost} score={score} vote={vote} busy={busy} onVote={updateVote} /></div>
           </article>
           {post.attached_paper && <section className="card p-5 sm:p-6">
             <p className="eyebrow">Linked paper</p>
             <div className="mt-3 flex items-start gap-3"><FileText className="mt-1 h-5 w-5 shrink-0 text-stone-500" /><div className="min-w-0 flex-1">
-              <Link href={`/papers/${post.attached_paper.paper_id}`} className="font-serif text-h3 text-ink hover:underline">{post.attached_paper.canonical_title}</Link>
+              <Link href={`/papers/${post.attached_paper.paper_id}`} className="font-display text-h3 text-ink hover:underline">{post.attached_paper.canonical_title}</Link>
               <p className="mt-1 text-meta text-stone-500">{[authorsLine(post.attached_paper.authors, 3), post.attached_paper.venue, post.attached_paper.publication_year].filter(Boolean).join(" · ")}</p>
               <div className="mt-3 flex flex-wrap items-center gap-3"><PrestigeTier percentile={post.attached_paper.pagerank_percentile} compact /><Link href={`/papers/${post.attached_paper.paper_id}`} className="text-meta font-medium text-stone-600 hover:text-ink">View paper →</Link><Link href={`/assistant?paper=${post.attached_paper.paper_id}&q=${encodeURIComponent("Summarize this paper’s main contribution")}`} className="text-meta font-medium text-stone-600 hover:text-ink">Ask the assistant →</Link></div>
             </div></div>
@@ -101,7 +101,7 @@ export function PostThread({ postId }: { postId: string }) {
           {topic && <Panel eyebrow="More in this topic" title={topic}>
             {more.loading && !more.data ? <SkeletonCard rows={3} className="border-0" />
               : more.error ? <ErrorState compact error={more.error} onRetry={more.reload} />
-                : morePosts.length ? <ul className="divide-y divide-stone-100">{morePosts.map((item) => <li key={item.post_id} className="p-4"><Link href={`/feed/${item.post_id}`} className="font-serif text-ui text-ink hover:underline">{item.title}</Link><p className="mt-1 text-meta text-stone-500">{item.author_name} · {relTime(item.created_at)}</p></li>)}</ul>
+                : morePosts.length ? <ul className="divide-y divide-stone-100">{morePosts.map((item) => <li key={item.post_id} className="p-4"><Link href={`/feed/${item.post_id}`} className="font-display text-ui text-ink hover:underline">{item.title}</Link><p className="mt-1 text-meta text-stone-500">{item.author_name} · {relTime(item.created_at)}</p></li>)}</ul>
                   : <EmptyState title="No related discussions" />}
           </Panel>}
         </aside>

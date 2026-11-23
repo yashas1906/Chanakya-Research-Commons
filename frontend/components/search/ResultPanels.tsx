@@ -43,7 +43,7 @@ export function LibraryPanel({ papers }: { papers: Paper[] }) {
             <li key={p.paper_id} className="group px-4 py-3.5 transition-colors hover:bg-canvas/70">
               <div className="flex items-start justify-between gap-3">
                 <Link href={`/papers/${p.paper_id}`} className="min-w-0 text-left">
-                  <h3 className="font-serif text-[16.5px] leading-snug text-ink underline decoration-transparent underline-offset-[3px] transition-colors group-hover:decoration-stone-300">
+                  <h3 className="font-display text-[16.5px] leading-snug text-ink underline decoration-transparent underline-offset-[3px] transition-colors group-hover:decoration-stone-300">
                     {p.canonical_title}
                   </h3>
                 </Link>
@@ -82,7 +82,7 @@ function ExternalItem({ p }: { p: Paper }) {
     <li className="px-4 py-3.5">
       <div className="flex items-start justify-between gap-3">
         <Link href={`/papers/${p.paper_id}`} className="min-w-0 text-left">
-          <h3 className="font-serif text-[16.5px] leading-snug text-ink hover:underline hover:decoration-stone-300 hover:underline-offset-[3px]">
+          <h3 className="font-display text-[16.5px] leading-snug text-ink hover:underline hover:decoration-stone-300 hover:underline-offset-[3px]">
             {p.canonical_title}
           </h3>
         </Link>
@@ -202,7 +202,7 @@ export function PostsPanel({ posts }: { posts: PostHit[] }) {
         <ul className="divide-y divide-stone-100">
           {posts.map((p) => (
             <li key={p.post_id} className="px-4 py-3.5">
-              <h3 className="font-serif text-[16.5px] leading-snug text-ink"><Link href={`/feed/${p.post_id}`} className="hover:underline">{p.title}</Link></h3>
+              <h3 className="font-display text-[16.5px] leading-snug text-ink"><Link href={`/feed/${p.post_id}`} className="hover:underline">{p.title}</Link></h3>
               <p className="mt-1.5 line-clamp-2 text-meta leading-relaxed text-stone-600">{p.body}</p>
               <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-stone-500">
                 <span>

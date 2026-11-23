@@ -41,6 +41,8 @@ import type {
   PaperDetail,
   HomePayload,
   PostDetail,
+  ProfileComment,
+  ProfilePayload,
   RecommendedPaper,
   RecommendedPerson,
   ResearcherArchetypes,
@@ -203,25 +205,42 @@ async function requestFirst(paths: readonly string[], opts: ReqOptions): Promise
 
 /* -------------------------------- members ------------------------------- */
 
-export async function login(identifier: string, passcode: string): Promise<{ token: string; expires_at: string; user: AuthUser }> {
-  const raw = await request("/auth/login", { method: "POST", body: { identifier, passcode } });
-  const o = isRecord(raw) ? raw : {};
-  const u = isRecord(o.user) ? o.user : {};
+function parseAuthUser(raw: unknown): AuthUser {
+  const u = isRecord(raw) ? raw : {};
   return {
-    token: str(o.token),
-    expires_at: str(o.expires_at),
-    user: {
-      user_id: str(u.user_id),
-      university_id: str(u.university_id),
-      full_name: str(u.full_name),
-      email: strOrNull(u.email) ?? undefined,
-      role: str(u.role, "student") as AuthUser["role"],
-      department: str(u.department),
-      bio: strOrNull(u.bio),
-      interest_tags: Array.isArray(u.interest_tags) ? (u.interest_tags as string[]) : null,
-      is_flagged_spam: u.is_flagged_spam === true,
-    },
+    user_id: str(u.user_id),
+    university_id: str(u.university_id),
+    full_name: str(u.full_name),
+    email: strOrNull(u.email) ?? undefined,
+    role: str(u.role, "student") as AuthUser["role"],
+    department: str(u.department),
+    bio: strOrNull(u.bio),
+    interest_tags: Array.isArray(u.interest_tags) ? (u.interest_tags as string[]) : null,
+    is_flagged_spam: u.is_flagged_spam === true,
   };
+}
+
+function parseAuthResponse(raw: unknown): { token: string; expires_at: string; user: AuthUser } {
+  const o = isRecord(raw) ? raw : {};
+  return { token: str(o.token, str(o.access_token)), expires_at: str(o.expires_at), user: parseAuthUser(o.user) };
+}
+
+export async function login(identifier: string, passcode: string): Promise<{ token: string; expires_at: string; user: AuthUser }> {
+  return parseAuthResponse(await request("/auth/login", { method: "POST", body: { identifier, passcode } }));
+}
+
+export interface RegisterInput {
+  full_name: string;
+  university_id: string;
+  email: string;
+  password: string;
+  department: string;
+  interest_tags?: string[];
+}
+
+/** Self-registration always creates a student; the backend ignores any requested role. */
+export async function register(input: RegisterInput): Promise<{ token: string; expires_at: string; user: AuthUser }> {
+  return parseAuthResponse(await request("/auth/register", { method: "POST", body: { ...input, role: "student" } }));
 }
 
 export async function getMe(signal?: AbortSignal): Promise<AuthUser> {
@@ -266,6 +285,46 @@ export async function getMembers(limit = 60, signal?: AbortSignal): Promise<Memb
 export async function search(q: string, signal?: AbortSignal): Promise<SearchResponse> {
   const raw = await request("/search", { query: { q, limit: 8 }, signal });
   return normalizeSearch(raw, q);
+}
+
+/* -------------------------------- profiles ------------------------------ */
+
+export async function getProfile(userId: string, signal?: AbortSignal): Promise<ProfilePayload> {
+  const raw = await request(`/users/${userId}`, { signal });
+  const o = isRecord(raw) ? raw : {};
+  const stats = isRecord(o.stats) ? o.stats : {};
+  const comments = Array.isArray(o.comments) ? o.comments : [];
+  return {
+    user: { ...parseAuthUser(o.user), created_at: isRecord(o.user) ? strOrNull(o.user.created_at) : null },
+    stats: {
+      post_count: num(stats.post_count),
+      comment_count: num(stats.comment_count),
+      karma: num(stats.karma),
+      follower_count: num(stats.follower_count),
+      following_count: num(stats.following_count),
+      saved_count: num(stats.saved_count),
+    },
+    posts: normalizeFeed(Array.isArray(o.posts) ? o.posts : []),
+    comments: comments.map((c): ProfileComment => {
+      const r = isRecord(c) ? c : {};
+      return {
+        comment_id: str(r.comment_id),
+        post_id: str(r.post_id),
+        post_title: str(r.post_title),
+        body: str(r.body),
+        created_at: str(r.created_at),
+      };
+    }),
+    is_following: o.is_following === true,
+  };
+}
+
+export async function followUser(userId: string): Promise<void> {
+  await request(`/users/${userId}/follow`, { method: "POST" });
+}
+
+export async function unfollowUser(userId: string): Promise<void> {
+  await request(`/users/${userId}/follow`, { method: "DELETE" });
 }
 
 /* ---------------------------------- feed -------------------------------- */

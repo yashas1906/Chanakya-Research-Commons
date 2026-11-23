@@ -31,7 +31,7 @@ export function ShareButton({ url, label = "Share" }: { url: string; label?: str
     }
   };
   return (
-    <button type="button" onClick={share} className="relative z-10 inline-flex h-9 items-center gap-1.5 rounded-full border border-stone-200 px-3 text-meta font-medium text-stone-700 hover:bg-sunken">
+    <button type="button" onClick={share} className="relative z-10 inline-flex h-9 items-center gap-1.5 rounded-full bg-stone-100 px-3.5 text-meta font-semibold text-stone-700 transition hover:bg-stone-200 active:scale-[0.97]">
       <Share2 className="h-4 w-4" />{label}
     </button>
   );

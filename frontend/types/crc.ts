@@ -32,6 +32,31 @@ export interface AuthUser extends Omit<Member, "email"> {
   email?: string;
 }
 
+export interface ProfileStats {
+  post_count: number;
+  comment_count: number;
+  karma: number;
+  follower_count: number;
+  following_count: number;
+  saved_count: number;
+}
+
+export interface ProfileComment {
+  comment_id: string;
+  post_id: string;
+  post_title: string;
+  body: string;
+  created_at: string;
+}
+
+export interface ProfilePayload {
+  user: AuthUser & { created_at: string | null };
+  stats: ProfileStats;
+  posts: FeedPost[];
+  comments: ProfileComment[];
+  is_following: boolean;
+}
+
 /** Chanakya University schools, as seeded in data_pipeline/seed_database.py. */
 export const SCHOOLS = [
   "Computer Science & AI",
