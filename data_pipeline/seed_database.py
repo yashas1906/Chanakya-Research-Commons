@@ -33,12 +33,12 @@ def hash_passcode(passcode: str) -> str:
 
 
 DEPARTMENTS = {
-    "Computer Science & AI": ["large language models", "graph neural networks", "data mining", "computer vision"],
-    "Electronics & Communication": ["wireless sensor networks", "VLSI design", "embedded systems", "signal processing"],
-    "Biotechnology": ["CRISPR gene editing", "bioinformatics", "protein folding", "synthetic biology"],
-    "Management & Commerce": ["supply chain analytics", "fintech adoption", "sustainable finance", "consumer behavior"],
-    "School of Law": ["artificial intelligence regulation", "data privacy law", "intellectual property", "cyber law"],
-    "Liberal Arts & Humanities": ["digital humanities", "cognitive psychology", "public policy", "media studies"],
+    "School of Engineering": ["large language models", "graph neural networks", "wireless sensor networks", "VLSI design", "embedded systems", "computer vision"],
+    "School of Mathematics and Natural Sciences": ["data mining", "signal processing", "quantum computing", "statistical inference", "theoretical physics", "chemistry"],
+    "School of Biosciences": ["CRISPR gene editing", "bioinformatics", "protein folding", "synthetic biology"],
+    "School of Management Sciences": ["supply chain analytics", "fintech adoption", "sustainable finance", "consumer behavior"],
+    "School of Law, Governance and Public Policy": ["artificial intelligence regulation", "data privacy law", "intellectual property", "cyber law", "public policy"],
+    "School of Arts, Humanities and Social Sciences": ["digital humanities", "cognitive psychology", "media studies", "linguistics", "history"],
 }
 
 BENCHMARK_QUERIES = [

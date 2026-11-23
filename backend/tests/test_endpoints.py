@@ -21,7 +21,7 @@ def test_full_pipeline():
         "email": reg_email,
         "password": "Password123!",
         "role": "researcher",
-        "department": "Computer Science & AI",
+        "department": "School of Engineering",
         "bio": "Researching intelligent commons.",
         "interest_tags": ["data mining", "graph neural networks"]
     })

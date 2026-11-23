@@ -59,12 +59,12 @@ export interface ProfilePayload {
 
 /** Chanakya University schools, as seeded in data_pipeline/seed_database.py. */
 export const SCHOOLS = [
-  "Computer Science & AI",
-  "Electronics & Communication",
-  "Biotechnology",
-  "Management & Commerce",
-  "School of Law",
-  "Liberal Arts & Humanities",
+  "School of Arts, Humanities and Social Sciences",
+  "School of Biosciences",
+  "School of Engineering",
+  "School of Law, Governance and Public Policy",
+  "School of Management Sciences",
+  "School of Mathematics and Natural Sciences",
 ] as const;
 export type School = (typeof SCHOOLS)[number];
 

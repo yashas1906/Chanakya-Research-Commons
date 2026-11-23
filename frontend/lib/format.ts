@@ -71,6 +71,12 @@ export function cx(...parts: Array<string | false | null | undefined>): string {
 /** Short school label for compact chips. */
 export function shortSchool(s: string): string {
   return s
+    .replace("School of Arts, Humanities and Social Sciences", "SAHSS")
+    .replace("School of Biosciences", "SBS")
+    .replace("School of Engineering", "SOE")
+    .replace("School of Law, Governance and Public Policy", "SLGPP")
+    .replace("School of Management Sciences", "SMS")
+    .replace("School of Mathematics and Natural Sciences", "SMNS")
     .replace("Computer Science & AI", "CS & AI")
     .replace("Electronics & Communication", "Electronics")
     .replace("Management & Commerce", "Management")

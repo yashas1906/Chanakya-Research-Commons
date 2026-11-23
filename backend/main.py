@@ -931,12 +931,12 @@ def get_library(
                        p.save_count, p.pagerank_score, ls.private_notes, ls.saved_at, ls.collection_id,
                        c.name AS collection_name,
                        CASE
-                         WHEN 'Computer Science & AI' = ANY(p.topics) THEN 'Computer Science & AI'
-                         WHEN 'Electronics & Communication' = ANY(p.topics) THEN 'Electronics & Communication'
-                         WHEN 'Biotechnology' = ANY(p.topics) THEN 'Biotechnology'
-                         WHEN 'Management & Commerce' = ANY(p.topics) THEN 'Management & Commerce'
-                         WHEN 'School of Law' = ANY(p.topics) THEN 'School of Law'
-                         WHEN 'Liberal Arts & Humanities' = ANY(p.topics) THEN 'Liberal Arts & Humanities'
+                         WHEN 'School of Arts, Humanities and Social Sciences' = ANY(p.topics) THEN 'School of Arts, Humanities and Social Sciences'
+                         WHEN 'School of Biosciences' = ANY(p.topics) THEN 'School of Biosciences'
+                         WHEN 'School of Engineering' = ANY(p.topics) THEN 'School of Engineering'
+                         WHEN 'School of Law, Governance and Public Policy' = ANY(p.topics) THEN 'School of Law, Governance and Public Policy'
+                         WHEN 'School of Management Sciences' = ANY(p.topics) THEN 'School of Management Sciences'
+                         WHEN 'School of Mathematics and Natural Sciences' = ANY(p.topics) THEN 'School of Mathematics and Natural Sciences'
                          ELSE NULL
                        END AS school
                 FROM library_saves ls
@@ -954,12 +954,12 @@ def get_library(
                 SELECT p.paper_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
                        p.save_count, p.pagerank_score,
                        CASE
-                         WHEN 'Computer Science & AI' = ANY(p.topics) THEN 'Computer Science & AI'
-                         WHEN 'Electronics & Communication' = ANY(p.topics) THEN 'Electronics & Communication'
-                         WHEN 'Biotechnology' = ANY(p.topics) THEN 'Biotechnology'
-                         WHEN 'Management & Commerce' = ANY(p.topics) THEN 'Management & Commerce'
-                         WHEN 'School of Law' = ANY(p.topics) THEN 'School of Law'
-                         WHEN 'Liberal Arts & Humanities' = ANY(p.topics) THEN 'Liberal Arts & Humanities'
+                         WHEN 'School of Arts, Humanities and Social Sciences' = ANY(p.topics) THEN 'School of Arts, Humanities and Social Sciences'
+                         WHEN 'School of Biosciences' = ANY(p.topics) THEN 'School of Biosciences'
+                         WHEN 'School of Engineering' = ANY(p.topics) THEN 'School of Engineering'
+                         WHEN 'School of Law, Governance and Public Policy' = ANY(p.topics) THEN 'School of Law, Governance and Public Policy'
+                         WHEN 'School of Management Sciences' = ANY(p.topics) THEN 'School of Management Sciences'
+                         WHEN 'School of Mathematics and Natural Sciences' = ANY(p.topics) THEN 'School of Mathematics and Natural Sciences'
                          ELSE NULL
                        END AS school
                 FROM papers p
@@ -2388,7 +2388,7 @@ def get_anomalies(user=Depends(current_user_optional)):
             {
                 "id": "spotlight-dr-sharma-0",
                 "name": "Dr. Ananya Sharma",
-                "department": "Computer Science & AI",
+                "department": "School of Engineering",
                 "role": "faculty",
                 "anomaly_score": 0.248,
                 "severity": "HIGH",
@@ -2405,7 +2405,7 @@ def get_anomalies(user=Depends(current_user_optional)):
             {
                 "id": "spotlight-prof-verma-1",
                 "name": "Prof. Rajesh Verma",
-                "department": "Electronics & Communication",
+                "department": "School of Engineering",
                 "role": "faculty",
                 "anomaly_score": 0.194,
                 "severity": "HIGH",
@@ -2426,7 +2426,7 @@ def get_anomalies(user=Depends(current_user_optional)):
             {
                 "id": "integrity-user-bot-0",
                 "name": "ResearchBot_Alpha",
-                "department": "Computer Science & AI",
+                "department": "School of Engineering",
                 "role": "student",
                 "anomaly_score": 0.285,
                 "severity": "HIGH",
@@ -2443,7 +2443,7 @@ def get_anomalies(user=Depends(current_user_optional)):
             {
                 "id": "integrity-user-sync-1",
                 "name": "AutoScraper_V2",
-                "department": "Management & Commerce",
+                "department": "School of Management Sciences",
                 "role": "researcher",
                 "anomaly_score": 0.172,
                 "severity": "MEDIUM",
