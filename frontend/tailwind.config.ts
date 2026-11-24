@@ -1,6 +1,9 @@
 import type { Config } from "tailwindcss";
 
+const v = (name: string) => `rgb(var(--c-${name}) / <alpha-value>)`;
+
 const config: Config = {
+  darkMode: "class",
   content: [
     "./app/**/*.{js,ts,jsx,tsx,mdx}",
     "./components/**/*.{js,ts,jsx,tsx,mdx}",
@@ -9,72 +12,69 @@ const config: Config = {
   ],
   theme: {
     extend: {
+      // Every colour is a CSS variable (see globals.css) so light/dark themes swap the whole palette.
       colors: {
-        // Surfaces: warm ivory paper under cream cards, like good stationery.
-        canvas: "#F4EEE2",
-        paper: "#FFFCF6",
-        sunken: "#F0E9DA",
+        canvas: v("canvas"),
+        paper: v("paper"),
+        sunken: v("sunken"),
+        // Fixed deep red that keeps white text readable in both themes (hero bands, logo, chat bubbles).
+        deep: v("deep"),
         ink: {
-          DEFAULT: "#1D1915",
-          soft: "#2C2620",
+          DEFAULT: v("ink"),
+          soft: v("ink-soft"),
         },
-        // Every neutral in the app (text-stone-*, border-stone-*, bg-stone-*) is a warm stone.
         stone: {
-          50: "#FAF6EE",
-          100: "#F2ECDF",
-          200: "#E6DECC",
-          300: "#D3C9B2",
-          400: "#A89D86",
-          500: "#7E745F",
-          600: "#5E5645",
-          700: "#463F32",
-          800: "#2E2922",
-          900: "#1D1915",
+          50: v("stone-50"),
+          100: v("stone-100"),
+          200: v("stone-200"),
+          300: v("stone-300"),
+          400: v("stone-400"),
+          500: v("stone-500"),
+          600: v("stone-600"),
+          700: v("stone-700"),
+          800: v("stone-800"),
+          900: v("stone-900"),
         },
-        // Brand: deep Chanakya green. Primary actions, active states, the masthead.
         brand: {
-          50: "#EEF5F1",
-          100: "#D8E8DF",
-          200: "#B1D0BF",
-          300: "#80B09A",
-          400: "#4C8A71",
-          500: "#2A6B54",
-          600: "#175240",
-          700: "#11412F",
-          800: "#0C3124",
-          900: "#07231A",
+          50: v("brand-50"),
+          100: v("brand-100"),
+          200: v("brand-200"),
+          300: v("brand-300"),
+          400: v("brand-400"),
+          500: v("brand-500"),
+          600: v("brand-600"),
+          700: v("brand-700"),
+          800: v("brand-800"),
+          900: v("brand-900"),
         },
-        // Accent: antique gold. Highlights, active nav underline, small emblems.
         saffron: {
-          50: "#FBF5E6",
-          100: "#F5E8C3",
-          200: "#EBD498",
-          300: "#E0BE6B",
-          400: "#D2A649",
-          500: "#B88A2E",
-          600: "#946C1F",
+          50: v("saffron-50"),
+          100: v("saffron-100"),
+          200: v("saffron-200"),
+          300: v("saffron-300"),
+          400: v("saffron-400"),
+          500: v("saffron-500"),
+          600: v("saffron-600"),
         },
-        // Integrity watchlist: muted terracotta
         terracotta: {
-          50: "#FBF3EF",
-          100: "#F6E4DB",
-          200: "#EBC6B4",
-          500: "#B9633F",
-          600: "#A3522F",
-          700: "#85411F",
+          50: v("terracotta-50"),
+          100: v("terracotta-100"),
+          200: v("terracotta-200"),
+          500: v("terracotta-500"),
+          600: v("terracotta-600"),
+          700: v("terracotta-700"),
         },
-        // Breakout impact: muted sage
         sage: {
-          50: "#F2F6F1",
-          100: "#E1EBDE",
-          200: "#C3D6BD",
-          500: "#5E8A5A",
-          600: "#4A7247",
-          700: "#3B5B39",
+          50: v("sage-50"),
+          100: v("sage-100"),
+          200: v("sage-200"),
+          500: v("sage-500"),
+          600: v("sage-600"),
+          700: v("sage-700"),
         },
       },
       fontFamily: {
-        // Newsreader: headings and long-form reading.
+        // Playfair Display: headings. Outfit: everything else.
         serif: ["var(--font-serif)", "Georgia", "Cambria", "serif"],
         sans: ["var(--font-sans)", "ui-sans-serif", "system-ui", "sans-serif"],
       },
@@ -91,9 +91,9 @@ const config: Config = {
         eyebrow: "0.01em",
       },
       boxShadow: {
-        card: "0 1px 2px rgba(60, 40, 10, 0.05), 0 0 0 1px rgba(60, 40, 10, 0.01)",
-        lift: "0 10px 26px -10px rgba(60, 40, 10, 0.28), 0 2px 6px -2px rgba(60, 40, 10, 0.08)",
-        pop: "0 18px 44px -14px rgba(40, 25, 5, 0.38), 0 4px 12px -4px rgba(40, 25, 5, 0.10)",
+        card: "0 1px 0 rgba(28, 10, 12, 0.03)",
+        lift: "0 12px 28px -14px rgba(28, 10, 12, 0.30)",
+        pop: "0 20px 48px -16px rgba(28, 10, 12, 0.42), 0 4px 12px -4px rgba(28, 10, 12, 0.10)",
       },
       keyframes: {
         shimmer: {

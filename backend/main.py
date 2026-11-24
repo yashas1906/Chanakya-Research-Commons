@@ -51,8 +51,9 @@ except ImportError:
 from contextlib import contextmanager
 from psycopg2 import pool
 
+register_uuid()  # lets psycopg2 bind uuid.UUID path parameters directly
+
 load_dotenv()
-register_uuid()
 
 DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -130,6 +131,15 @@ def startup_event():
         print("[Auth] Development sign-in tokens will expire when the backend restarts.")
     print("[Auth] Legacy demo credentials enabled; seeded accounts use CRC_DEMO_PASSCODE.")
     try:
+        # Additive, idempotent: lets "edited" posts work even if migration 004 was never run by hand.
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("ALTER TABLE posts ADD COLUMN IF NOT EXISTS edited_at TIMESTAMPTZ")
+            conn.commit()
+            cur.close()
+    except Exception as exc:
+        print(f"[FastAPI Startup] edited_at column check failed: {exc}")
+    try:
         warmup_submission_detector()
     except Exception as exc:
         print(f"[FastAPI Startup] Anomaly detector warmup notice: {exc}")
@@ -152,6 +162,17 @@ class PostCreate(BaseModel):
     body: str
     tags: list[str] = []
     attached_paper_id: Optional[str] = None
+
+
+class PostUpdate(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=250)
+    body: Optional[str] = Field(None, min_length=1, max_length=20000)
+    tags: Optional[list[str]] = None
+
+
+class CollectionUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=120)
+    description: Optional[str] = None
 
 
 class UpvoteRequest(BaseModel):
@@ -228,18 +249,6 @@ class AddPaperToCollectionRequest(BaseModel):
 ROLE_RANK = {"student": 1, "faculty": 2, "researcher": 2, "admin": 3}
 _login_attempts: dict[str, list[float]] = {}
 _login_attempts_lock = threading.Lock()
-_ADMIN_MEMBER_SORTS = {
-    "name": "u.full_name",
-    "role": "u.role",
-    "department": "u.department",
-    "joined": "u.created_at",
-    "posts": "(SELECT COUNT(*) FROM posts p WHERE p.author_id = u.user_id)",
-    "comments": "(SELECT COUNT(*) FROM comments c WHERE c.author_id = u.user_id)",
-    "saves": "(SELECT COUNT(*) FROM library_saves ls WHERE ls.user_id = u.user_id)",
-    "votes": "(SELECT COUNT(*) FROM post_upvotes vu WHERE vu.user_id = u.user_id)",
-    "karma": "(SELECT COALESCE(SUM(p.upvote_count), 0) FROM posts p WHERE p.author_id = u.user_id)",
-    "last_active": "GREATEST(u.created_at, COALESCE((SELECT MAX(p.created_at) FROM posts p WHERE p.author_id = u.user_id), u.created_at))",
-}
 
 
 def _b64url(data: bytes) -> str:
@@ -388,8 +397,9 @@ def register(payload: RegisterRequest):
         salt = bcrypt.gensalt()
         pw_hash = "bcrypt$" + bcrypt.hashpw(payload.password.encode("utf-8"), salt).decode("utf-8")
 
-        # Self-registration sets student, faculty, or researcher; admin access is restricted.
-        self_role = payload.role if payload.role in ("student", "faculty", "researcher") else "student"
+        # Self-registration always creates a student. Faculty / researcher / admin access is
+        # granted by the university (an admin updates users.role); a client-supplied role is ignored.
+        self_role = "student"
 
         # Initial profile embedding computed from role, department, tags & bio
         bio_text = f"{self_role.title()} in {payload.department}. {payload.bio or ''}"
@@ -414,20 +424,6 @@ def register(payload: RegisterRequest):
             ),
         )
         new_user = cur.fetchone()
-
-        # Keep Star Schema member dimension in sync
-        try:
-            cur.execute(
-                """
-                INSERT INTO dw.dim_member (user_id, full_name, role, department, is_active)
-                VALUES (%s::uuid, %s, %s, %s, TRUE)
-                ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role, department = EXCLUDED.department, full_name = EXCLUDED.full_name
-                """,
-                (new_user["user_id"], new_user["full_name"], new_user["role"], new_user["department"])
-            )
-        except Exception:
-            pass
-
         conn.commit()
         cur.close()
 
@@ -594,7 +590,7 @@ def get_user_profile(user_id: UUID, viewer=Depends(current_user_optional)):
 
         cur.execute(
             """
-            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at, p.edited_at,
                    u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
                    pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
                    (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
@@ -686,7 +682,7 @@ def get_feed(
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at, p.edited_at,
                    u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
                    pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
                    (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
@@ -743,13 +739,88 @@ def create_post(payload: PostCreate, user=Depends(current_user)):
         return post
 
 
-def _set_post_vote(post_id: UUID, user_id: str, value: int):
+@app.patch("/api/posts/{post_id}")
+def update_post(post_id: UUID, payload: PostUpdate, user=Depends(current_user)):
+    """Author-only edit. Stamps edited_at so the UI can show an "edited" marker."""
+    changes = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    if not changes:
+        raise HTTPException(status_code=422, detail="Nothing to update")
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT 1 FROM posts WHERE post_id = %s", (post_id,))
+        cur.execute("SELECT author_id, title, body, tags FROM posts WHERE post_id = %s FOR UPDATE", (post_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Post not found")
+        if str(row["author_id"]) != str(user["user_id"]):
+            cur.close()
+            raise HTTPException(status_code=403, detail="You can only edit your own posts")
+        title = (changes.get("title") if changes.get("title") is not None else row["title"]).strip()
+        body = (changes.get("body") if changes.get("body") is not None else row["body"]).strip()
+        tags = changes["tags"] if changes.get("tags") is not None else row["tags"]
+        if not title or not body:
+            cur.close()
+            raise HTTPException(status_code=422, detail="Title and body cannot be blank")
+        if title == row["title"] and body == row["body"] and list(tags or []) == list(row["tags"] or []):
+            cur.execute("SELECT edited_at FROM posts WHERE post_id = %s", (post_id,))
+            current = cur.fetchone()
+            cur.close()
+            return {"post_id": str(post_id), "title": title, "body": body, "tags": tags, "edited_at": current["edited_at"]}
+        q_vec = vec_literal(f"{title} {body}")
+        cur.execute(
+            """
+            UPDATE posts SET title = %s, body = %s, tags = %s, post_embedding = %s::vector, edited_at = NOW()
+            WHERE post_id = %s
+            RETURNING post_id, title, body, tags, edited_at
+            """,
+            (title, body, tags, q_vec, post_id),
+        )
+        updated = cur.fetchone()
+        conn.commit()
+        cur.close()
+        updated["post_id"] = str(updated["post_id"])
+        return updated
+
+
+@app.delete("/api/posts/{post_id}")
+def delete_post(post_id: UUID, user=Depends(current_user)):
+    """Author (or an admin moderating) can delete a post; comments and votes cascade."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT author_id FROM posts WHERE post_id = %s", (post_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Post not found")
+        if str(row["author_id"]) != str(user["user_id"]) and user["role"] != "admin":
+            cur.close()
+            raise HTTPException(status_code=403, detail="You can only delete your own posts")
+        cur.execute("DELETE FROM posts WHERE post_id = %s", (post_id,))
+        conn.commit()
+        cur.close()
+    return {"status": "deleted", "post_id": str(post_id)}
+
+
+def _set_post_vote(post_id: UUID, user_id: str, value: int):
+    """Apply one user's vote as a *delta* on the stored score.
+
+    posts.upvote_count is a running total that may already include votes that never went through the
+    ledger (seeded or imported scores). Adding (new - previous) keeps that history intact instead of
+    recomputing from post_upvotes, which used to reset a score of e.g. 14 to 1 on the first click.
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM posts WHERE post_id = %s FOR UPDATE", (post_id,))
         if not cur.fetchone():
             cur.close()
             raise HTTPException(status_code=404, detail="Post not found")
+        cur.execute(
+            "SELECT value FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
+            (user_id, post_id),
+        )
+        previous = cur.fetchone()
+        previous_value = previous["value"] if previous else 0
+        delta = value - previous_value
         if value == 0:
             cur.execute(
                 "DELETE FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
@@ -763,27 +834,19 @@ def _set_post_vote(post_id: UUID, user_id: str, value: int):
                 """,
                 (user_id, post_id, value),
             )
-            cur.execute(
-                "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'vote_post', %s)",
-                (user_id, post_id),
-            )
+            if delta != 0:
+                cur.execute(
+                    "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'vote_post', %s)",
+                    (user_id, post_id),
+                )
         cur.execute(
-            """
-            UPDATE posts SET upvote_count = COALESCE(
-              (SELECT SUM(value) FROM post_upvotes WHERE post_id = %s), 0
-            ) WHERE post_id = %s RETURNING upvote_count
-            """,
-            (post_id, post_id),
+            "UPDATE posts SET upvote_count = COALESCE(upvote_count, 0) + %s WHERE post_id = %s RETURNING upvote_count",
+            (delta, post_id),
         )
         score = cur.fetchone()["upvote_count"]
-        cur.execute(
-            "SELECT COALESCE(value, 0) AS my_vote FROM post_upvotes WHERE user_id = %s::uuid AND post_id = %s",
-            (user_id, post_id),
-        )
-        vote = cur.fetchone()
         conn.commit()
         cur.close()
-        return {"upvote_count": score, "my_vote": vote["my_vote"] if vote else 0}
+        return {"upvote_count": score, "my_vote": value}
 
 
 @app.post("/api/posts/{post_id}/vote")
@@ -811,7 +874,7 @@ def get_post(post_id: UUID, user=Depends(current_user_optional)):
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at, p.edited_at,
                    u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
                    pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
                    (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
@@ -1099,6 +1162,128 @@ def create_collection(payload: CollectionCreate, user=Depends(current_user)):
         cur.close()
         collection["paper_count"] = 0
         return collection
+
+
+def _owned_collection(cur, collection_id, user_id):
+    cur.execute(
+        "SELECT collection_id, name, description FROM collections WHERE collection_id = %s::uuid AND user_id = %s::uuid",
+        (collection_id, user_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        cur.close()
+        raise HTTPException(status_code=404, detail="Collection not found")
+    return row
+
+
+@app.patch("/api/collections/{collection_id}")
+def update_collection(collection_id: UUID, payload: CollectionUpdate, user=Depends(current_user)):
+    changes = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+    with get_db() as conn:
+        cur = conn.cursor()
+        current = _owned_collection(cur, str(collection_id), user["user_id"])
+        name = (changes.get("name") if changes.get("name") is not None else current["name"]).strip()
+        if not name:
+            cur.close()
+            raise HTTPException(status_code=422, detail="Collection name cannot be blank")
+        description = changes["description"] if "description" in changes else current["description"]
+        cur.execute(
+            "UPDATE collections SET name = %s, description = %s WHERE collection_id = %s::uuid RETURNING collection_id, name, description",
+            (name, (description or "").strip() or None, collection_id),
+        )
+        updated = cur.fetchone()
+        conn.commit()
+        cur.close()
+        updated["collection_id"] = str(updated["collection_id"])
+        return updated
+
+
+@app.delete("/api/collections/{collection_id}")
+def delete_collection(collection_id: UUID, user=Depends(current_user)):
+    """Deletes the collection only. Papers stay in the member's library (collection_id is set to NULL)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        _owned_collection(cur, str(collection_id), user["user_id"])
+        cur.execute("DELETE FROM collections WHERE collection_id = %s::uuid", (collection_id,))
+        conn.commit()
+        cur.close()
+    return {"status": "deleted", "collection_id": str(collection_id)}
+
+
+@app.get("/api/collections/{collection_id}/papers")
+def list_collection_papers(collection_id: UUID, user=Depends(current_user_optional)):
+    """Collection contents. Anyone can read a collection (they are shown on public profiles)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT c.collection_id, c.name, c.description, c.user_id, u.full_name AS owner_name
+            FROM collections c JOIN users u ON u.user_id = c.user_id
+            WHERE c.collection_id = %s::uuid
+            """,
+            (collection_id,),
+        )
+        collection = cur.fetchone()
+        if not collection:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Collection not found")
+        cur.execute(
+            """
+            SELECT p.paper_id, p.canonical_title, p.authors, p.venue, p.publication_year, p.topics,
+                   p.save_count, p.pagerank_score, ls.saved_at
+            FROM library_saves ls JOIN papers p ON p.paper_id = ls.paper_id
+            WHERE ls.collection_id = %s::uuid
+            ORDER BY ls.saved_at DESC
+            """,
+            (collection_id,),
+        )
+        papers = cur.fetchall()
+        cur.close()
+    collection["collection_id"] = str(collection["collection_id"])
+    collection["user_id"] = str(collection["user_id"])
+    return {"collection": collection, "papers": papers}
+
+
+@app.delete("/api/collections/{collection_id}/papers/{paper_id}")
+def remove_paper_from_collection(collection_id: UUID, paper_id: UUID, user=Depends(current_user)):
+    """Takes a paper out of the collection but keeps it saved in the library."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        _owned_collection(cur, str(collection_id), user["user_id"])
+        cur.execute(
+            "UPDATE library_saves SET collection_id = NULL WHERE user_id = %s::uuid AND paper_id = %s AND collection_id = %s::uuid",
+            (user["user_id"], paper_id, collection_id),
+        )
+        removed = cur.rowcount > 0
+        conn.commit()
+        cur.close()
+    return {"status": "removed" if removed else "not_in_collection"}
+
+
+@app.get("/api/users/{user_id}/collections")
+def get_user_collections(user_id: UUID):
+    """Collections shown on a member's profile (name, description, size and a few titles)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT c.collection_id, c.name, c.description, c.created_at,
+                   COUNT(ls.paper_id) AS paper_count,
+                   COALESCE((ARRAY_AGG(p.canonical_title ORDER BY ls.saved_at DESC) FILTER (WHERE p.paper_id IS NOT NULL))[1:3], ARRAY[]::text[]) AS sample_titles
+            FROM collections c
+            LEFT JOIN library_saves ls ON ls.collection_id = c.collection_id
+            LEFT JOIN papers p ON p.paper_id = ls.paper_id
+            WHERE c.user_id = %s::uuid
+            GROUP BY c.collection_id, c.name, c.description, c.created_at
+            ORDER BY c.created_at DESC
+            """,
+            (user_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+    for row in rows:
+        row["collection_id"] = str(row["collection_id"])
+    return rows
 
 
 @app.post("/api/collections/{collection_id}/papers")
@@ -1434,20 +1619,57 @@ def get_recommendations(user_id: str, limit: int = Query(6, ge=1, le=50)):
             cur.close()
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Recommended papers (excluding already saved)
-        cur.execute(
-            """
+        # Recommended papers (excluding already saved).
+        # Taste vector = the member's profile embedding (bio + interest tags) blended with the centroid of
+        # the papers they saved, so saving papers really does tune the list. "reason" says which signal won.
+        rec_sql_blended = """
+            WITH me AS (SELECT profile_embedding FROM users WHERE user_id = %s::uuid),
+            taste AS (
+                SELECT AVG(p.embedding) AS centroid, COUNT(*) AS n
+                FROM library_saves ls JOIN papers p ON p.paper_id = ls.paper_id
+                WHERE ls.user_id = %s::uuid AND p.embedding IS NOT NULL
+            ),
+            ranked AS (
+                SELECT paper_id, percent_rank() OVER (ORDER BY pagerank_score) AS pagerank_percentile FROM papers
+            )
             SELECT p.paper_id, p.canonical_title, p.publication_year, p.venue, p.topics, p.save_count, p.pagerank_score,
-                   (1 - (p.embedding <=> u.profile_embedding)) AS match_score
+                   r.pagerank_percentile,
+                   CASE WHEN t.centroid IS NULL THEN (1 - (p.embedding <=> me.profile_embedding))
+                        ELSE 0.5 * (1 - (p.embedding <=> me.profile_embedding)) + 0.5 * (1 - (p.embedding <=> t.centroid)) END AS match_score,
+                   CASE WHEN t.centroid IS NOT NULL
+                         AND (1 - (p.embedding <=> t.centroid)) > (1 - (p.embedding <=> me.profile_embedding))
+                        THEN 'saved' ELSE 'profile' END AS reason
             FROM papers p
-            CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) u
+            CROSS JOIN me CROSS JOIN taste t
+            JOIN ranked r ON r.paper_id = p.paper_id
             WHERE p.paper_id NOT IN (SELECT paper_id FROM library_saves WHERE user_id = %s::uuid)
             ORDER BY match_score DESC, p.pagerank_score DESC
             LIMIT %s
-            """,
-            (user_id, user_id, limit),
-        )
-        rec_papers = cur.fetchall()
+        """
+        try:
+            cur.execute(rec_sql_blended, (user_id, user_id, user_id, limit))
+            rec_papers = cur.fetchall()
+        except psycopg2.Error as exc:
+            # Older pgvector without avg(vector): fall back to the profile-only ranking.
+            conn.rollback()
+            print(f"[recommendations] blended ranking unavailable, using profile only: {exc}")
+            cur.execute(
+                """
+                SELECT p.paper_id, p.canonical_title, p.publication_year, p.venue, p.topics, p.save_count, p.pagerank_score,
+                       ranked.pagerank_percentile,
+                       (1 - (p.embedding <=> u.profile_embedding)) AS match_score,
+                       'profile' AS reason
+                FROM papers p
+                JOIN (SELECT paper_id, percent_rank() OVER (ORDER BY pagerank_score) AS pagerank_percentile FROM papers) ranked
+                  ON ranked.paper_id = p.paper_id
+                CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) u
+                WHERE p.paper_id NOT IN (SELECT paper_id FROM library_saves WHERE user_id = %s::uuid)
+                ORDER BY match_score DESC, p.pagerank_score DESC
+                LIMIT %s
+                """,
+                (user_id, user_id, limit),
+            )
+            rec_papers = cur.fetchall()
 
         # Recommended collaborators (excluding already followed)
         cur.execute(
@@ -1602,7 +1824,7 @@ def get_home():
         featured = cur.fetchall()
         cur.execute(
             """
-            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at,
+            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at, p.edited_at,
                    u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
                    pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
                    (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count
@@ -1809,6 +2031,161 @@ def resolve_alert(alert_id: UUID, user=Depends(require_role("admin"))):
         conn.commit()
         cur.close()
         return {"status": "resolved", "alert": alert}
+
+
+# ==========================================
+# Admin dashboard (admin role only)
+# ==========================================
+_ADMIN_MEMBER_SORTS = {
+    "name": "u.full_name",
+    "role": "u.role",
+    "department": "u.department",
+    "joined": "u.created_at",
+    "posts": "posts",
+    "comments": "comments",
+    "saves": "saves",
+    "votes": "votes_cast",
+    "karma": "karma",
+    "last_active": "last_active",
+}
+
+
+@app.get("/api/admin/overview")
+def admin_overview(days: int = Query(30, ge=7, le=90), user=Depends(require_role("admin"))):
+    """Headline counts, daily activity and moderation queue for the admin dashboard."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM users)                                        AS members,
+              (SELECT COUNT(*) FROM users WHERE is_flagged_spam)                  AS flagged_members,
+              (SELECT COUNT(*) FROM papers)                                       AS papers,
+              (SELECT COUNT(*) FROM papers WHERE in_chanakya_library)             AS library_papers,
+              (SELECT COUNT(*) FROM posts)                                        AS posts,
+              (SELECT COUNT(*) FROM comments)                                     AS comments,
+              (SELECT COUNT(*) FROM post_upvotes)                                 AS votes,
+              (SELECT COUNT(*) FROM library_saves)                                AS saves,
+              (SELECT COUNT(*) FROM system_alerts WHERE NOT is_resolved)          AS open_alerts
+            """
+        )
+        totals = cur.fetchone()
+
+        cur.execute("SELECT role, COUNT(*)::int AS count FROM users GROUP BY role ORDER BY count DESC")
+        by_role = cur.fetchall()
+        cur.execute("SELECT department, COUNT(*)::int AS count FROM users GROUP BY department ORDER BY count DESC")
+        by_department = cur.fetchall()
+
+        cur.execute(
+            """
+            WITH d AS (
+              SELECT generate_series((CURRENT_DATE - (%(n)s - 1) * INTERVAL '1 day')::date, CURRENT_DATE, INTERVAL '1 day')::date AS day
+            )
+            SELECT d.day::text AS day,
+                   (SELECT COUNT(*) FROM posts p WHERE p.created_at::date = d.day)::int         AS posts,
+                   (SELECT COUNT(*) FROM comments c WHERE c.created_at::date = d.day)::int      AS comments,
+                   (SELECT COUNT(*) FROM post_upvotes v WHERE v.created_at::date = d.day)::int  AS votes,
+                   (SELECT COUNT(*) FROM library_saves s WHERE s.saved_at::date = d.day)::int   AS saves
+            FROM d ORDER BY d.day
+            """,
+            {"n": days},
+        )
+        activity = cur.fetchall()
+
+        cur.execute(
+            """
+            SELECT a.alert_id::text, a.alert_type, a.entity_ref, u.full_name AS entity_name,
+                   a.severity_score, a.details, a.detected_at
+            FROM system_alerts a
+            LEFT JOIN users u ON a.alert_type = 'USER_SPAM' AND u.user_id::text = a.entity_ref
+            WHERE NOT a.is_resolved
+            ORDER BY a.severity_score DESC, a.detected_at DESC LIMIT 8
+            """
+        )
+        alerts = cur.fetchall()
+
+        cur.execute(
+            """
+            SELECT u.user_id::text, u.full_name, u.role, u.department,
+                   COUNT(DISTINCT p.post_id)::int AS posts,
+                   COALESCE(SUM(p.upvote_count), 0)::int AS karma
+            FROM users u JOIN posts p ON p.author_id = u.user_id AND NOT p.is_flagged_spam
+            WHERE NOT u.is_flagged_spam
+            GROUP BY u.user_id, u.full_name, u.role, u.department
+            ORDER BY karma DESC, posts DESC LIMIT 5
+            """
+        )
+        top = cur.fetchall()
+        cur.close()
+    return {
+        "totals": totals,
+        "members_by_role": by_role,
+        "members_by_department": by_department,
+        "activity": activity,
+        "open_alerts": alerts,
+        "top_contributors": top,
+    }
+
+
+@app.get("/api/admin/members")
+def admin_members(
+    q: Optional[str] = Query(None, max_length=80),
+    role: Optional[str] = Query(None, pattern="^(student|faculty|researcher|admin)$"),
+    department: Optional[str] = Query(None, max_length=100),
+    flagged: Optional[bool] = None,
+    sort: str = Query("joined"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    user=Depends(require_role("admin")),
+):
+    """Member directory with contact details and activity counts - visible to admins only."""
+    sort_col = _ADMIN_MEMBER_SORTS.get(sort)
+    if not sort_col:
+        raise HTTPException(status_code=422, detail=f"sort must be one of {sorted(_ADMIN_MEMBER_SORTS)}")
+    where, params = ["TRUE"], {"limit": limit, "offset": offset}
+    if q:
+        where.append("(u.full_name ILIKE %(q)s OR u.email ILIKE %(q)s OR u.university_id ILIKE %(q)s)")
+        params["q"] = f"%{q.strip()}%"
+    if role:
+        where.append("u.role = %(role)s")
+        params["role"] = role
+    if department:
+        where.append("u.department = %(department)s")
+        params["department"] = department
+    if flagged is not None:
+        where.append("u.is_flagged_spam = %(flagged)s")
+        params["flagged"] = flagged
+    clause = " AND ".join(where)
+    direction = "ASC" if order == "asc" else "DESC"
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) AS n FROM users u WHERE {clause}", params)
+        total = cur.fetchone()["n"]
+        cur.execute(
+            f"""
+            SELECT u.user_id::text, u.university_id, u.full_name, u.email, u.role, u.department,
+                   u.interest_tags, u.created_at, u.is_synthetic, u.is_flagged_spam, u.spam_score,
+                   COALESCE(po.n, 0)::int AS posts, COALESCE(po.karma, 0)::int AS karma,
+                   COALESCE(co.n, 0)::int AS comments,
+                   COALESCE(sa.n, 0)::int AS saves,
+                   COALESCE(vo.n, 0)::int AS votes_cast,
+                   ev.last_active
+            FROM users u
+            LEFT JOIN (SELECT author_id, COUNT(*) AS n, SUM(upvote_count) AS karma FROM posts GROUP BY author_id) po ON po.author_id = u.user_id
+            LEFT JOIN (SELECT author_id, COUNT(*) AS n FROM comments GROUP BY author_id) co ON co.author_id = u.user_id
+            LEFT JOIN (SELECT user_id, COUNT(*) AS n FROM library_saves GROUP BY user_id) sa ON sa.user_id = u.user_id
+            LEFT JOIN (SELECT user_id, COUNT(*) AS n FROM post_upvotes GROUP BY user_id) vo ON vo.user_id = u.user_id
+            LEFT JOIN (SELECT user_id, MAX(occurred_at) AS last_active FROM activity_events GROUP BY user_id) ev ON ev.user_id = u.user_id
+            WHERE {clause}
+            ORDER BY {sort_col} {direction} NULLS LAST, u.full_name ASC
+            LIMIT %(limit)s OFFSET %(offset)s
+            """,
+            params,
+        )
+        items = cur.fetchall()
+        cur.close()
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
 
 
 # ==========================================
@@ -2171,137 +2548,8 @@ def ask_research_assistant_stream(req: AskAssistantRequest):
 # ==========================================
 # F9: Institutional Analytics Dashboard (Star Schema)
 # ==========================================
-@app.get("/api/admin/overview")
-def admin_overview(days: int = Query(30, ge=7, le=90), user=Depends(require_role("admin"))):
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-              (SELECT COUNT(*) FROM users) AS members,
-              (SELECT COUNT(*) FROM users WHERE is_flagged_spam) AS flagged_members,
-              (SELECT COUNT(*) FROM papers) AS papers,
-              (SELECT COUNT(*) FROM papers WHERE in_chanakya_library) AS library_papers,
-              (SELECT COUNT(*) FROM posts) AS posts,
-              (SELECT COUNT(*) FROM comments) AS comments,
-              (SELECT COUNT(*) FROM post_upvotes) AS votes,
-              (SELECT COUNT(*) FROM library_saves) AS saves,
-              (SELECT COUNT(*) FROM system_alerts WHERE NOT is_resolved) AS open_alerts
-            """
-        )
-        totals = cur.fetchone()
-        cur.execute("SELECT role, COUNT(*)::int AS count FROM users GROUP BY role ORDER BY count DESC")
-        members_by_role = cur.fetchall()
-        cur.execute("SELECT department, COUNT(*)::int AS count FROM users GROUP BY department ORDER BY count DESC")
-        members_by_department = cur.fetchall()
-        cur.execute(
-            """
-            WITH d AS (
-              SELECT generate_series((CURRENT_DATE - (%(n)s - 1) * INTERVAL '1 day')::date,
-                                     CURRENT_DATE, INTERVAL '1 day')::date AS day
-            )
-            SELECT d.day::text AS day,
-              (SELECT COUNT(*) FROM posts p WHERE p.created_at::date = d.day)::int AS posts,
-              (SELECT COUNT(*) FROM comments c WHERE c.created_at::date = d.day)::int AS comments,
-              (SELECT COUNT(*) FROM post_upvotes v WHERE v.created_at::date = d.day)::int AS votes,
-              (SELECT COUNT(*) FROM library_saves s WHERE s.saved_at::date = d.day)::int AS saves
-            FROM d ORDER BY d.day
-            """,
-            {"n": days},
-        )
-        activity = cur.fetchall()
-        cur.execute(
-            """
-            SELECT a.alert_id::text, a.alert_type, a.entity_ref, u.full_name AS entity_name,
-                   a.severity_score, a.details, a.detected_at
-            FROM system_alerts a
-            LEFT JOIN users u ON a.alert_type = 'USER_SPAM' AND u.user_id::text = a.entity_ref
-            WHERE NOT a.is_resolved
-            ORDER BY a.severity_score DESC, a.detected_at DESC LIMIT 8
-            """
-        )
-        open_alerts = cur.fetchall()
-        cur.execute(
-            """
-            SELECT u.user_id::text, u.full_name, u.role, u.department,
-                   COUNT(DISTINCT p.post_id)::int AS posts,
-                   COALESCE(SUM(p.upvote_count), 0)::int AS karma
-            FROM users u JOIN posts p ON p.author_id = u.user_id AND NOT p.is_flagged_spam
-            WHERE NOT u.is_flagged_spam
-            GROUP BY u.user_id, u.full_name, u.role, u.department
-            ORDER BY karma DESC, posts DESC LIMIT 5
-            """
-        )
-        top_contributors = cur.fetchall()
-        cur.close()
-        return {
-            "totals": totals,
-            "members_by_role": members_by_role,
-            "members_by_department": members_by_department,
-            "activity": activity,
-            "open_alerts": open_alerts,
-            "top_contributors": top_contributors,
-        }
-
-
-@app.get("/api/admin/members")
-def admin_members(
-    q: Optional[str] = Query(None, max_length=80),
-    role: Optional[str] = Query(None, pattern="^(student|faculty|researcher|admin)$"),
-    department: Optional[str] = Query(None, max_length=100),
-    flagged: Optional[bool] = None,
-    sort: str = Query("joined"),
-    order: str = Query("desc", pattern="^(asc|desc)$"),
-    limit: int = Query(25, ge=1, le=100),
-    offset: int = Query(0, ge=0),
-    user=Depends(require_role("admin")),
-):
-    sort_col = _ADMIN_MEMBER_SORTS.get(sort)
-    if not sort_col:
-        raise HTTPException(status_code=422, detail=f"sort must be one of {sorted(_ADMIN_MEMBER_SORTS)}")
-    where, params = ["TRUE"], {"limit": limit, "offset": offset}
-    if q:
-        where.append("(u.full_name ILIKE %(q)s OR u.email ILIKE %(q)s OR u.university_id ILIKE %(q)s)")
-        params["q"] = f"%{q.strip()}%"
-    if role:
-        where.append("u.role = %(role)s")
-        params["role"] = role
-    if department:
-        where.append("u.department = %(department)s")
-        params["department"] = department
-    if flagged is not None:
-        where.append("u.is_flagged_spam = %(flagged)s")
-        params["flagged"] = flagged
-    clause = " AND ".join(where)
-    direction = "ASC" if order == "asc" else "DESC"
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute(f"SELECT COUNT(*) AS n FROM users u WHERE {clause}", params)
-        total = cur.fetchone()["n"]
-        cur.execute(
-            f"""
-            SELECT u.user_id::text, u.university_id, u.full_name, u.email, u.role, u.department,
-                   u.interest_tags, u.created_at, u.is_synthetic, u.is_flagged_spam, u.spam_score,
-                   (SELECT COUNT(*) FROM posts p WHERE p.author_id = u.user_id AND NOT p.is_flagged_spam)::int AS posts,
-                   (SELECT COUNT(*) FROM comments c WHERE c.author_id = u.user_id)::int AS comments,
-                   (SELECT COUNT(*) FROM library_saves ls WHERE ls.user_id = u.user_id)::int AS saves,
-                   (SELECT COUNT(*) FROM post_upvotes vu WHERE vu.user_id = u.user_id)::int AS votes_cast,
-                   (SELECT COALESCE(SUM(p.upvote_count), 0) FROM posts p WHERE p.author_id = u.user_id)::int AS karma,
-                   GREATEST(u.created_at, COALESCE((SELECT MAX(p.created_at) FROM posts p WHERE p.author_id = u.user_id), u.created_at)) AS last_active
-            FROM users u
-            WHERE {clause}
-            ORDER BY {sort_col} {direction}
-            LIMIT %(limit)s OFFSET %(offset)s
-            """,
-            params,
-        )
-        items = cur.fetchall()
-        cur.close()
-        return {"total": total, "limit": limit, "offset": offset, "items": items}
-
-
 @app.get("/api/analytics/overview")
-def analytics_overview(department: Optional[str] = None, user=Depends(current_user_optional)):
+def analytics_overview(department: Optional[str] = None, user=Depends(require_role("admin"))):
     """
     Institutional dimensional analytics from dw Star Schema.
     Department filter faithfully applies across Topic Breakdown, Collaboration Matrix, and Monthly Trends.
@@ -2402,6 +2650,7 @@ def analytics_overview(department: Optional[str] = None, user=Depends(current_us
 def get_analytics_drilldown(
     school: Optional[str] = Query(None, description="School filter"),
     department: Optional[str] = Query(None, description="Department filter"),
+    user=Depends(require_role("admin")),
 ):
     """
     Dimensional Drill-Down supporting University -> School -> Department -> Member hierarchy.
@@ -2468,9 +2717,10 @@ def get_analytics_drilldown(
 # ==========================================
 @app.get("/api/analytics/topic-associations")
 def topic_associations(
-    school: Optional[str] = Query(None, description="Filter by school name (e.g. 'School of Technology & AI' or 'ALL')"),
+    school: Optional[str] = Query(None, description="Filter by school name (e.g. 'School of Engineering' or 'ALL')"),
     min_support: float = Query(0.04, ge=0.001, le=1.0, description="Minimum support threshold"),
     min_lift: float = Query(1.2, ge=0.1, description="Minimum lift threshold"),
+    user=Depends(require_role("admin")),
 ):
     """
     Subgroup-Stratified FP-Growth & FP-Max mining over publication topic baskets.
@@ -2482,6 +2732,7 @@ def topic_associations(
 @app.get("/api/analytics/researcher-archetypes")
 def researcher_archetypes(
     n_clusters: int = Query(4, ge=2, le=10, description="Number of researcher archetype clusters"),
+    user=Depends(require_role("admin")),
 ):
     """
     Agglomerative Researcher Clustering (Ward linkage) on continuous metrics,
@@ -2494,7 +2745,7 @@ def researcher_archetypes(
 # F9.3: Isolation Forest Anomaly Watchlist & Gatekeeper
 # ==========================================
 @app.get("/api/analytics/anomalies")
-def get_anomalies(user=Depends(current_user_optional)):
+def get_anomalies(user=Depends(require_role("admin"))):
     """
     Multidimensional Isolation Forest Outlier Analysis on Researcher Profiles.
     Separates positive breakout performers (HIGH_IMPACT_SPOTLIGHT) from

@@ -67,16 +67,19 @@ export function FilterOption({
   active,
   onClick,
   kind = "radio",
+  title,
 }: {
   label: string;
   count?: number;
   active: boolean;
   onClick: () => void;
   kind?: "radio" | "check";
+  title?: string;
 }) {
   return (
     <button
       type="button"
+      title={title}
       role={kind === "radio" ? "radio" : "checkbox"}
       aria-checked={active}
       onClick={onClick}

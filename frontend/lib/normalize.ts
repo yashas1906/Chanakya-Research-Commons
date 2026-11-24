@@ -252,6 +252,7 @@ export function normalizeFeed(raw: unknown): FeedPost[] {
       tags: Array.isArray(u.tags) ? strList(u.tags) : null,
       upvote_count: num(u.upvote_count),
       created_at: str(u.created_at),
+      edited_at: strOrNull(u.edited_at),
       author_name: str(u.author_name, "Unknown"),
       author_dept: str(u.author_dept),
       author_role: str(u.author_role, "student") as FeedPost["author_role"],

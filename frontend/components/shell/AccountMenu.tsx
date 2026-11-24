@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { BookMarked, ChevronDown, LogOut, ShieldCheck, UserRound, Users } from "lucide-react";
+import { BookMarked, ChevronDown, LayoutDashboard, LogOut, UserRound, Users } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { Avatar } from "@/components/ui/Section";
 import { RoleBadge } from "@/components/ui/RoleBadge";
@@ -32,8 +32,8 @@ export function AccountMenu() {
   if (!user) {
     return (
       <div className={cx("flex shrink-0 items-center gap-2", status === "loading" && "opacity-0")}>
-        <button type="button" onClick={() => promptLogin("login")} className="inline-flex h-9 items-center justify-center rounded-full border border-white/30 px-4 text-ui font-semibold text-white transition hover:bg-white/10">Log in</button>
-        <button type="button" onClick={() => promptLogin("register")} className="hidden h-9 items-center justify-center rounded-full bg-saffron-400 px-4 text-ui font-semibold text-ink shadow-sm transition hover:bg-saffron-300 active:scale-[0.98] sm:inline-flex">Sign up</button>
+        <button type="button" onClick={() => promptLogin("login")} className="inline-flex h-10 items-center justify-center rounded-lg border border-stone-300 px-4 text-ui font-medium text-stone-800 transition hover:bg-stone-100">Log in</button>
+        <button type="button" onClick={() => promptLogin("register")} className="hidden h-10 items-center justify-center rounded-lg bg-brand-600 px-4 text-ui font-medium text-white transition hover:bg-brand-700 active:scale-[0.98] sm:inline-flex">Sign up</button>
       </div>
     );
   }
@@ -45,17 +45,17 @@ export function AccountMenu() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={cx("flex items-center gap-2 rounded-full border border-transparent p-1 pr-1 transition hover:bg-white/10 xl:pr-2.5", open && "border-white/20 bg-white/10")}
+        className={cx("flex items-center gap-2 rounded-full border border-transparent p-1 pr-1 transition hover:bg-stone-100 xl:pr-2.5", open && "border-stone-200 bg-stone-100")}
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label="Account menu"
       >
         <Avatar name={user.full_name} size={32} />
         <span className="hidden max-w-36 text-left xl:block">
-          <span className="block truncate text-meta font-semibold leading-4 text-white">{user.full_name}</span>
-          <span className="block text-label capitalize leading-4 text-white/60">{user.role}</span>
+          <span className="block truncate text-meta font-semibold leading-4 text-ink">{user.full_name}</span>
+          <span className="block text-label capitalize leading-4 text-stone-500">{user.role}</span>
         </span>
-        <ChevronDown className={cx("hidden h-4 w-4 text-white/60 transition-transform xl:block", open && "rotate-180")} />
+        <ChevronDown className={cx("hidden h-4 w-4 text-stone-400 transition-transform xl:block", open && "rotate-180")} />
       </button>
       {open && (
         <div role="menu" className="absolute right-0 top-full z-50 mt-2 w-72 animate-pop rounded-2xl border border-stone-200 bg-paper p-2 shadow-pop">
@@ -69,8 +69,8 @@ export function AccountMenu() {
           </div>
           <div className="mt-2 space-y-0.5">
             {user.role === "admin" && (
-              <Link href="/admin" role="menuitem" onClick={() => setOpen(false)} className={cx(row, "font-semibold text-brand-900 bg-saffron-100/60 hover:bg-saffron-200/60")}>
-                <ShieldCheck className="h-4 w-4 text-brand-900" /> Admin dashboard
+              <Link href="/admin" role="menuitem" onClick={() => setOpen(false)} className="flex w-full items-center gap-3 rounded-lg bg-brand-50 px-3 py-2 text-ui font-semibold text-brand-700 transition hover:bg-brand-100">
+                <LayoutDashboard className="h-4 w-4" /> Admin dashboard
               </Link>
             )}
             <Link href={`/u/${user.user_id}`} role="menuitem" onClick={() => setOpen(false)} className={row}><UserRound className="h-4 w-4" /> View profile</Link>

@@ -32,17 +32,28 @@ def hash_passcode(passcode: str) -> str:
     return f"pbkdf2$200000${salt.hex()}${digest.hex()}"
 
 
+# The six official Chanakya University schools. `users.department` stores the school name and every paper
+# is tagged with exactly one of these names in `papers.topics`.
+SOE = "School of Engineering"
+SBS = "School of Biosciences"
+SMS = "School of Management Sciences"
+SLGPP = "School of Law, Governance and Public Policy"
+SAHSS = "School of Arts, Humanities and Social Sciences"
+SMNS = "School of Mathematics and Natural Sciences"
+
+SCHOOL_CODES = {SAHSS: "SAHSS", SBS: "SBS", SOE: "SOE", SLGPP: "SLGPP", SMS: "SMS", SMNS: "SMNS"}
+
 DEPARTMENTS = {
-    "School of Engineering": ["large language models", "graph neural networks", "wireless sensor networks", "VLSI design", "embedded systems", "computer vision"],
-    "School of Mathematics and Natural Sciences": ["data mining", "signal processing", "quantum computing", "statistical inference", "theoretical physics", "chemistry"],
-    "School of Biosciences": ["CRISPR gene editing", "bioinformatics", "protein folding", "synthetic biology"],
-    "School of Management Sciences": ["supply chain analytics", "fintech adoption", "sustainable finance", "consumer behavior"],
-    "School of Law, Governance and Public Policy": ["artificial intelligence regulation", "data privacy law", "intellectual property", "cyber law", "public policy"],
-    "School of Arts, Humanities and Social Sciences": ["digital humanities", "cognitive psychology", "media studies", "linguistics", "history"],
+    SAHSS: ["digital humanities", "cognitive psychology", "media studies", "sociology of technology"],
+    SBS: ["CRISPR gene editing", "bioinformatics", "protein folding", "synthetic biology"],
+    SOE: ["large language models", "graph neural networks", "computer vision", "wireless sensor networks", "VLSI design", "embedded systems"],
+    SLGPP: ["artificial intelligence regulation", "data privacy law", "intellectual property", "public policy"],
+    SMS: ["supply chain analytics", "fintech adoption", "sustainable finance", "consumer behavior"],
+    SMNS: ["data mining", "signal processing", "statistical inference", "numerical optimization"],
 }
 
 BENCHMARK_QUERIES = [
-    # Computer Science & AI (10 queries)
+    # School of Engineering - computing (10 queries)
     "large language models instruction tuning",
     "graph neural networks for molecular representation",
     "contrastive learning in computer vision",
@@ -53,7 +64,7 @@ BENCHMARK_QUERIES = [
     "knowledge graph completion embeddings",
     "anomaly detection in multi-dimensional time series",
     "multimodal vision language models",
-    # Electronics & Communication (8 queries)
+    # School of Engineering - electronics (8 queries)
     "energy efficient routing in wireless sensor networks",
     "low power VLSI design architectures",
     "real-time embedded systems firmware scheduling",
@@ -62,7 +73,7 @@ BENCHMARK_QUERIES = [
     "edge computing IoT sensory networks",
     "RISC-V hardware accelerator synthesis",
     "optical fiber dispersion compensation",
-    # Biotechnology (9 queries)
+    # School of Biosciences (9 queries)
     "CRISPR Cas9 base editing off-target effects",
     "deep learning for protein folding prediction",
     "high throughput genomic sequencing alignment",
@@ -72,7 +83,7 @@ BENCHMARK_QUERIES = [
     "bioinformatics tools for phylogenetics",
     "microbiome composition metagenomics",
     "targeted delivery using nanoparticles",
-    # Management & Commerce (8 queries)
+    # School of Management Sciences (8 queries)
     "resilient supply chain analytics and disruption management",
     "machine learning for fintech credit risk assessment",
     "ESG scoring and sustainable corporate finance",
@@ -81,7 +92,7 @@ BENCHMARK_QUERIES = [
     "predictive inventory optimization models",
     "e-commerce recommendation systems conversion",
     "central bank digital currencies macroeconomic impacts",
-    # School of Law (8 queries)
+    # School of Law, Governance and Public Policy (8 queries)
     "governance frameworks for artificial intelligence regulation",
     "cross border data privacy and GDPR compliance",
     "generative AI intellectual property copyright",
@@ -90,7 +101,7 @@ BENCHMARK_QUERIES = [
     "smart contracts legal enforceability",
     "algorithmic antitrust and market collusion",
     "biometric surveillance Fourth Amendment protections",
-    # Liberal Arts & Humanities (8 queries)
+    # School of Arts, Humanities and Social Sciences (8 queries)
     "computational methods in digital humanities",
     "cognitive biases in digital misinformation spread",
     "public policy evaluations of higher education funding",
@@ -99,6 +110,13 @@ BENCHMARK_QUERIES = [
     "historical text analysis via topic modeling",
     "societal impacts of automated decision systems",
     "philosophy of artificial consciousness and ethics",
+    # School of Mathematics and Natural Sciences (6 queries)
+    "statistical inference for high dimensional data",
+    "numerical optimization methods for large scale problems",
+    "frequent pattern mining and association rules",
+    "time frequency analysis of non stationary signals",
+    "bayesian methods for uncertainty quantification",
+    "spectral methods for signal denoising",
 ]
 
 AUTHOR_NAME_VARIANTS = [
@@ -253,7 +271,6 @@ def fetch_openalex_papers(minio_client: Minio, per_topic: int = 30) -> list[dict
                     "topics": [topic, dept],
                     "referenced_works": item.get("referenced_works", []),
                     "sources": ["openalex"],
-                    "cited_by_count": item.get("cited_by_count") or 0,
                     "raw_minio_path": f"{RAW_BUCKET}/{batch_key}",
                 })
 
@@ -338,128 +355,6 @@ def fetch_arxiv_papers(minio_client: Minio, per_topic: int = 5) -> list[dict]:
     return papers
 
 
-def fetch_semantic_scholar_papers(minio_client: Minio, per_topic: int = 5) -> list[dict]:
-    """Fetch open metadata from Semantic Scholar and archive each response."""
-    papers = []
-    seen_ids = set()
-    print("Fetching scholarly metadata from Semantic Scholar...")
-    for dept, topics in DEPARTMENTS.items():
-        for topic in topics[:2]:
-            try:
-                resp = requests.get(
-                    "https://api.semanticscholar.org/graph/v1/paper/search",
-                    params={
-                        "query": topic,
-                        "limit": per_topic,
-                        "fields": "title,abstract,authors,year,venue,externalIds,citationCount",
-                    },
-                    headers={"User-Agent": "chanakya-research-commons/1.0"},
-                    timeout=15,
-                )
-                if resp.status_code != 200:
-                    continue
-                payload = resp.json()
-            except Exception as exc:
-                print(f"Warning: Semantic Scholar fetch failed for '{topic}': {exc}")
-                continue
-
-            batch_key = f"semantic-scholar/{topic.replace(' ', '_')}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.json"
-            try:
-                raw = json.dumps(payload, indent=2).encode("utf-8")
-                minio_client.put_object(RAW_BUCKET, batch_key, io.BytesIO(raw), len(raw), content_type="application/json")
-            except Exception as exc:
-                print(f"[MinIO] Semantic Scholar archive warning for '{topic}': {exc}")
-
-            for item in payload.get("data", []):
-                paper_id = item.get("paperId")
-                title = (item.get("title") or "").strip()
-                abstract = (item.get("abstract") or "").strip()
-                if not paper_id or paper_id in seen_ids or not title or len(abstract) < 80:
-                    continue
-                seen_ids.add(paper_id)
-                external = item.get("externalIds") or {}
-                papers.append({
-                    "paper_id": str(uuid.uuid4()),
-                    "oa_id": f"s2_{paper_id}",
-                    "doi": external.get("DOI"),
-                    "arxiv_id": external.get("ArXiv"),
-                    "title": title,
-                    "abstract": abstract[:2500],
-                    "authors": [{"name": a.get("name", "")} for a in item.get("authors", []) if a.get("name")][:5],
-                    "year": item.get("year") or 2024,
-                    "venue": item.get("venue") or "Semantic Scholar",
-                    "topics": [topic, dept],
-                    "referenced_works": [],
-                    "sources": ["semantic_scholar"],
-                    "raw_minio_path": f"{RAW_BUCKET}/{batch_key}",
-                })
-    print(f"Fetched {len(papers)} unique records from Semantic Scholar.")
-    return papers
-
-
-def fetch_academic_rss_papers(minio_client: Minio) -> list[dict]:
-    """Fetch public Atom/RSS feeds and add records that carry a usable title and summary."""
-    feeds = {
-        "arxiv_new": "https://rss.arxiv.org/rss/cs.AI",
-        "arxiv_ml": "https://rss.arxiv.org/rss/cs.LG",
-    }
-    papers = []
-    seen = set()
-    for feed_name, url in feeds.items():
-        try:
-            resp = requests.get(url, headers={"User-Agent": "chanakya-research-commons/1.0"}, timeout=15)
-            if resp.status_code != 200:
-                continue
-            batch_key = f"rss/{feed_name}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xml"
-            try:
-                minio_client.put_object(RAW_BUCKET, batch_key, io.BytesIO(resp.content), len(resp.content), content_type="application/xml")
-            except Exception:
-                pass
-            root = ET.fromstring(resp.content)
-        except Exception as exc:
-            print(f"Warning: RSS feed '{feed_name}' skipped: {exc}")
-            continue
-
-        items = root.findall(".//item") or root.findall("{http://www.w3.org/2005/Atom}entry")
-        for item in items[:20]:
-            if item.tag.endswith("item"):
-                title_node = item.find("title")
-                desc_node = item.find("description")
-                link_node = item.find("link")
-            else:
-                title_node = item.find("{http://www.w3.org/2005/Atom}title")
-                desc_node = item.find("{http://www.w3.org/2005/Atom}summary")
-                link_node = item.find("{http://www.w3.org/2005/Atom}link")
-            title = (title_node.text or "").strip() if title_node is not None else ""
-            abstract = (desc_node.text or "").strip() if desc_node is not None else ""
-            link = link_node.text.strip() if (link_node is not None and link_node.text) else ""
-            if link_node is not None and not link:
-                link = link_node.attrib.get("href", "")
-            arxiv_id = link.rstrip("/").split("/abs/")[-1].split("v")[0] if "/abs/" in link else None
-            key = arxiv_id or title.lower()
-            if not title or key in seen or len(abstract) < 40:
-                continue
-            seen.add(key)
-            papers.append({
-                "paper_id": str(uuid.uuid4()),
-                "oa_id": f"rss_{feed_name}_{key}",
-                "doi": None,
-                "arxiv_id": arxiv_id,
-                "title": title,
-                "abstract": abstract[:2500],
-                "authors": [{"name": "RSS Feed Author"}],
-                "year": datetime.now(timezone.utc).year,
-                "venue": feed_name,
-                "topics": ["School of Engineering"] if "arxiv" in feed_name else ["Research Article"],
-                "referenced_works": [],
-                "sources": ["rss"],
-                "raw_minio_path": f"{RAW_BUCKET}/{batch_key}",
-                    "source_url": link or "https://arxiv.org/",
-            })
-    print(f"Fetched {len(papers)} unique records from RSS feeds.")
-    return papers
-
-
 def main():
     parser = argparse.ArgumentParser(description="Deterministic Seed & Ingestion for Chanakya Research Commons")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for 100% reproducible seeding (default: 42)")
@@ -489,9 +384,7 @@ def main():
     # 1. Fetch Papers from OpenAlex & arXiv
     raw_papers = fetch_openalex_papers(minio_client, per_topic=args.per_topic)
     arxiv_papers = fetch_arxiv_papers(minio_client, per_topic=5)
-    semantic_scholar_papers = fetch_semantic_scholar_papers(minio_client, per_topic=5)
-    rss_papers = fetch_academic_rss_papers(minio_client)
-    all_fetched = raw_papers + arxiv_papers + semantic_scholar_papers + rss_papers
+    all_fetched = raw_papers + arxiv_papers
 
     if not all_fetched:
         if args.incremental:
@@ -576,26 +469,15 @@ def main():
             json.dumps(sources_list),
             psycopg2.Binary(mh_bytes),
             emb_list,
-            int(p.get("cited_by_count", 0) or 0),
         ))
 
         for src in sources_list:
-            source_url = p.get("source_url")
-            if not source_url:
-                if src == "openalex":
-                    source_url = str(p.get("oa_id") or "")
-                elif src == "arxiv" and arxiv_val:
-                    source_url = f"https://arxiv.org/abs/{arxiv_val}"
-                elif src == "semantic_scholar":
-                    source_url = f"https://www.semanticscholar.org/paper/{p.get('oa_id', '').removeprefix('s2_')}"
-                else:
-                    source_url = str(p.get("oa_id") or "")
             source_rows.append((
                 str(uuid.uuid4()),
                 p["paper_id"],
                 src,
                 p.get("oa_id") if src == "openalex" else arxiv_val,
-                source_url,
+                p.get("oa_id") if src == "openalex" else f"https://arxiv.org/abs/{arxiv_val}",
                 p["raw_minio_path"],
             ))
 
@@ -609,7 +491,7 @@ def main():
     execute_values(
         cur,
         """
-        INSERT INTO papers (paper_id, doi, arxiv_id, canonical_title, abstract, authors, publication_year, venue, topics, sources, minhash_signature, embedding, cited_by_count)
+        INSERT INTO papers (paper_id, doi, arxiv_id, canonical_title, abstract, authors, publication_year, venue, topics, sources, minhash_signature, embedding)
         VALUES %s ON CONFLICT DO NOTHING
         """,
         paper_rows,
@@ -662,7 +544,7 @@ def main():
         users.append({
             "user_id": uid,
             "university_id": f"24CU{1000 + i}",
-            "full_name": f"Member {i + 1} ({dept.split()[0]})",
+            "full_name": f"Member {i + 1} ({SCHOOL_CODES[dept]})",
             "email": f"member{i + 1}@chanakyauniversity.edu.in",
             "role": role,
             "department": dept,

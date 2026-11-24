@@ -57,7 +57,7 @@ export interface ProfilePayload {
   is_following: boolean;
 }
 
-/** Chanakya University schools, as seeded in data_pipeline/seed_database.py. */
+/** The six official Chanakya University schools (users.department holds one of these names). */
 export const SCHOOLS = [
   "School of Arts, Humanities and Social Sciences",
   "School of Biosciences",
@@ -66,6 +66,16 @@ export const SCHOOLS = [
   "School of Management Sciences",
   "School of Mathematics and Natural Sciences",
 ] as const;
+
+/** Short codes used in chips and filters. */
+export const SCHOOL_CODES: Record<(typeof SCHOOLS)[number], string> = {
+  "School of Arts, Humanities and Social Sciences": "SAHSS",
+  "School of Biosciences": "SBS",
+  "School of Engineering": "SOE",
+  "School of Law, Governance and Public Policy": "SLGPP",
+  "School of Management Sciences": "SMS",
+  "School of Mathematics and Natural Sciences": "SMNS",
+};
 export type School = (typeof SCHOOLS)[number];
 
 /* ------------------------------------------------------------------ */
@@ -136,7 +146,10 @@ export interface RecommendedPaper {
   topics: string[] | null;
   save_count: number;
   pagerank_score: number;
+  pagerank_percentile: number | null;
   match_score: number;
+  /** "saved" = closest to papers you saved, "profile" = closest to your bio and interests. */
+  reason: "saved" | "profile";
 }
 
 export interface AlsoSavedPaper {
@@ -152,6 +165,13 @@ export interface Collection {
   description: string | null;
   paper_count?: number;
   papers?: Paper[];
+  /** A few paper titles, used for previews on profile pages. */
+  sample_titles?: string[];
+}
+
+export interface CollectionDetail {
+  collection: { collection_id: string; name: string; description: string | null; user_id: string; owner_name: string };
+  papers: Paper[];
 }
 
 /* ------------------------------------------------------------------ */
@@ -185,6 +205,7 @@ export interface FeedPost {
   tags: string[] | null;
   upvote_count: number;
   created_at: string;
+  edited_at?: string | null;
   author_name: string;
   author_dept: string;
   author_role: Role;
@@ -431,6 +452,8 @@ export interface GatekeeperVerdict {
   reasons: string[];
   raw: unknown;
 }
+
+/* ------------------------------ admin dashboard ------------------------------ */
 
 export interface AdminTotals {
   members: number;

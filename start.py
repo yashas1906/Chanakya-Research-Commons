@@ -184,7 +184,7 @@ def run_app_combined():
 
     # Backend process
     backend_proc = subprocess.Popen(
-        [str(VENV_PYTHON), "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+        [str(VENV_PYTHON), "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "backend"],
         cwd=str(ROOT_DIR),
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -264,7 +264,7 @@ def run_app_separate_windows():
 
     if sys.platform == "win32":
         # Launch Backend in new window
-        backend_cmd = f'title CRC Backend API && "{VENV_PYTHON}" -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload'
+        backend_cmd = f'title CRC Backend API && "{VENV_PYTHON}" -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir backend'
         subprocess.Popen(f'start cmd /k "{backend_cmd}"', shell=True, cwd=str(ROOT_DIR))
 
         # Launch Frontend in new window

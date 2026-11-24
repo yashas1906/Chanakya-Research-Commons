@@ -60,7 +60,7 @@ function RuleRow({ r, maxLift }: { r: AssociationRule; maxLift: number }) {
           <ArrowRight className="h-3.5 w-3.5 shrink-0 text-stone-300" />
           <span className="flex flex-wrap gap-1">
             {r.consequents.map((c) => (
-              <span key={c} className="inline-block rounded-md bg-ink px-1.5 py-0.5 text-meta leading-4 text-white">
+              <span key={c} className="inline-block rounded-md bg-ink px-1.5 py-0.5 text-meta leading-4 text-paper">
                 {c}
               </span>
             ))}
@@ -178,7 +178,7 @@ export function TopicAssociationsCard() {
                     type="button"
                     aria-pressed={sort === k}
                     onClick={() => setSort(k)}
-                    className={cx("rounded px-2 py-0.5 font-medium capitalize transition-colors", sort === k ? "bg-ink text-white" : "text-stone-500 hover:text-ink")}
+                    className={cx("rounded px-2 py-0.5 font-medium capitalize transition-colors", sort === k ? "bg-ink text-paper" : "text-stone-500 hover:text-ink")}
                   >
                     {k}
                   </button>

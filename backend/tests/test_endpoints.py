@@ -45,6 +45,12 @@ def test_full_pipeline():
     assert me_resp.json()["university_id"] == reg_id
     print("    -> /api/auth/me passed!")
 
+    print("Testing admin endpoints reject non-admins...")
+    assert client.get("/api/admin/overview").status_code == 401
+    assert client.get("/api/admin/overview", headers=headers).status_code == 403
+    assert client.get("/api/admin/members", headers=headers).status_code == 403
+    print("    -> /api/admin/* is admin-only!")
+
     print("Testing Topic Follow...")
     tf_resp = client.post("/api/topics/graph%20neural%20networks/follow", headers=headers)
     assert tf_resp.status_code == 200
@@ -57,17 +63,49 @@ def test_full_pipeline():
     assert "graph neural networks" in follows_resp.json()["followed_topics"]
     print("    -> /api/users/me/follows passed!")
 
-    print("Testing /api/analytics/drilldown...")
-    d_univ = client.get("/api/analytics/drilldown")
-    assert d_univ.status_code == 200
-    assert d_univ.json()["level"] == "school"
-    d_dept = client.get("/api/analytics/drilldown?school=School%20of%20Technology%20%26%20AI")
-    assert d_dept.status_code == 200
-    assert d_dept.json()["level"] == "department"
-    d_memb = client.get("/api/analytics/drilldown?department=Computer%20Science%20%26%20AI")
-    assert d_memb.status_code == 200
-    assert d_memb.json()["level"] == "member"
-    print("    -> 3-level University -> School -> Department -> Member drilldown passed!")
+    print("Testing analytics is admin-only...")
+    for path in ("/api/analytics/overview", "/api/analytics/drilldown", "/api/analytics/topic-associations", "/api/analytics/researcher-archetypes", "/api/analytics/anomalies"):
+        assert client.get(path).status_code == 401, path
+        assert client.get(path, headers=headers).status_code == 403, path
+    print("    -> /api/analytics/* rejects anonymous and non-admin users!")
+
+    print("Testing post create / vote / edit / delete...")
+    created = client.post("/api/posts", json={"title": "Draft title", "body": "Draft body", "tags": ["testing"]}, headers=headers)
+    assert created.status_code == 200, created.text
+    post_id = created.json()["post_id"]
+    up = client.post(f"/api/posts/{post_id}/vote", json={"value": 1}, headers=headers).json()
+    assert up["upvote_count"] == 1 and up["my_vote"] == 1
+    flip = client.post(f"/api/posts/{post_id}/vote", json={"value": -1}, headers=headers).json()
+    assert flip["upvote_count"] == -1 and flip["my_vote"] == -1
+    clear = client.post(f"/api/posts/{post_id}/vote", json={"value": 0}, headers=headers).json()
+    assert clear["upvote_count"] == 0 and clear["my_vote"] == 0
+    assert client.get(f"/api/posts/{post_id}").json().get("edited_at") is None
+    edited = client.patch(f"/api/posts/{post_id}", json={"title": "Final title", "body": "Final body"}, headers=headers)
+    assert edited.status_code == 200 and edited.json()["edited_at"], edited.text
+    assert client.get(f"/api/posts/{post_id}").json()["edited_at"]
+    other = client.post("/api/auth/register", json={
+        "university_id": f"24CU{uuid4().hex[:4]}", "full_name": "Other Scholar", "email": f"o_{uuid4().hex[:6]}@chanakyauniversity.edu.in",
+        "password": "Password123!", "role": "student", "department": "School of Engineering"}).json()
+    other_headers = {"Authorization": f"Bearer {other['access_token']}"}
+    assert client.patch(f"/api/posts/{post_id}", json={"title": "Hijack"}, headers=other_headers).status_code == 403
+    assert client.delete(f"/api/posts/{post_id}", headers=other_headers).status_code == 403
+    assert client.delete(f"/api/posts/{post_id}", headers=headers).status_code == 200
+    assert client.get(f"/api/posts/{post_id}").status_code == 404
+    print("    -> vote deltas, author-only edit (with edited_at) and delete passed!")
+
+    print("Testing collections create / rename / list / delete...")
+    col = client.post("/api/collections", json={"name": "Reading list", "description": "to read"}, headers=headers)
+    assert col.status_code == 200, col.text
+    cid = col.json()["collection_id"]
+    assert client.patch(f"/api/collections/{cid}", json={"name": "Renamed"}, headers=headers).json()["name"] == "Renamed"
+    assert client.patch(f"/api/collections/{cid}", json={"name": "Nope"}, headers=other_headers).status_code == 404
+    mine = client.get(f"/api/users/{me_resp.json()['user_id']}/collections").json()
+    assert any(c["collection_id"] == cid and c["name"] == "Renamed" for c in mine)
+    assert client.get(f"/api/collections/{cid}/papers").json()["papers"] == []
+    assert client.delete(f"/api/collections/{cid}", headers=other_headers).status_code == 404
+    assert client.delete(f"/api/collections/{cid}", headers=headers).status_code == 200
+    assert client.get(f"/api/collections/{cid}/papers").status_code == 404
+    print("    -> collection CRUD passed!")
 
     print("Testing Grounded Assistant Refusal Gate (Trap Query)...")
     ask_resp = client.post("/api/assistant/ask", json={

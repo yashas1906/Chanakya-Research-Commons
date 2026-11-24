@@ -61,7 +61,6 @@ CREATE TABLE papers (
     pagerank_score FLOAT DEFAULT 0.0,
     save_count INT DEFAULT 0,
     sources JSONB DEFAULT '["openalex"]'::jsonb,
-    cited_by_count INT DEFAULT 0,
     in_chanakya_library BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -124,7 +123,8 @@ CREATE TABLE posts (
         to_tsvector('english', coalesce(title, '') || ' ' || coalesce(body, ''))
     ) STORED,
     is_flagged_spam BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    edited_at TIMESTAMPTZ
 );
 
 CREATE TABLE comments (
@@ -291,12 +291,7 @@ WITH paper_topics_exploded AS (
     LEFT JOIN dw.dim_paper dp ON p.paper_id = dp.paper_id
     CROSS JOIN UNNEST(p.topics) AS t
     WHERE TRIM(t) NOT IN (
-        'School of Arts, Humanities and Social Sciences',
-        'School of Biosciences',
-        'School of Engineering',
-        'School of Law, Governance and Public Policy',
-        'School of Management Sciences',
-        'School of Mathematics and Natural Sciences'
+        'School of Arts, Humanities and Social Sciences', 'School of Biosciences', 'School of Engineering', 'School of Law, Governance and Public Policy', 'School of Management Sciences', 'School of Mathematics and Natural Sciences'
     )
 
     UNION
@@ -319,12 +314,7 @@ paper_meta AS (
         p.paper_id,
         COALESCE(
             (SELECT t FROM UNNEST(p.topics) t WHERE t IN (
-                'School of Arts, Humanities and Social Sciences',
-                'School of Biosciences',
-                'School of Engineering',
-                'School of Law, Governance and Public Policy',
-                'School of Management Sciences',
-                'School of Mathematics and Natural Sciences'
+                'School of Arts, Humanities and Social Sciences', 'School of Biosciences', 'School of Engineering', 'School of Law, Governance and Public Policy', 'School of Management Sciences', 'School of Mathematics and Natural Sciences'
             ) LIMIT 1),
             'School of Engineering'
         ) AS department_name
@@ -335,15 +325,7 @@ SELECT DISTINCT
     pte.paper_key,
     pte.paper_id,
     pte.item_label,
-    CASE 
-        WHEN pm.department_name IN ('School of Arts, Humanities and Social Sciences') THEN 'School of Arts, Humanities and Social Sciences'
-        WHEN pm.department_name IN ('School of Biosciences') THEN 'School of Biosciences'
-        WHEN pm.department_name IN ('School of Engineering') THEN 'School of Engineering'
-        WHEN pm.department_name IN ('School of Law, Governance and Public Policy') THEN 'School of Law, Governance and Public Policy'
-        WHEN pm.department_name IN ('School of Management Sciences') THEN 'School of Management Sciences'
-        WHEN pm.department_name IN ('School of Mathematics and Natural Sciences') THEN 'School of Mathematics and Natural Sciences'
-        ELSE pm.department_name
-    END AS school_name,
+    pm.department_name AS school_name,
     pm.department_name,
     pte.pub_year
 FROM paper_topics_exploded pte
@@ -357,15 +339,7 @@ SELECT
     u.full_name AS researcher_name,
     u.role,
     u.department,
-    CASE 
-        WHEN u.department IN ('School of Arts, Humanities and Social Sciences') THEN 'School of Arts, Humanities and Social Sciences'
-        WHEN u.department IN ('School of Biosciences') THEN 'School of Biosciences'
-        WHEN u.department IN ('School of Engineering') THEN 'School of Engineering'
-        WHEN u.department IN ('School of Law, Governance and Public Policy') THEN 'School of Law, Governance and Public Policy'
-        WHEN u.department IN ('School of Management Sciences') THEN 'School of Management Sciences'
-        WHEN u.department IN ('School of Mathematics and Natural Sciences') THEN 'School of Mathematics and Natural Sciences'
-        ELSE u.department
-    END AS school_name,
+    u.department::text AS school_name,
     COUNT(DISTINCT ls.paper_id)::INT AS total_publications,
     COALESCE(COUNT(DISTINCT pc.citing_paper_id), 0)::INT AS total_citations,
     ROUND(COALESCE(AVG(jsonb_array_length(COALESCE(p.authors, '[]'::jsonb))), 1.0)::NUMERIC, 2)::FLOAT AS avg_coauthors,

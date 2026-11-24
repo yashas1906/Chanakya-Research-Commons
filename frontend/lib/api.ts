@@ -23,9 +23,14 @@ import {
   num,
   paperList,
   str,
+  strList,
   strOrNull,
 } from "@/lib/normalize";
 import type {
+  AdminMember,
+  AdminMemberSort,
+  AdminMembersPage,
+  AdminOverview,
   AlsoSavedPaper,
   AnalyticsOverview,
   AuthUser,
@@ -33,6 +38,7 @@ import type {
   AssistantAnswer,
   Citation,
   Collection,
+  CollectionDetail,
   Comment,
   FeedPost,
   GatekeeperInput,
@@ -51,10 +57,6 @@ import type {
   SearchResponse,
   TopicAssociations,
   TrendsAndAnomalies,
-  AdminOverview,
-  AdminMembersPage,
-  AdminMember,
-  AdminMemberSort,
 } from "@/types/crc";
 
 export const API_ORIGIN = (process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:8000").replace(/\/$/, "");
@@ -104,7 +106,7 @@ export function describeError(e: unknown): string {
 /* ------------------------------- transport ------------------------------ */
 
 interface ReqOptions {
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   query?: Record<string, string | number | boolean | null | undefined>;
   body?: unknown;
   signal?: AbortSignal;
@@ -240,12 +242,12 @@ export interface RegisterInput {
   email: string;
   password: string;
   department: string;
-  role?: "student" | "faculty" | "researcher";
   interest_tags?: string[];
 }
 
+/** Self-registration always creates a student; the backend ignores any requested role. */
 export async function register(input: RegisterInput): Promise<{ token: string; expires_at: string; user: AuthUser }> {
-  return parseAuthResponse(await request("/auth/register", { method: "POST", body: { role: "student", ...input } }));
+  return parseAuthResponse(await request("/auth/register", { method: "POST", body: { ...input, role: "student" } }));
 }
 
 export async function getMe(signal?: AbortSignal): Promise<AuthUser> {
@@ -348,6 +350,24 @@ export async function createPost(input: {
   await request("/posts", { method: "POST", body: input });
 }
 
+export async function updatePost(
+  postId: string,
+  input: { title?: string; body?: string; tags?: string[] },
+): Promise<{ title: string; body: string; tags: string[]; edited_at: string | null }> {
+  const raw = await request(`/posts/${postId}`, { method: "PATCH", body: input });
+  const o = isRecord(raw) ? raw : {};
+  return {
+    title: str(o.title, input.title ?? ""),
+    body: str(o.body, input.body ?? ""),
+    tags: Array.isArray(o.tags) ? strList(o.tags) : input.tags ?? [],
+    edited_at: strOrNull(o.edited_at),
+  };
+}
+
+export async function deletePost(postId: string): Promise<void> {
+  await request(`/posts/${postId}`, { method: "DELETE" });
+}
+
 export async function getPost(postId: string, signal?: AbortSignal): Promise<PostDetail> {
   const raw = await request(`/posts/${postId}`, { signal });
   const o = isRecord(raw) ? raw : {};
@@ -440,6 +460,55 @@ export async function createCollection(name: string, description = ""): Promise<
   };
 }
 
+export async function updateCollection(collectionId: string, input: { name?: string; description?: string | null }): Promise<Collection> {
+  const raw = await request(`/collections/${collectionId}`, { method: "PATCH", body: input });
+  const o = isRecord(raw) ? raw : {};
+  return { collection_id: str(o.collection_id, collectionId), name: str(o.name, input.name ?? ""), description: strOrNull(o.description) };
+}
+
+export async function deleteCollection(collectionId: string): Promise<void> {
+  await request(`/collections/${collectionId}`, { method: "DELETE" });
+}
+
+export async function removePaperFromCollection(collectionId: string, paperId: string): Promise<void> {
+  await request(`/collections/${collectionId}/papers/${paperId}`, { method: "DELETE" });
+}
+
+export async function addPaperToCollection(collectionId: string, paperId: string): Promise<void> {
+  await request(`/collections/${collectionId}/papers`, { method: "POST", body: { paper_id: paperId } });
+}
+
+export async function getCollectionPapers(collectionId: string, signal?: AbortSignal): Promise<CollectionDetail> {
+  const raw = await request(`/collections/${collectionId}/papers`, { signal });
+  const o = isRecord(raw) ? raw : {};
+  const c = isRecord(o.collection) ? o.collection : {};
+  return {
+    collection: {
+      collection_id: str(c.collection_id, collectionId),
+      name: str(c.name, "Collection"),
+      description: strOrNull(c.description),
+      user_id: str(c.user_id),
+      owner_name: str(c.owner_name),
+    },
+    papers: paperList(Array.isArray(o.papers) ? o.papers : []),
+  };
+}
+
+export async function getUserCollections(userId: string, signal?: AbortSignal): Promise<Collection[]> {
+  const raw = await request(`/users/${userId}/collections`, { signal });
+  const list = Array.isArray(raw) ? raw : [];
+  return list.map((r): Collection => {
+    const u = isRecord(r) ? r : {};
+    return {
+      collection_id: str(u.collection_id),
+      name: str(u.name, "Untitled collection"),
+      description: strOrNull(u.description),
+      paper_count: num(u.paper_count),
+      sample_titles: Array.isArray(u.sample_titles) ? strList(u.sample_titles) : [],
+    };
+  });
+}
+
 export async function getCollections(userId: string, signal?: AbortSignal): Promise<Collection[]> {
   const raw = await request(ENDPOINTS.collections, { query: { user_id: userId }, signal });
   const list = Array.isArray(raw) ? raw : isRecord(raw) && Array.isArray(raw.collections) ? raw.collections : [];
@@ -474,7 +543,9 @@ export async function getRecommendations(
         topics: Array.isArray(u.topics) ? (u.topics as string[]) : null,
         save_count: num(u.save_count),
         pagerank_score: num(u.pagerank_score),
+        pagerank_percentile: u.pagerank_percentile === null || u.pagerank_percentile === undefined ? null : num(u.pagerank_percentile),
         match_score: num(u.match_score),
+        reason: u.reason === "saved" ? "saved" : "profile",
       };
     }),
     people: people.map((r): RecommendedPerson => {
@@ -743,38 +814,31 @@ export async function scoreSubmission(input: GatekeeperInput, signal?: AbortSign
   return normalizeGatekeeper(raw, Math.round((performance.now() - t0) * 10) / 10);
 }
 
-const adminRoles = ["student", "faculty", "researcher", "admin"] as const;
-const asAdminRole = (value: unknown): AdminMember["role"] =>
-  adminRoles.includes(value as AdminMember["role"]) ? (value as AdminMember["role"]) : "student";
-const adminRows = (value: unknown): Record<string, unknown>[] =>
-  Array.isArray(value) ? value.filter(isRecord) : [];
+/* ------------------------------ admin dashboard ------------------------------ */
+
+const ROLES = ["student", "faculty", "researcher", "admin"] as const;
+const asRole = (v: unknown): AdminMember["role"] => (ROLES as readonly string[]).includes(v as string) ? (v as AdminMember["role"]) : "student";
+const rows = (v: unknown): Record<string, unknown>[] => (Array.isArray(v) ? v.filter(isRecord) : []);
 
 export async function getAdminOverview(signal?: AbortSignal): Promise<AdminOverview> {
-  const raw = await request("/admin/overview", { signal });
-  const o = isRecord(raw) ? raw : {};
-  const totals = isRecord(o.totals) ? o.totals : {};
+  const o = (await request("/admin/overview", { signal })) as Record<string, unknown>;
+  const t = isRecord(o.totals) ? o.totals : {};
   return {
     totals: {
-      members: num(totals.members),
-      flagged_members: num(totals.flagged_members),
-      papers: num(totals.papers),
-      library_papers: num(totals.library_papers),
-      posts: num(totals.posts),
-      comments: num(totals.comments),
-      votes: num(totals.votes),
-      saves: num(totals.saves),
-      open_alerts: num(totals.open_alerts),
+      members: num(t.members),
+      flagged_members: num(t.flagged_members),
+      papers: num(t.papers),
+      library_papers: num(t.library_papers),
+      posts: num(t.posts),
+      comments: num(t.comments),
+      votes: num(t.votes),
+      saves: num(t.saves),
+      open_alerts: num(t.open_alerts),
     },
-    members_by_role: adminRows(o.members_by_role).map((r) => ({ role: asAdminRole(r.role), count: num(r.count) })),
-    members_by_department: adminRows(o.members_by_department).map((r) => ({ department: str(r.department), count: num(r.count) })),
-    activity: adminRows(o.activity).map((r) => ({
-      day: str(r.day),
-      posts: num(r.posts),
-      comments: num(r.comments),
-      votes: num(r.votes),
-      saves: num(r.saves),
-    })),
-    open_alerts: adminRows(o.open_alerts).map((r) => ({
+    members_by_role: rows(o.members_by_role).map((r) => ({ role: asRole(r.role), count: num(r.count) })),
+    members_by_department: rows(o.members_by_department).map((r) => ({ department: str(r.department), count: num(r.count) })),
+    activity: rows(o.activity).map((r) => ({ day: str(r.day), posts: num(r.posts), comments: num(r.comments), votes: num(r.votes), saves: num(r.saves) })),
+    open_alerts: rows(o.open_alerts).map((r) => ({
       alert_id: str(r.alert_id),
       alert_type: str(r.alert_type),
       entity_ref: str(r.entity_ref),
@@ -782,10 +846,10 @@ export async function getAdminOverview(signal?: AbortSignal): Promise<AdminOverv
       severity_score: num(r.severity_score),
       detected_at: strOrNull(r.detected_at),
     })),
-    top_contributors: adminRows(o.top_contributors).map((r) => ({
+    top_contributors: rows(o.top_contributors).map((r) => ({
       user_id: str(r.user_id),
       full_name: str(r.full_name),
-      role: asAdminRole(r.role),
+      role: asRole(r.role),
       department: str(r.department),
       posts: num(r.posts),
       karma: num(r.karma),
@@ -805,32 +869,22 @@ export interface AdminMemberQuery {
 }
 
 export async function getAdminMembers(query: AdminMemberQuery, signal?: AbortSignal): Promise<AdminMembersPage> {
-  const raw = await request("/admin/members", {
-    query: {
-      q: query.q,
-      role: query.role,
-      department: query.department,
-      flagged: query.flagged ? true : undefined,
-      sort: query.sort,
-      order: query.order,
-      limit: query.limit,
-      offset: query.offset,
-    },
+  const o = (await request("/admin/members", {
+    query: { q: query.q, role: query.role, department: query.department, flagged: query.flagged ? true : undefined, sort: query.sort, order: query.order, limit: query.limit, offset: query.offset },
     signal,
-  });
-  const o = isRecord(raw) ? raw : {};
+  })) as Record<string, unknown>;
   return {
     total: num(o.total),
     limit: num(o.limit, query.limit),
     offset: num(o.offset),
-    items: adminRows(o.items).map((r) => ({
+    items: rows(o.items).map((r) => ({
       user_id: str(r.user_id),
       university_id: str(r.university_id),
       full_name: str(r.full_name),
       email: str(r.email),
-      role: asAdminRole(r.role),
+      role: asRole(r.role),
       department: str(r.department),
-      interest_tags: Array.isArray(r.interest_tags) ? r.interest_tags.filter((v): v is string => typeof v === "string") : [],
+      interest_tags: Array.isArray(r.interest_tags) ? r.interest_tags.filter((t): t is string => typeof t === "string") : [],
       created_at: strOrNull(r.created_at),
       last_active: strOrNull(r.last_active),
       is_synthetic: r.is_synthetic === true,
@@ -843,15 +897,4 @@ export async function getAdminMembers(query: AdminMemberQuery, signal?: AbortSig
       karma: num(r.karma),
     })),
   };
-}
-
-export async function getAnalyticsDrilldown(school?: string, department?: string, signal?: AbortSignal): Promise<{
-  level: "school" | "department" | "member";
-  count: number;
-  data: Record<string, unknown>[];
-}> {
-  const raw = await request("/analytics/drilldown", { query: { school, department }, signal });
-  const o = isRecord(raw) ? raw : {};
-  const level = o.level === "department" || o.level === "member" ? o.level : "school";
-  return { level, count: num(o.count), data: adminRows(o.data) };
 }

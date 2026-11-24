@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Bookmark, BookmarkCheck, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/context/AuthContext";
@@ -52,6 +53,7 @@ export function SaveToCollection({ paperId, isSaved }: { paperId: string; isSave
         {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : saved ? <BookmarkCheck className="h-4 w-4" /> : <Bookmark className="h-4 w-4" />}
         {saved ? "Saved" : "Save to library"}
       </button>
+      {user && !saved && collections.data && collections.data.length === 0 && <Link href="/library?tab=collections" className="text-meta font-medium text-brand-700 hover:underline">Create a collection</Link>}
       {collections.error !== null && <span role="alert" className="text-meta text-stone-500">Collections unavailable; you can still save without one.</span>}
     </div>
   );

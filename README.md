@@ -33,12 +33,12 @@
 ## 1. Project Overview
 
 Chanakya Research Commons is designed for university research communities (students, faculty, scholars, and administrators) spanning six key academic schools:
-- **Computer Science & Artificial Intelligence**
-- **Electronics & Communication**
-- **Biotechnology & Life Sciences**
-- **Management & Commerce**
-- **School of Law & Public Policy**
-- **Liberal Arts & Humanities**
+- **SAHSS** - School of Arts, Humanities and Social Sciences
+- **SBS** - School of Biosciences
+- **SOE** - School of Engineering
+- **SLGPP** - School of Law, Governance and Public Policy
+- **SMS** - School of Management Sciences
+- **SMNS** - School of Mathematics and Natural Sciences
 
 The platform addresses core challenges in university research lifecycle management:
 1. **Literature Discovery & Deduplication**: Harvesting canonical papers across disciplines, deduplicating preprints and versioned works via MinHash Locality-Sensitive Hashing (LSH).
@@ -286,7 +286,8 @@ The API service is located at `backend/main.py`.
 ### Running the Backend
 
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+cd backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Interactive OpenAPI docs: **http://localhost:8000/docs**
@@ -369,42 +370,6 @@ Defined in `docker-compose.yml`:
 
 ## 10. Quick Start Guide
 
-### 🚀 One-Command Launch (Recommended)
-
-You can set up, verify, and run the entire platform with a single command:
-
-**Windows Batch (Double-click or CMD):**
-```cmd
-start.bat
-```
-
-**PowerShell:**
-```powershell
-.\start.ps1
-```
-
-**Python (Cross-Platform):**
-```bash
-python start.py
-```
-
-*Optional flags:*
-- `python start.py --separate-windows` : Launches Backend and Frontend in separate dedicated command windows.
-- `python start.py --stop` : Gracefully shuts down all Docker containers.
-
-The launcher automatically:
-1. Verifies `.env` configuration.
-2. Checks that Docker Desktop is running and starts the containers (`crc_postgres`, `crc_minio`, `crc_ollama`).
-3. Verifies PostgreSQL on port 5434, checks tables and indexed papers (auto-seeds if empty).
-4. Verifies Ollama LLM weights (`llama3.2:3b`).
-5. Checks frontend dependencies (`npm install` if required).
-6. Starts the FastAPI backend (port 8000) and Next.js frontend (port 3000).
-7. Automatically opens `http://localhost:3000` in your default browser.
-
----
-
-### Manual Step-by-Step Setup
-
 ### Step 1: Start Infrastructure
 ```powershell
 cd "Chanakya-Research-Commons"
@@ -444,7 +409,8 @@ docker exec -it crc_ollama ollama pull llama3.2:3b
 
 ### Step 7: Launch Backend API
 ```powershell
-.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+cd backend
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### Step 8: Open Frontend
@@ -531,3 +497,13 @@ Chanakya-Research-Commons/
 | 2026-11-22 | `production-hardening` | Addressed all 6 architectural recommendations: untracked `.env` (added `.env.example`), eliminated write-on-GET anomaly detection, added ThreadedConnectionPool + `get_db()` context manager, fixed HNSW vector search subquery, added bounded inputs, calibrated PageRank boost, enforced RAG similarity floor, and added missing database indexes. |
 | 2026-11-23 | `frontend-redesign` | Full CRC Frontend Redesign: calmed typography and hierarchy, sticky `Navbar` with persistent keyboard-activated (`/`) search, Home discovery page (`/`), threaded discussions (`/feed/[postId]`) with optimistic vote pills and recursive comments, full-page paper reader (`/papers/[paperId]`), PrestigeTier badges, collections integration, hierarchical role-gated views (`student`, `faculty`, `researcher`, `admin`), `AuthContext` with modal sign-in, and removed drawer/instant-switch hacks. |
 | 2026-11-23 | `evaluation-integrity` | Comprehensive evaluation and algorithmic hardening: 51 held-out benchmark queries across 6 schools with 1,000 bootstrap CIs, strict temporal holdouts for recommendations with zero test leakage, threshold-free PR-AUC ($0.8100$) and ROC-AUC ($0.9855$) spam evaluation, date-anchored topic spikes, semantic centroid topic clustering, and low-similarity RAG refusal gate ($80\%$ out-of-corpus refusal). |
+
+## Updating an existing database
+
+One command applies every migration, the six-school mapping, member names, varied comments, votes and the warehouse rebuild:
+
+```bash
+python db/update_database.py            # add --update-emails for first.last@chanakyauniversity.edu.in
+```
+
+Then restart the backend and the frontend. Analytics now lives only in the admin dashboard (`/admin`), and `/api/analytics/*` requires an admin token.

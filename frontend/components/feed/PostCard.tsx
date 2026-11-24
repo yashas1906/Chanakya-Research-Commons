@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { FileText } from "lucide-react";
 import { PostActionBar } from "@/components/feed/PostActionBar";
+import { EditedMark, PostMenu, type PostEdit } from "@/components/feed/PostMenu";
 import { Avatar } from "@/components/ui/Section";
 import { Tag } from "@/components/ui/Pill";
 import { useAuth } from "@/context/AuthContext";
@@ -12,9 +13,12 @@ import { relTime, shortSchool } from "@/lib/format";
 import { useToast } from "@/components/ui/Toast";
 import type { FeedPost } from "@/types/crc";
 
-export function PostCard({ post, onTagClick }: { post: FeedPost; onTagClick?: (tag: string) => void }) {
+export function PostCard({ post: initial, onTagClick, onDeleted }: { post: FeedPost; onTagClick?: (tag: string) => void; onDeleted?: (postId: string) => void }) {
   const { user, promptLogin } = useAuth();
   const toast = useToast();
+  const [override, setOverride] = useState<PostEdit | null>(null);
+  const [removed, setRemoved] = useState(false);
+  const post: FeedPost = override ? { ...initial, ...override } : initial;
   const [score, setScore] = useState(post.upvote_count);
   const [vote, setVote] = useState<-1 | 0 | 1>(post.my_vote);
   const [busy, setBusy] = useState(false);
@@ -48,6 +52,8 @@ export function PostCard({ post, onTagClick }: { post: FeedPost; onTagClick?: (t
     }
   };
 
+  if (removed) return null;
+  const isAuthor = !!user && user.user_id === post.author_id;
   const flair = post.tags?.[0];
   return (
     <article className="group card card-hover relative min-w-0 overflow-hidden px-4 pb-3 pt-3.5 sm:px-5">
@@ -61,12 +67,20 @@ export function PostCard({ post, onTagClick }: { post: FeedPost; onTagClick?: (t
           {shortSchool(post.author_dept)}
           <span className="mx-1.5 text-stone-300">•</span>
           {relTime(post.created_at)}
+          <EditedMark editedAt={post.edited_at} />
         </p>
         {flair && (
           <button type="button" onClick={() => onTagClick?.(flair)} className="shrink-0" aria-label={`Filter by ${flair}`}>
             <Tag>{flair}</Tag>
           </button>
         )}
+        <PostMenu
+          post={post}
+          canEdit={isAuthor}
+          canDelete={isAuthor || user?.role === "admin"}
+          onEdited={setOverride}
+          onDeleted={() => { setRemoved(true); onDeleted?.(post.post_id); }}
+        />
       </header>
       <h2 className="mt-2.5 font-display text-[19px] leading-snug text-ink">
         <Link href={`/feed/${post.post_id}`} className="after:absolute after:inset-0 after:z-0 group-hover:text-brand-700">{post.title}</Link>

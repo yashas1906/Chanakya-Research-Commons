@@ -51,7 +51,7 @@ function Dots() {
 
 function AssistantMark({ className }: { className?: string }) {
   return (
-    <span aria-hidden className={cx("flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-900 font-display text-[16px] leading-none text-saffron-300 shadow-card", className)}>
+    <span aria-hidden className={cx("flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-deep font-display text-[16px] leading-none text-saffron-300 shadow-card", className)}>
       C
     </span>
   );
@@ -341,7 +341,7 @@ export function AssistantWorkspace() {
           <div key={t.id} className="space-y-6 animate-rise">
             {/* user */}
             <div className="flex justify-end">
-              <div className="max-w-[88%] rounded-2xl rounded-br-md bg-brand-900 px-4 py-3 text-[16px] leading-relaxed text-white shadow-card sm:max-w-[80%]">
+              <div className="max-w-[88%] rounded-2xl rounded-br-md bg-deep px-4 py-3 text-[16px] leading-relaxed text-white shadow-card sm:max-w-[80%]">
                 {t.question}
                 {(t.libraryOnly || t.paperId) && (
                   <p className="mt-1.5 text-label font-medium text-saffron-300">
@@ -465,7 +465,7 @@ export function AssistantWorkspace() {
           {mounted &&
             createPortal(
               <div className="xl:hidden">
-                {historyOpen && <div aria-hidden className="fixed inset-0 z-[60] animate-fade bg-ink/50" onClick={() => setHistoryOpen(false)} />}
+                {historyOpen && <div aria-hidden className="fixed inset-0 z-[60] animate-fade bg-black/50" onClick={() => setHistoryOpen(false)} />}
                 <aside
                   aria-label="Chat history"
                   aria-hidden={!historyOpen}

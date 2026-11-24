@@ -10,7 +10,7 @@ import { FilterOption, FilterToggle, SidebarPortal, SidebarSection } from "@/com
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { getFeed, getRecommendations } from "@/lib/api";
-import { cx, shortSchool } from "@/lib/format";
+import { cx, schoolLabel, shortSchool } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { useAuth } from "@/context/AuthContext";
 import { SCHOOLS } from "@/types/crc";
@@ -123,7 +123,7 @@ export function FeedWorkspace() {
             <div role="radiogroup" aria-label="Filter by school" className="space-y-0.5">
               <FilterOption label="All schools" count={searched.length} active={school === "ALL"} onClick={() => setSchool("ALL")} />
               {schools.map((item) => (
-                <FilterOption key={item} label={shortSchool(item)} count={schoolCounts.get(item) ?? 0} active={school === item} onClick={() => setSchool(item)} />
+                <FilterOption key={item} title={item} label={schoolLabel(item)} count={schoolCounts.get(item) ?? 0} active={school === item} onClick={() => setSchool(item)} />
               ))}
             </div>
           </SidebarSection>
@@ -198,8 +198,9 @@ export function FeedWorkspace() {
           )}
         </div>
 
-        <aside className="hidden min-w-0 lg:block">
-          <div className="sticky top-[88px]">
+        <aside aria-label="Community" className="hidden min-w-0 self-start lg:sticky lg:top-[80px] lg:block">
+          {/* Own scroll area: wheeling over the rail moves only the rail; everywhere else scrolls the page. */}
+          <div className="crc-scroll max-h-[calc(100dvh-6rem)] overflow-y-auto overscroll-contain pb-1 pr-1">
             <FeedRail
               topics={topics}
               people={recs.data?.people ?? []}

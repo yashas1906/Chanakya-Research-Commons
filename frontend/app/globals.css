@@ -2,13 +2,122 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Theme palette. Values are "R G B" so Tailwind's opacity modifiers (bg-brand-600/40) keep working.
+ * Light = white and Chanakya red (default). `.dark` on <html> swaps the whole palette.
+ */
 :root {
   color-scheme: light;
+  --c-canvas: 250 247 247;
+  --c-paper: 255 255 255;
+  --c-sunken: 244 238 238;
+  --c-deep: 139 20 24;
+  --c-ink: 28 19 20;
+  --c-ink-soft: 46 33 34;
+
+  --c-stone-50: 250 248 248;
+  --c-stone-100: 243 239 239;
+  --c-stone-200: 231 224 224;
+  --c-stone-300: 211 201 201;
+  --c-stone-400: 168 155 156;
+  --c-stone-500: 123 110 111;
+  --c-stone-600: 92 80 81;
+  --c-stone-700: 67 58 59;
+  --c-stone-800: 44 36 37;
+  --c-stone-900: 28 19 20;
+
+  --c-brand-50: 254 242 242;
+  --c-brand-100: 253 226 226;
+  --c-brand-200: 250 197 197;
+  --c-brand-300: 243 153 153;
+  --c-brand-400: 232 99 99;
+  --c-brand-500: 217 54 54;
+  --c-brand-600: 196 30 36;
+  --c-brand-700: 163 23 28;
+  --c-brand-800: 131 21 25;
+  --c-brand-900: 95 16 19;
+
+  /* Secondary accent: soft rose, so highlights stay in the red family. */
+  --c-saffron-50: 255 241 242;
+  --c-saffron-100: 255 228 230;
+  --c-saffron-200: 254 205 211;
+  --c-saffron-300: 253 164 175;
+  --c-saffron-400: 251 113 133;
+  --c-saffron-500: 225 29 72;
+  --c-saffron-600: 190 18 60;
+
+  --c-terracotta-50: 251 243 239;
+  --c-terracotta-100: 246 228 219;
+  --c-terracotta-200: 235 198 180;
+  --c-terracotta-500: 185 99 63;
+  --c-terracotta-600: 163 82 47;
+  --c-terracotta-700: 133 65 31;
+
+  --c-sage-50: 242 246 241;
+  --c-sage-100: 225 235 222;
+  --c-sage-200: 195 214 189;
+  --c-sage-500: 94 138 90;
+  --c-sage-600: 74 114 71;
+  --c-sage-700: 59 91 57;
+}
+
+.dark {
+  color-scheme: dark;
+  --c-canvas: 18 16 17;
+  --c-paper: 28 25 26;
+  --c-sunken: 22 19 20;
+  --c-deep: 122 18 22;
+  --c-ink: 243 237 237;
+  --c-ink-soft: 221 213 213;
+
+  --c-stone-50: 32 28 29;
+  --c-stone-100: 42 37 38;
+  --c-stone-200: 58 51 52;
+  --c-stone-300: 77 69 70;
+  --c-stone-400: 122 112 114;
+  --c-stone-500: 158 148 150;
+  --c-stone-600: 189 180 181;
+  --c-stone-700: 212 204 205;
+  --c-stone-800: 230 224 224;
+  --c-stone-900: 243 237 237;
+
+  --c-brand-50: 46 20 22;
+  --c-brand-100: 67 25 28;
+  --c-brand-200: 107 34 38;
+  --c-brand-300: 154 46 51;
+  --c-brand-400: 201 60 66;
+  --c-brand-500: 224 72 78;
+  --c-brand-600: 220 56 63;
+  --c-brand-700: 239 106 111;
+  --c-brand-800: 245 147 151;
+  --c-brand-900: 251 196 198;
+
+  --c-saffron-50: 46 21 25;
+  --c-saffron-100: 69 25 32;
+  --c-saffron-200: 110 36 51;
+  --c-saffron-300: 253 164 175;
+  --c-saffron-400: 251 113 133;
+  --c-saffron-500: 244 63 94;
+  --c-saffron-600: 251 113 133;
+
+  --c-terracotta-50: 42 26 19;
+  --c-terracotta-100: 58 35 24;
+  --c-terracotta-200: 92 54 36;
+  --c-terracotta-500: 209 122 85;
+  --c-terracotta-600: 194 103 63;
+  --c-terracotta-700: 232 162 131;
+
+  --c-sage-50: 24 33 26;
+  --c-sage-100: 31 45 33;
+  --c-sage-200: 52 80 58;
+  --c-sage-500: 111 163 106;
+  --c-sage-600: 94 143 90;
+  --c-sage-700: 163 204 158;
 }
 
 @layer base {
   html {
-    background: #f4eee2;
+    background: rgb(var(--c-canvas));
     scroll-behavior: smooth;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
@@ -16,27 +125,27 @@
   }
   body {
     @apply bg-canvas font-sans text-ink antialiased;
-    
+    transition: background-color 200ms ease, color 200ms ease;
   }
   ::selection {
-    background: #ebd498;
+    background: rgb(var(--c-brand-200));
   }
   :focus-visible {
-    outline: 2px solid #175240;
+    outline: 2px solid rgb(var(--c-brand-600));
     outline-offset: 2px;
     border-radius: 6px;
   }
   /* Thin, quiet scrollbars (sidebar, dropdowns, long lists). */
   * {
     scrollbar-width: thin;
-    scrollbar-color: #d3c9b2 transparent;
+    scrollbar-color: rgb(var(--c-stone-300)) transparent;
   }
   *::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
   *::-webkit-scrollbar-thumb {
-    background: #d3c9b2;
+    background: rgb(var(--c-stone-300));
     border-radius: 999px;
   }
   *::-webkit-scrollbar-track {
@@ -46,7 +155,7 @@
 
 @layer components {
   .eyebrow {
-    @apply font-sans text-label font-semibold uppercase tracking-[0.12em] text-saffron-600;
+    @apply font-sans text-meta font-medium text-brand-600;
   }
   .hairline {
     @apply border border-stone-200;
@@ -56,37 +165,33 @@
     font-feature-settings: "tnum";
   }
   .card {
-    @apply rounded-xl border border-stone-200 bg-paper shadow-card transition duration-200;
+    @apply rounded-lg border border-stone-200 bg-paper shadow-card transition duration-200;
   }
   .card-hover {
     @apply cursor-pointer;
   }
   .card-hover:hover {
-    @apply -translate-y-px border-stone-300 shadow-lift;
+    @apply border-brand-200 shadow-lift;
   }
   .btn {
-    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full border border-stone-300 bg-paper px-4 text-ui font-semibold text-stone-800 transition duration-150 hover:border-stone-400 hover:bg-stone-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-stone-300 bg-paper px-4 text-ui font-medium text-stone-800 transition duration-150 hover:border-stone-400 hover:bg-stone-100 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
-    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full border border-brand-600 bg-brand-600 px-4 text-ui font-semibold text-white shadow-sm transition duration-150 hover:border-brand-700 hover:bg-brand-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex min-h-10 items-center justify-center gap-1.5 rounded-lg border border-brand-600 bg-brand-600 px-4 text-ui font-medium text-white transition duration-150 hover:border-brand-700 hover:bg-brand-700 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-ghost {
-    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-full px-3 text-ui font-medium text-stone-600 transition duration-150 hover:bg-stone-200/70 hover:text-ink;
+    @apply inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg px-3 text-ui font-medium text-stone-600 transition duration-150 hover:bg-stone-200/70 hover:text-ink;
   }
   .input {
     @apply min-h-10 w-full rounded-lg border border-stone-300 bg-paper px-3 py-2 text-ui text-ink placeholder:text-stone-400 transition duration-150 hover:border-stone-400 focus:border-brand-500 focus:outline-none focus:ring-4 focus:ring-brand-100;
   }
-  /* Masthead gradient used by the home, profile and feed banners. */
+  /* Solid deep-red band used by the profile banner and the feed community card. */
   .hero {
-    @apply relative overflow-hidden text-white;
-    background:
-      radial-gradient(120% 140% at 100% 0%, rgba(210, 166, 73, 0.22) 0%, rgba(210, 166, 73, 0) 45%),
-      linear-gradient(135deg, #0c3124 0%, #11412f 55%, #175240 100%);
+    @apply relative overflow-hidden bg-deep text-white;
   }
   .hero::after {
     content: "";
-    @apply pointer-events-none absolute inset-x-0 bottom-0 h-[3px];
-    background: linear-gradient(90deg, rgba(210, 166, 73, 0) 0%, #d2a649 30%, #e0be6b 50%, #d2a649 70%, rgba(210, 166, 73, 0) 100%);
+    @apply pointer-events-none absolute inset-x-0 bottom-0 h-[3px] bg-saffron-400;
   }
   .skeleton {
     @apply relative overflow-hidden rounded-md bg-stone-200/70;
@@ -94,17 +199,21 @@
   .skeleton::after {
     content: "";
     @apply absolute inset-0 -translate-x-full;
-    background: linear-gradient(90deg, transparent, rgba(255, 252, 246, 0.7), transparent);
+    background: linear-gradient(90deg, transparent, rgb(var(--c-paper) / 0.6), transparent);
     animation: shimmer 1.4s infinite;
   }
 }
 
 @layer utilities {
-  /* Display type: Newsreader, an editorial serif, for every heading. */
+  /* Display type: Playfair Display for every heading. */
   .font-display {
     font-family: var(--font-serif), Georgia, Cambria, "Times New Roman", serif;
     font-weight: 600;
-    letter-spacing: -0.012em;
+    letter-spacing: -0.01em;
+  }
+  /* Quiet scroll area for independently scrolling side panels. */
+  .crc-scroll {
+    scrollbar-width: thin;
   }
 }
 

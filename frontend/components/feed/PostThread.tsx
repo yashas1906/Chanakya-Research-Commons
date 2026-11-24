@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { ArrowLeft, FileText } from "lucide-react";
+import { EditedMark, PostMenu, type PostEdit } from "@/components/feed/PostMenu";
 import { CommentThread } from "@/components/feed/CommentThread";
 import { PostActionBar } from "@/components/feed/PostActionBar";
 import { Avatar, Panel } from "@/components/ui/Section";
@@ -21,7 +23,10 @@ import type { FeedPost } from "@/types/crc";
 export function PostThread({ postId }: { postId: string }) {
   const { user, promptLogin } = useAuth();
   const toast = useToast();
-  const { data: post, error, loading, reload } = useAsync((signal) => getPost(postId, signal), [postId]);
+  const router = useRouter();
+  const [override, setOverride] = useState<PostEdit | null>(null);
+  const { data: loaded, error, loading, reload } = useAsync((signal) => getPost(postId, signal), [postId]);
+  const post = loaded ? { ...loaded, ...(override ?? {}) } : loaded;
   const topic = post?.tags?.[0] ?? null;
   const more = useAsync((signal) => getFeed(user?.user_id ?? null, signal, "new"), [topic, user?.user_id], !!topic);
   const [score, setScore] = useState(0);
@@ -29,11 +34,14 @@ export function PostThread({ postId }: { postId: string }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!post) return;
-    setScore(post.upvote_count);
-    setVote(post.my_vote);
-    document.title = `${post.title} · Chanakya Research Commons`;
-  }, [post]);
+    if (!loaded) return;
+    setScore(loaded.upvote_count);
+    setVote(loaded.my_vote);
+  }, [loaded]);
+
+  useEffect(() => {
+    if (post?.title) document.title = `${post.title} · Chanakya Research Commons`;
+  }, [post?.title]);
 
   const updateVote = async (value: -1 | 0 | 1) => {
     if (!user) {
@@ -76,8 +84,17 @@ export function PostThread({ postId }: { postId: string }) {
           <article className="card min-w-0 p-5 sm:p-8">
             <header className="flex items-center gap-3">
               <Avatar name={post.author.full_name} size={40} />
-              <div className="min-w-0"><p className="truncate text-ui font-medium text-ink">{post.author.full_name}</p><p className="text-meta text-stone-500">{shortSchool(post.author.department)} · {relTime(post.created_at)}</p></div>
+              <div className="min-w-0"><p className="truncate text-ui font-medium text-ink">{post.author.full_name}</p><p className="text-meta text-stone-500">{shortSchool(post.author.department)} · {relTime(post.created_at)}<EditedMark editedAt={post.edited_at} /></p></div>
               <RoleBadge role={post.author.role} />
+              <span className="ml-auto">
+                <PostMenu
+                  post={post}
+                  canEdit={!!user && user.user_id === post.author.user_id}
+                  canDelete={!!user && (user.user_id === post.author.user_id || user.role === "admin")}
+                  onEdited={setOverride}
+                  onDeleted={() => router.replace("/feed")}
+                />
+              </span>
             </header>
             {post.tags && post.tags.length > 0 && <div className="mt-5 flex flex-wrap gap-2">{post.tags.map((tag) => <Link key={tag} href={`/search?q=${encodeURIComponent(tag)}`}><Tag>{tag}</Tag></Link>)}</div>}
             <h1 className="mt-4 font-display text-h1 tracking-tight text-ink">{post.title}</h1>

@@ -1,10 +1,7 @@
-import type { Metadata } from "next";
-import { Suspense } from "react";
-import { AnalyticsWorkspace } from "@/components/analytics/AnalyticsWorkspace";
-import { Skeleton } from "@/components/ui/Skeleton";
+import { redirect } from "next/navigation";
 
-export const metadata: Metadata = { title: "Analytics" };
-
-export default function AnalyticsPage() {
-  return <Suspense fallback={<Skeleton className="h-10 max-w-2xl" />}><AnalyticsWorkspace /></Suspense>;
+/** Analytics lives inside the admin dashboard only; old links land there (and are refused for non-admins). */
+export default function AnalyticsPage({ searchParams }: { searchParams: { tab?: string } }) {
+  const tab = typeof searchParams.tab === "string" ? `&tab=${encodeURIComponent(searchParams.tab)}` : "";
+  redirect(`/admin?section=analytics${tab}`);
 }

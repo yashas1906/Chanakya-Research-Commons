@@ -37,7 +37,7 @@ function silhouetteReading(s: number): { label: string; tone: "sage" | "neutral"
 
 function TraitChip({ trait }: { trait: string }) {
   const { name, level } = splitTrait(trait);
-  const tone = level === "High" ? "bg-ink text-white" : level === "Low" ? "bg-stone-200 text-stone-700" : "bg-sunken text-stone-700 border border-stone-200/90";
+  const tone = level === "High" ? "bg-ink text-paper" : level === "Low" ? "bg-stone-200 text-stone-700" : "bg-sunken text-stone-700 border border-stone-200/90";
   return (
     <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta leading-4 ${tone}`} title={trait}>
       {name}

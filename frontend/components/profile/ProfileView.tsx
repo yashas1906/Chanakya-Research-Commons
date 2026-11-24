@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Cake, Check, Flame, MessageSquare, Share2, UserPlus } from "lucide-react";
+import { AppearanceSetting } from "@/components/profile/AppearanceSetting";
+import { ProfileCollections } from "@/components/profile/ProfileCollections";
 import { PostCard } from "@/components/feed/PostCard";
 import { PaperRow } from "@/components/library/PaperRow";
 import { Avatar } from "@/components/ui/Section";
@@ -17,7 +19,7 @@ import { cx, fmtCount, relTime, shortSchool } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { useSaves } from "@/lib/saves-context";
 
-type TabId = "overview" | "posts" | "comments" | "saved";
+type TabId = "overview" | "posts" | "comments" | "collections" | "saved";
 
 function joined(iso: string | null | undefined) {
   if (!iso) return "Recently";
@@ -89,6 +91,7 @@ export function ProfileView({ userId }: { userId: string }) {
       { id: "overview", label: "Overview" },
       { id: "posts", label: "Posts", count: data?.stats.post_count },
       { id: "comments", label: "Comments", count: data?.stats.comment_count },
+      { id: "collections", label: "Collections" },
     ];
     if (isSelf) base.push({ id: "saved", label: "Saved", count: saves.saves.length });
     return base;
@@ -133,15 +136,12 @@ export function ProfileView({ userId }: { userId: string }) {
     <div className="space-y-5">
       {/* Banner + identity */}
       <section className="card overflow-hidden">
-        <div className="hero h-28 sm:h-36">
-          <svg aria-hidden className="absolute inset-0 h-full w-full text-saffron-300/[0.16]" fill="none" stroke="currentColor" strokeWidth="1.2">
-            {[40, 80, 120, 160, 200, 240].map((r) => <circle key={r} cx="90%" cy="130%" r={r} />)}
-          </svg>
+        <div className="hero h-20 sm:h-24">
         </div>
         <div className="relative flex flex-wrap items-end justify-between gap-4 px-5 pb-5 sm:px-7">
-          <div className="-mt-10 flex min-w-0 items-start gap-4 sm:-mt-12">
+          <div className="-mt-9 flex min-w-0 items-start gap-4 sm:-mt-10">
             <span className="rounded-full border-4 border-paper bg-paper shadow-card"><Avatar name={person.full_name} size={80} /></span>
-            <div className="mt-12 min-w-0 sm:mt-14">
+            <div className="mt-10 min-w-0 sm:mt-12">
               <h1 className="truncate font-display text-[24px] leading-tight text-ink sm:text-[28px]">{person.full_name}</h1>
               <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-stone-500">
                 <RoleBadge role={person.role} />
@@ -196,6 +196,7 @@ export function ProfileView({ userId }: { userId: string }) {
             )}
             {tab === "posts" && postList(posts, "No posts yet", isSelf ? "Share your first finding with the community." : `${person.full_name} hasn’t posted yet.`)}
             {tab === "comments" && commentList}
+            {tab === "collections" && <ProfileCollections userId={userId} isSelf={isSelf} name={person.full_name} />}
             {tab === "saved" && isSelf && (
               saves.saves.length === 0
                 ? <div className="card"><EmptyState title="No saved papers" hint="Papers you save in the library show up here." action={<Link href="/library" className="btn">Browse library</Link>} /></div>
@@ -204,8 +205,8 @@ export function ProfileView({ userId }: { userId: string }) {
           </div>
         </div>
 
-        <aside className="min-w-0">
-          <div className="card space-y-4 p-4 lg:sticky lg:top-[88px]">
+        <aside className="min-w-0 space-y-4 lg:sticky lg:top-[88px] lg:self-start">
+          <div className="card space-y-4 p-4">
             <h2 className="font-display text-[16px] text-ink">About</h2>
             {person.bio ? <p className="text-meta leading-relaxed text-stone-600">{person.bio}</p> : <p className="text-meta text-stone-400">No bio yet.</p>}
             <dl className="grid grid-cols-3 gap-2 border-y border-stone-100 py-3 text-center">
@@ -227,6 +228,7 @@ export function ProfileView({ userId }: { userId: string }) {
               </div>
             )}
           </div>
+          {isSelf && <AppearanceSetting />}
         </aside>
       </div>
     </div>

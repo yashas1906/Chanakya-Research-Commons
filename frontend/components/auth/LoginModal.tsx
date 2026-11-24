@@ -50,7 +50,7 @@ export function LoginModal() {
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink/35 p-4" onMouseDown={(e) => {
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/35 p-4" onMouseDown={(e) => {
       if (e.target === e.currentTarget) closeLogin();
     }}>
       <div

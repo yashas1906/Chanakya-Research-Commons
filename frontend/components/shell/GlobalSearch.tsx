@@ -132,8 +132,8 @@ export function GlobalSearch() {
         role="search"
         onSubmit={submit}
         className={cx(
-          "flex h-10 items-center gap-2 rounded-full border px-3.5 transition duration-150",
-          open ? "border-saffron-400 bg-paper ring-4 ring-saffron-400/25" : "border-transparent bg-paper/95 hover:bg-paper",
+          "flex h-10 items-center gap-2 rounded-lg border px-3.5 transition duration-150",
+          open ? "border-brand-500 bg-paper ring-4 ring-brand-100" : "border-stone-200 bg-stone-100 hover:border-stone-300 hover:bg-paper",
         )}
       >
         <Search aria-hidden className="h-4 w-4 shrink-0 text-stone-500" />

@@ -59,15 +59,15 @@ export function Sparkline({ points, name, className }: { points: SparkPoint[]; n
         <svg viewBox={`0 0 ${W} ${H}`} className="block h-[72px] w-full overflow-visible" preserveAspectRatio="none">
           <defs>
             <linearGradient id={gid} x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0%" stopColor="#18181B" stopOpacity="0.10" />
-              <stop offset="100%" stopColor="#18181B" stopOpacity="0" />
+              <stop offset="0%" stopColor="rgb(var(--c-brand-600))" stopOpacity="0.10" />
+              <stop offset="100%" stopColor="rgb(var(--c-brand-600))" stopOpacity="0" />
             </linearGradient>
           </defs>
-          <line x1={PAD_X} x2={W - PAD_X} y1={H - PAD_Y} y2={H - PAD_Y} stroke="#E7E5E4" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          <line x1={PAD_X} x2={W - PAD_X} y1={H - PAD_Y} y2={H - PAD_Y} stroke="rgb(var(--c-stone-200))" strokeWidth="1" vectorEffect="non-scaling-stroke" />
           <path d={area} fill={`url(#${gid})`} />
-          <path d={line} fill="none" stroke="#18181B" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
+          <path d={line} fill="none" stroke="rgb(var(--c-brand-600))" strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" vectorEffect="non-scaling-stroke" />
           {hover !== null && (
-            <line x1={x(active)} x2={x(active)} y1={PAD_Y - 4} y2={H - PAD_Y} stroke="#A8A29E" strokeWidth="1" strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
+            <line x1={x(active)} x2={x(active)} y1={PAD_Y - 4} y2={H - PAD_Y} stroke="rgb(var(--c-stone-400))" strokeWidth="1" strokeDasharray="2 3" vectorEffect="non-scaling-stroke" />
           )}
         </svg>
         {/* Marker is HTML so it stays circular under the non-uniform SVG scaling. */}

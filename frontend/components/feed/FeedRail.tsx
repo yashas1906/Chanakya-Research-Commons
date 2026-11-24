@@ -38,12 +38,9 @@ export function FeedRail({
       {/* Community card */}
       <section className="card overflow-hidden">
         <div className="hero h-14">
-          <svg aria-hidden className="absolute inset-0 h-full w-full text-saffron-300/20" fill="none" stroke="currentColor" strokeWidth="1">
-            {[18, 36, 54, 72, 90].map((r) => <circle key={r} cx="88%" cy="120%" r={r} />)}
-          </svg>
         </div>
         <div className="px-4 pb-4">
-          <span className="relative -mt-6 flex h-12 w-12 items-center justify-center rounded-xl border-4 border-paper bg-saffron-400 font-display text-lg text-brand-900">R</span>
+          <span className="relative -mt-6 flex h-12 w-12 items-center justify-center rounded-xl border-4 border-paper bg-saffron-400 font-display text-lg text-deep">R</span>
           <h2 className="mt-2 font-display text-[17px] text-ink">Research feed</h2>
           <p className="mt-1 text-meta leading-relaxed text-stone-600">Findings, questions and papers from scholars across Chanakya University.</p>
           <dl className="mt-3 grid grid-cols-3 gap-2 border-y border-stone-100 py-3 text-center">

@@ -1,4 +1,4 @@
-import type { RawAuthor } from "@/types/crc";
+import { SCHOOL_CODES, type RawAuthor } from "@/types/crc";
 
 const INT = new Intl.NumberFormat("en-IN");
 const COMPACT_INT = new Intl.NumberFormat("en-US", { notation: "compact", maximumFractionDigits: 1 });
@@ -11,7 +11,7 @@ export const fmtPct = (fraction: number, digits = 0) => `${(fraction * 100).toFi
 export const fmtLift = (lift: number) => `${lift.toFixed(2)}×`;
 
 export function pagerankTier(percentile: number | null | undefined): string {
-  if (percentile == null) return "Prestige";
+  if (percentile == null) return "Unranked";
   if (percentile >= 0.99) return "Top 1%";
   if (percentile >= 0.9) return "Top 10%";
   if (percentile >= 0.75) return "Top 25%";
@@ -68,18 +68,23 @@ export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }
 
-/** Short school label for compact chips. */
+/** Names used before the move to the six official schools; they keep rendering sensibly until the data is migrated. */
+const LEGACY_SCHOOL: Record<string, string> = {
+  "Computer Science & AI": "SOE",
+  "Electronics & Communication": "SOE",
+  Biotechnology: "SBS",
+  "Management & Commerce": "SMS",
+  "School of Law": "SLGPP",
+  "Liberal Arts & Humanities": "SAHSS",
+};
+
+/** Short school code (SOE, SBS, ...) for compact chips. Unknown names are returned unchanged. */
 export function shortSchool(s: string): string {
-  return s
-    .replace("School of Arts, Humanities and Social Sciences", "SAHSS")
-    .replace("School of Biosciences", "SBS")
-    .replace("School of Engineering", "SOE")
-    .replace("School of Law, Governance and Public Policy", "SLGPP")
-    .replace("School of Management Sciences", "SMS")
-    .replace("School of Mathematics and Natural Sciences", "SMNS")
-    .replace("Computer Science & AI", "CS & AI")
-    .replace("Electronics & Communication", "Electronics")
-    .replace("Management & Commerce", "Management")
-    .replace("School of Law", "Law")
-    .replace("Liberal Arts & Humanities", "Liberal Arts");
+  return (SCHOOL_CODES as Record<string, string>)[s] ?? LEGACY_SCHOOL[s] ?? s;
+}
+
+/** "SOE · Engineering": the code plus the school name, for filter lists that have room for both. */
+export function schoolLabel(s: string): string {
+  const code = shortSchool(s);
+  return code === s ? s : `${code} · ${s.replace(/^School of /, "")}`;
 }
