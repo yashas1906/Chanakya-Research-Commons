@@ -120,9 +120,18 @@ def test_full_pipeline():
     print("    -> Grounded Assistant refusal gate passed!")
 
     print("Testing /api/alerts...")
-    alerts_resp = client.get("/api/alerts")
-    assert alerts_resp.status_code == 200
-    print(f"    -> Persisted system alerts fetched: {len(alerts_resp.json())} alerts found.")
+    # Alerts name flagged members, so only admins may read or act on them.
+    assert client.get("/api/alerts").status_code == 401
+    assert client.get("/api/alerts", headers=headers).status_code == 403
+    assert client.post("/api/analytics/run-spike-scan", headers=headers).status_code == 403
+    assert client.post("/api/admin/members/00000000-0000-0000-0000-000000000000/spam", json={"flagged": False}, headers=headers).status_code == 403
+    print("    -> /api/alerts and moderation actions are admin-only!")
+
+    print("Testing private notes and save-by-identifier validation...")
+    assert client.patch("/api/library/save/00000000-0000-0000-0000-000000000000", json={"private_notes": "x"}, headers=headers).status_code == 404
+    assert client.post("/api/library/save-by-identifier", json={"identifier": "not an identifier"}, headers=headers).status_code == 422
+    assert client.post("/api/library/save-by-identifier", json={"identifier": "http://127.0.0.1:8000/api/users"}, headers=headers).status_code == 404
+    print("    -> notes require a save; bad identifiers and private-network links are refused!")
 
     print("\nALL SYSTEM TESTS PASSED CLEANLY!")
 

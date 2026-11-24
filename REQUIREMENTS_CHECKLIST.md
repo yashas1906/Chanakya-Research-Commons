@@ -1,7 +1,7 @@
 # Chanakya Research Commons: Requirements Checklist and Pending Work
 
 Checked against the DMW course project brief (submission due **28 Nov 2026**).
-Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phase 1 completed 24 Nov 2026** (rows below updated).
+Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phase 1 and Phase 2 completed 24 Nov 2026** (rows below updated).
 
 **Legend:** ✅ done · ⚠️ partly done or weak · ❌ missing · `[ ]` pending task
 
@@ -16,7 +16,7 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 | Profile with department, interests (text and tags) | ✅ | Editable from the profile page (`PATCH /api/users/me`); the profile embedding is recomputed on save. |
 | Links to publications or a personal page | ✅ | Personal page + up to 20 publication links, shown in the profile's About card. |
 | Follow other members | ✅ | |
-| Follow topics | ⚠️ | API exists (`/api/topics/{topic}/follow`); no button in the website. |
+| Follow topics | ✅ | Follow buttons on trending topics, paper topics, search results and the Feed's topic filter; "Topics you follow" list in the Feed sidebar. |
 
 ### F2. Posts and discussions
 | Requirement | Status | Notes |
@@ -30,9 +30,9 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 | Requirement | Status | Notes |
 |---|---|---|
 | Save from search results | ✅ | |
-| Save by URL, DOI or arXiv ID | ⚠️ | API handles DOI and arXiv. No input in the website. Plain URLs unsupported. Failed lookups save a fake placeholder paper. |
+| Save by URL, DOI or arXiv ID | ✅ | "Add by DOI, arXiv or link" in the Library. Uses Crossref, arXiv or the page's own metadata; clear errors instead of placeholder papers; private-network links refused. |
 | Personal collections | ✅ | |
-| Private notes on saved items | ⚠️ | Notes are displayed but cannot be written or edited in the website. |
+| Private notes on saved items | ✅ | Write and edit notes in My saves and on the paper page. Re-saving no longer wipes notes. |
 | Every save enters the shared library with a save count | ✅ | Counts match `library_saves` exactly. |
 
 ### F4. External content ingestion
@@ -62,9 +62,9 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 ### F7. Trends and monitoring
 | Requirement | Status | Notes |
 |---|---|---|
-| Trending topics over a recent window | ⚠️ | Backend sliding-window endpoint exists but the website doesn't use it; Feed counts tags on loaded posts instead. |
-| Alerts when a topic suddenly spikes | ⚠️ | Created only when the pipeline runs, not live. Read-only for admins. |
-| Spam / abnormal activity flags for admins | ⚠️ | Works, but has false positives (a real member was flagged) and admins have no unflag button. |
+| Trending topics over a recent window | ✅ | Feed sidebar shows the 7-day vs 30-day sliding window with a spike badge; topics need at least 5 events. |
+| Alerts when a topic suddenly spikes | ✅ | Raised by every scheduled refresh and on demand ("Scan for topic spikes" in the admin dashboard). |
+| Spam / abnormal activity flags for admins | ✅ | Admin alert queue with "Not spam" / "Confirm", flag/clear in the members table, on-demand scan. Cleared members are not re-flagged unless they post again. Alerts are admin-only. Threshold tuning is Phase 3. |
 
 ### F8. Research assistant
 | Requirement | Status | Notes |
@@ -76,10 +76,10 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 ### F9. Admin analytics dashboard
 | Requirement | Status | Notes |
 |---|---|---|
-| Research topics by department over time | ⚠️ | Per-school topic totals and overall monthly totals, but no topic-over-time view. |
+| Research topics by department over time | ✅ | Monthly line chart of the most active topics, filterable by school. |
 | Collaboration across departments | ✅ | School-to-school matrix. |
-| Most saved and most discussed papers; engagement trends | ⚠️ | Engagement trend ✅. Most saved/discussed papers not on the dashboard. |
-| Drill-down university → department → topic → member | ⚠️ | API `/api/analytics/drilldown` exists (no topic level) but is not used by the website. |
+| Most saved and most discussed papers; engagement trends | ✅ | Both lists on the Activity tab (filterable by school), plus the existing engagement trend. |
+| Drill-down university → department → topic → member | ✅ | Drill-down tab: university → school → topic → member (at Chanakya, `department` holds the school). |
 
 ### Data and seed corpus
 | Requirement | Status | Notes |
@@ -123,15 +123,15 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 - [x] **F6 also-saved:** fall back to co-save similarity (or content similarity) when no association rules match, so every library item shows results. Cache the mined rules instead of recomputing per request.
 - [x] **F1 profile edit:** add `PATCH /api/users/me` (bio, interests, tags, personal/publication links) and an edit form on the profile page. Recompute the profile embedding on save.
 
-### Phase 2: Website gaps (backend exists, no UI)
-- [ ] **F3:** "Add by DOI / arXiv ID / URL" box in the Library. Return an error instead of creating a placeholder paper when lookup fails. Support plain article URLs.
-- [ ] **F3:** write and edit private notes on saved papers.
-- [ ] **F1:** Follow / unfollow topic buttons (on tags, search results, trending topics).
-- [ ] **F7:** show trending topics from `/api/trends-and-anomalies` instead of counting loaded posts.
-- [ ] **F7:** admin alert list with Resolve / Unflag buttons (`/api/alerts`, `/api/alerts/{id}/resolve`). Optionally a "Run spam scan" button.
-- [ ] **F7:** create spike alerts live or on the scheduler, not only during seeding.
-- [ ] **F9:** drill-down view university → school → department → topic → member (add the topic level to the API).
-- [ ] **F9:** topic-by-department-over-time chart, and most saved / most discussed papers on the dashboard.
+### Phase 2: Website gaps ✅ done
+- [x] **F3:** "Add by DOI / arXiv ID / URL" box in the Library. Return an error instead of creating a placeholder paper when lookup fails. Support plain article URLs.
+- [x] **F3:** write and edit private notes on saved papers.
+- [x] **F1:** Follow / unfollow topic buttons (on tags, search results, trending topics).
+- [x] **F7:** show trending topics from `/api/trends-and-anomalies` instead of counting loaded posts.
+- [x] **F7:** admin alert list with Resolve / Unflag buttons (`/api/alerts`, `/api/alerts/{id}/resolve`). Optionally a "Run spam scan" button.
+- [x] **F7:** create spike alerts live or on the scheduler, not only during seeding.
+- [x] **F9:** drill-down view university → school → department → topic → member (add the topic level to the API).
+- [x] **F9:** topic-by-department-over-time chart, and most saved / most discussed papers on the dashboard.
 
 ### Phase 3: Evaluation and data consistency
 - [ ] Score duplicate detection from `paper_merges` (the system's actual merges) instead of recomputing MinHash inside `evaluate_all.py`.
@@ -141,12 +141,13 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 - [ ] Re-run `evaluation/evaluate_all.py` and update the README results table.
 - [ ] Tune the PageRank weight in search so the deployed setup beats semantic-only, or justify it in the report.
 - [ ] Fix the popularity baseline (0.0) in the recommendation evaluation; improve the personalised method so it beats item-CF, or explain why not.
-- [ ] Set the spam threshold from the evaluation curve; unflag false positives (for example Yashas Hombal).
+- [ ] Set the spam threshold from the evaluation curve (ELT uses 0.15, the API job 0.18); review the 3 false positives still flagged (Yashas Hombal, Divya Shetty, Fatima Sheikh) using the new "Clear flag" button.
 - [ ] Improve MinHash precision (shingle size, threshold) and report the numbers of the method the app actually uses.
 - [ ] Log comment and vote events in `activity_events` (currently 2 and 13 events vs 2,002 comments and 503 votes), and record `user_id` on search events.
 - [ ] Optionally fetch more citation links from OpenAlex (`referenced_works`) to strengthen PageRank.
 
 ### Phase 4: Security and tidy-up
+- [ ] The warehouse ELT and `/api/analytics/run-spam-job` contain two copies of the spam scan; move them into one shared module.
 - [ ] Require login on `/api/recommendations/{user_id}` and only allow a member's own recommendations (or admin).
 - [ ] Remove default passwords and the JWT key from `docker-compose.yml` and code defaults; read them from `.env` only.
 - [ ] Replace deprecated `@app.on_event("startup")` with a FastAPI lifespan handler.

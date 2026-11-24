@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { AlertTriangle, BookOpen, FileText, MessageSquare, ThumbsUp, Users } from "lucide-react";
 import { Sparkline } from "@/components/analytics/charts";
+import { AlertsPanel } from "@/components/admin/AlertsPanel";
 import { Avatar, Panel } from "@/components/ui/Section";
 import { RoleBadge } from "@/components/ui/RoleBadge";
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { Skeleton } from "@/components/ui/Skeleton";
 import type { AsyncState } from "@/lib/hooks";
-import { cx, fmtInt, relTime } from "@/lib/format";
+import { cx, fmtInt } from "@/lib/format";
 import type { AdminOverview } from "@/types/crc";
 
 const ROLE_LABEL: Record<string, string> = { student: "Students", faculty: "Faculty", researcher: "Researchers", admin: "Admins" };
@@ -126,24 +127,7 @@ export function AdminOverviewTab({ state, onOpenMembers }: { state: AsyncState<A
           )}
         </Panel>
 
-        <Panel title="Open alerts" meta={fmtInt(t.open_alerts)}>
-          {data.open_alerts.length === 0 ? (
-            <EmptyState title="Nothing to review" hint="Anomaly and spam alerts raised by the moderation jobs appear here." />
-          ) : (
-            <ul className="divide-y divide-stone-100">
-              {data.open_alerts.map((a) => (
-                <li key={a.alert_id} className="flex items-center gap-3 px-4 py-2.5">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-terracotta-600" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-ui font-medium text-ink">{a.alert_type.replace(/_/g, " ").toLowerCase()}</span>
-                    <span className="block truncate text-label text-stone-500">{a.entity_name ?? a.entity_ref} · {relTime(a.detected_at)}</span>
-                  </span>
-                  <span className="num text-meta text-stone-500">severity <span className="font-semibold text-ink">{a.severity_score.toFixed(2)}</span></span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
+        <AlertsPanel onChanged={reload} />
       </div>
     </div>
   );

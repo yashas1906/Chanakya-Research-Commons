@@ -204,8 +204,22 @@ class GatekeeperPayload(BaseModel):
 class SavePaperRequest(BaseModel):
     user_id: Optional[str] = None
     paper_id: UUID
-    private_notes: Optional[str] = ""
+    # None / "" = keep whatever note or collection the save already has (re-saving must not wipe them).
+    private_notes: Optional[str] = None
     collection_id: Optional[UUID] = None
+
+
+class NotesUpdate(BaseModel):
+    private_notes: str = Field("", max_length=5000)
+
+
+class ResolveAlertRequest(BaseModel):
+    # dismiss = false positive (spam flag cleared, member not re-flagged by later scans); confirm = keep the flag.
+    action: str = Field("dismiss", pattern="^(dismiss|confirm)$")
+
+
+class SpamFlagRequest(BaseModel):
+    flagged: bool
 
 
 class AskAssistantRequest(BaseModel):
@@ -1162,9 +1176,10 @@ def save_to_library(req: SavePaperRequest, user=Depends(current_user)):
             INSERT INTO library_saves (user_id, paper_id, private_notes, collection_id)
             VALUES (%s::uuid, %s::uuid, %s, %s::uuid)
             ON CONFLICT (user_id, paper_id) DO UPDATE
-              SET private_notes = EXCLUDED.private_notes, collection_id = EXCLUDED.collection_id
+              SET private_notes = COALESCE(NULLIF(EXCLUDED.private_notes, ''), library_saves.private_notes),
+                  collection_id = COALESCE(EXCLUDED.collection_id, library_saves.collection_id)
             """,
-            (user["user_id"], req.paper_id, req.private_notes, req.collection_id),
+            (user["user_id"], req.paper_id, req.private_notes or None, req.collection_id),
         )
         cur.execute(
             """
@@ -1184,6 +1199,28 @@ def save_to_library(req: SavePaperRequest, user=Depends(current_user)):
         conn.commit()
         cur.close()
         return {"status": "saved", "paper": updated}
+
+
+@app.patch("/api/library/save/{paper_id}")
+def update_save_notes(paper_id: UUID, payload: NotesUpdate, user=Depends(current_user)):
+    """Write or clear your private note on a paper you have saved (F3)."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE library_saves SET private_notes = NULLIF(%s, '')
+            WHERE user_id = %s::uuid AND paper_id = %s::uuid
+            RETURNING paper_id, private_notes
+            """,
+            (payload.private_notes.strip(), user["user_id"], paper_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            raise HTTPException(status_code=404, detail="Save this paper before adding a note")
+        conn.commit()
+        cur.close()
+    return {"paper_id": str(row["paper_id"]), "private_notes": row["private_notes"]}
 
 
 @app.delete("/api/library/save/{paper_id}")
@@ -1400,147 +1437,308 @@ def add_paper_to_collection(collection_id: UUID, payload: AddPaperToCollectionRe
     return {"status": "added_to_collection", "collection_id": str(collection_id), "paper_id": str(payload.paper_id)}
 
 
+_DOI_RE = re.compile(r"(10\.\d{4,9}/[^\s\"<>?#]+)", re.IGNORECASE)
+_SCHOOL_LABELS = {
+    "School of Arts, Humanities and Social Sciences", "School of Biosciences", "School of Engineering",
+    "School of Law, Governance and Public Policy", "School of Management Sciences", "School of Mathematics and Natural Sciences",
+}
+_IDENTIFIER_HELP = "Enter a DOI (10.xxxx/...), an arXiv ID (2401.12345) or a web link (https://...)."
+
+
+def _parse_identifier(raw: str) -> tuple[str, str]:
+    """Classify user input as ("doi" | "arxiv" | "url", normalised value)."""
+    text = raw.strip()
+    low = text.lower()
+    m = re.search(r"arxiv\.org/(?:abs|pdf)/([^\s?#]+)", text, re.IGNORECASE)
+    if m:
+        return "arxiv", re.sub(r"(v\d+)?(\.pdf)?$", "", m.group(1), flags=re.IGNORECASE)
+    if low.startswith("arxiv:"):
+        return "arxiv", re.sub(r"v\d+$", "", text[6:].strip())
+    if re.fullmatch(r"\d{4}\.\d{4,5}(v\d+)?", text):
+        return "arxiv", re.sub(r"v\d+$", "", text)
+    if low.startswith("doi:"):
+        text = text[4:].strip()
+        low = text.lower()
+    m = _DOI_RE.search(text)
+    if m and (low.startswith("10.") or "doi.org/" in low):
+        return "doi", m.group(1).rstrip(".").lower()
+    if re.match(r"^https?://", text, re.IGNORECASE):
+        return "url", text
+    if re.match(r"^[\w-]+(\.[\w-]+)+(/\S*)?$", text):
+        return "url", "https://" + text
+    raise HTTPException(status_code=422, detail=_IDENTIFIER_HELP)
+
+
+def _public_host(host: str) -> bool:
+    """Refuse links to the server's own network (localhost, private ranges) so saving a URL can't probe it."""
+    import ipaddress
+    import socket
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast or ip.is_unspecified:
+            return False
+    return True
+
+
+def _fetch_page(url: str) -> tuple[str, str] | None:
+    """GET a public web page (max 3 redirects, 1.5 MB, HTML only). Returns (final_url, html) or None."""
+    from urllib.parse import urljoin, urlparse
+    for _ in range(4):
+        parsed = urlparse(url)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or not _public_host(parsed.hostname):
+            return None
+        try:
+            resp = requests.get(url, headers={"User-Agent": "chanakya-research-commons/1.0 (link preview)"},
+                                timeout=10, allow_redirects=False, stream=True)
+        except requests.RequestException:
+            return None
+        if resp.is_redirect and resp.headers.get("Location"):
+            url = urljoin(url, resp.headers["Location"])
+            resp.close()
+            continue
+        if resp.status_code != 200 or "html" not in resp.headers.get("Content-Type", ""):
+            resp.close()
+            return None
+        body = resp.raw.read(1_500_000, decode_content=True)
+        resp.close()
+        return url, body.decode(resp.encoding or "utf-8", errors="replace")
+    return None
+
+
+def _strip_tags(text: str) -> str:
+    import html as _html
+    return re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", text or ""))).strip()
+
+
+def _lookup_crossref(doi: str) -> Optional[dict]:
+    try:
+        r = requests.get(f"https://api.crossref.org/works/{doi}", headers={"User-Agent": "chanakya-research-commons/1.0"}, timeout=12)
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    msg = r.json().get("message", {})
+    title = _strip_tags(" ".join(msg.get("title") or []))
+    if not title:
+        return None
+    date_parts = (msg.get("published") or msg.get("issued") or {}).get("date-parts") or [[None]]
+    return {
+        "title": title,
+        "abstract": _strip_tags(msg.get("abstract") or ""),
+        "authors": [{"name": f"{a.get('given', '')} {a.get('family', '')}".strip()} for a in msg.get("author", [])[:8] if a.get("family")],
+        "year": date_parts[0][0],
+        "venue": (msg.get("container-title") or [None])[0] or msg.get("publisher"),
+        "doi": doi,
+        "arxiv_id": None,
+        "url": msg.get("URL") or f"https://doi.org/{doi}",
+        "source": "crossref",
+        "external_id": doi,
+        "item_type": "paper",
+    }
+
+
+def _lookup_arxiv(arxiv_id: str) -> Optional[dict]:
+    import xml.etree.ElementTree as ET
+    try:
+        r = requests.get(f"https://export.arxiv.org/api/query?id_list={arxiv_id}", headers={"User-Agent": "chanakya-research-commons/1.0"}, timeout=15)
+    except requests.RequestException:
+        return None
+    if r.status_code != 200:
+        return None
+    ns = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+    entry = ET.fromstring(r.content).find("atom:entry", ns)
+    if entry is None or "/abs/" not in (entry.findtext("atom:id", "", ns) or ""):
+        return None  # arXiv answers unknown ids with an error entry
+    title = _strip_tags(entry.findtext("atom:title", "", ns))
+    if not title:
+        return None
+    published = entry.findtext("atom:published", "", ns) or ""
+    return {
+        "title": title,
+        "abstract": _strip_tags(entry.findtext("atom:summary", "", ns)),
+        "authors": [{"name": _strip_tags(a.findtext("atom:name", "", ns))} for a in entry.findall("atom:author", ns)][:8],
+        "year": int(published[:4]) if published[:4].isdigit() else None,
+        "venue": "arXiv.org",
+        "doi": ((entry.findtext("arxiv:doi", "", ns) or "").strip().lower() or None),
+        "arxiv_id": arxiv_id,
+        "url": f"https://arxiv.org/abs/{arxiv_id}",
+        "source": "arxiv",
+        "external_id": arxiv_id,
+        "item_type": "paper",
+    }
+
+
+def _lookup_url(url: str) -> Optional[dict]:
+    """Read the page's own metadata (citation_* / Open Graph tags), the same as a link preview."""
+    page = _fetch_page(url)
+    if not page:
+        return None
+    final_url, html_text = page
+
+    def metas(*names: str) -> list[str]:
+        found = []
+        for name in names:
+            pattern = rf"<meta[^>]+(?:name|property)=[\"']{re.escape(name)}[\"'][^>]*>"
+            for tag in re.findall(pattern, html_text, re.IGNORECASE):
+                m = re.search(r"content=[\"']([^\"']*)[\"']", tag, re.IGNORECASE)
+                if m and m.group(1).strip():
+                    found.append(_strip_tags(m.group(1)))
+        return found
+
+    doi = (metas("citation_doi", "dc.identifier", "prism.doi") or [None])[0]
+    if doi:
+        m = _DOI_RE.search(doi)
+        if m:
+            found = _lookup_crossref(m.group(1).lower())
+            if found:
+                return found
+    arxiv = (metas("citation_arxiv_id") or [None])[0]
+    if arxiv:
+        found = _lookup_arxiv(arxiv)
+        if found:
+            return found
+    title_tag = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.IGNORECASE | re.DOTALL)
+    title = (metas("citation_title", "og:title", "twitter:title") or [_strip_tags(title_tag.group(1)) if title_tag else ""])[0]
+    if not title:
+        return None
+    from urllib.parse import urlparse
+    date = (metas("citation_publication_date", "citation_date", "article:published_time", "dc.date") or [""])[0]
+    year = re.search(r"(19|20)\d{2}", date)
+    return {
+        "title": title[:500],
+        "abstract": (metas("citation_abstract", "description", "og:description", "twitter:description") or [""])[0][:2500],
+        "authors": [{"name": n} for n in metas("citation_author", "author", "article:author")[:8]],
+        "year": int(year.group(0)) if year else None,
+        "venue": (metas("citation_journal_title", "og:site_name") or [urlparse(final_url).hostname or "Web"])[0][:200],
+        "doi": None,
+        "arxiv_id": None,
+        "url": final_url,
+        "source": "web",
+        "external_id": "web:" + hashlib.sha1(final_url.encode("utf-8")).hexdigest(),
+        "item_type": "article",
+    }
+
+
+def _minhash_bytes(title: str, abstract: str) -> bytes:
+    """Same MinHash (word 3-shingles, 128 permutations) as data_pipeline/dedup.py."""
+    from datasketch import MinHash
+    words = re.findall(r"[a-z0-9]+", f"{title} {abstract}".lower())
+    shingles = {" ".join(words[i:i + 3]) for i in range(max(1, len(words) - 2))} if words else set()
+    mh = MinHash(num_perm=128)
+    for sh in shingles:
+        mh.update(sh.encode("utf-8"))
+    return mh.hashvalues.tobytes()
+
+
 @app.post("/api/library/save-by-identifier")
 def save_by_identifier(payload: SaveByIdentifierRequest, user=Depends(current_user)):
-    raw_id = payload.identifier.strip()
-    doi = None
-    arxiv_id = None
-
-    if "doi.org/" in raw_id:
-        doi = raw_id.split("doi.org/")[-1].strip()
-    elif "10." in raw_id and "/" in raw_id:
-        doi = raw_id.strip()
-    elif "arxiv.org/abs/" in raw_id:
-        arxiv_id = raw_id.split("arxiv.org/abs/")[-1].split("v")[0].strip()
-    elif "arxiv:" in raw_id.lower():
-        arxiv_id = raw_id.lower().replace("arxiv:", "").strip()
-    elif re.match(r"^\d{4}\.\d{4,5}$", raw_id):
-        arxiv_id = raw_id
+    """
+    Save a paper or article by DOI, arXiv ID or web link (F3). Looks the item up in the corpus first; otherwise
+    fetches its metadata from Crossref, arXiv or the page itself and adds it to the corpus with provenance.
+    Fails with a clear message rather than inventing a record when nothing can be found.
+    """
+    kind, value = _parse_identifier(payload.identifier)
+    if payload.collection_id:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT 1 FROM collections WHERE collection_id = %s::uuid AND user_id = %s::uuid", (payload.collection_id, user["user_id"]))
+            ok = cur.fetchone()
+            cur.close()
+        if not ok:
+            raise HTTPException(status_code=404, detail="Collection not found")
 
     with get_db() as conn:
         cur = conn.cursor()
-        existing = None
-        if doi:
-            cur.execute("SELECT paper_id, canonical_title FROM papers WHERE doi = %s", (doi,))
-            existing = cur.fetchone()
-        if not existing and arxiv_id:
-            cur.execute("SELECT paper_id, canonical_title FROM papers WHERE arxiv_id = %s", (arxiv_id,))
-            existing = cur.fetchone()
-
-        if existing:
-            paper_id = existing["paper_id"]
+        if kind == "doi":
+            cur.execute("SELECT paper_id FROM papers WHERE lower(doi) = %s", (value,))
+        elif kind == "arxiv":
+            cur.execute("SELECT paper_id FROM papers WHERE arxiv_id = %s", (value,))
         else:
-            fetched = None
-            if doi:
-                try:
-                    r = requests.get(f"https://api.crossref.org/works/{doi}", headers={"User-Agent": "chanakya-commons/1.0"}, timeout=10)
-                    if r.status_code == 200:
-                        msg = r.json().get("message", {})
-                        title = " ".join(msg.get("title", [])) or "Crossref Paper"
-                        abstract = msg.get("abstract", "") or f"Research article retrieved via Crossref DOI {doi}."
-                        authors = [{"name": f"{a.get('given', '')} {a.get('family', '')}".strip()} for a in msg.get("author", [])]
-                        year = (msg.get("published", {}).get("date-parts", [[2024]])[0][0]) if msg.get("published") else 2024
-                        venue = msg.get("container-title", ["Scholarly Journal"])[0] if msg.get("container-title") else "Journal"
-                        fetched = {
-                            "title": title,
-                            "abstract": abstract,
-                            "authors": authors[:5] or [{"name": "Author"}],
-                            "year": year,
-                            "venue": venue,
-                            "topics": ["Research Paper"],
-                            "doi": doi,
-                            "arxiv_id": None,
-                            "sources": ["crossref"]
-                        }
-                except Exception:
-                    pass
-
-            if not fetched and arxiv_id:
-                try:
-                    r = requests.get(f"http://export.arxiv.org/api/query?id_list={arxiv_id}", headers={"User-Agent": "chanakya-commons/1.0"}, timeout=10)
-                    if r.status_code == 200:
-                        import xml.etree.ElementTree as ET
-                        root = ET.fromstring(r.content)
-                        ns = {"atom": "http://www.w3.org/2005/Atom"}
-                        entry = root.find("atom:entry", ns)
-                        if entry is not None:
-                            title = (entry.find("atom:title", ns).text or "").strip().replace("\n", " ")
-                            abstract = (entry.find("atom:summary", ns).text or "").strip().replace("\n", " ")
-                            authors = [{"name": a.find("atom:name", ns).text} for a in entry.findall("atom:author", ns) if a.find("atom:name", ns) is not None]
-                            fetched = {
-                                "title": title,
-                                "abstract": abstract,
-                                "authors": authors[:5] or [{"name": "arXiv Author"}],
-                                "year": 2024,
-                                "venue": "arXiv.org",
-                                "topics": ["arXiv Preprint"],
-                                "doi": None,
-                                "arxiv_id": arxiv_id,
-                                "sources": ["arxiv"]
-                            }
-                except Exception:
-                    pass
-
-            if not fetched:
-                fetched = {
-                    "title": f"External Publication: {raw_id}",
-                    "abstract": f"Academic work saved from external identifier reference: {raw_id}",
-                    "authors": [{"name": "Contributing Scholar"}],
-                    "year": 2024,
-                    "venue": "Academic Commons",
-                    "topics": ["Interdisciplinary"],
-                    "doi": doi,
-                    "arxiv_id": arxiv_id,
-                    "sources": ["external"]
-                }
-
-            paper_id = uuid.uuid4()
-            emb = embed_model.encode(f"{fetched['title']}. {fetched['abstract'][:500]}").tolist()
             cur.execute(
-                """
-                INSERT INTO papers (paper_id, doi, arxiv_id, canonical_title, abstract, authors, publication_year, venue, topics, sources, embedding)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::vector)
-                """,
-                (
-                    paper_id,
-                    fetched["doi"],
-                    fetched["arxiv_id"],
-                    fetched["title"],
-                    fetched["abstract"],
-                    json.dumps(fetched["authors"]),
-                    fetched["year"],
-                    fetched["venue"],
-                    fetched["topics"],
-                    json.dumps(fetched["sources"]),
-                    emb,
-                ),
+                "SELECT paper_id FROM papers WHERE url = %s UNION SELECT paper_id FROM paper_sources WHERE source_url = %s LIMIT 1",
+                (value, value),
             )
-            cur.execute(
-                """
-                INSERT INTO paper_chunks (paper_id, chunk_index, chunk_text, chunk_embedding)
-                VALUES (%s, 0, %s, %s::vector)
-                """,
-                (paper_id, fetched["abstract"][:1200], emb),
-            )
+        existing = cur.fetchone()
+        cur.close()
 
-        # Save to library
+    created = False
+    if existing:
+        paper_id = existing["paper_id"]
+    else:
+        found = {"doi": _lookup_crossref, "arxiv": _lookup_arxiv, "url": _lookup_url}[kind](value)
+        if not found:
+            detail = {
+                "doi": f"No paper was found for DOI {value}. Check the DOI and try again.",
+                "arxiv": f"No arXiv paper was found with ID {value}.",
+                "url": "That link couldn't be read. Make sure it is a public web page, or use the paper's DOI instead.",
+            }[kind]
+            raise HTTPException(status_code=404, detail=detail)
+        with get_db() as conn:
+            cur = conn.cursor()
+            # The lookup may resolve to an identifier we already hold (e.g. a page whose DOI is in the corpus).
+            cur.execute(
+                "SELECT paper_id FROM papers WHERE (%s::text IS NOT NULL AND lower(doi) = %s) OR (%s::text IS NOT NULL AND arxiv_id = %s) LIMIT 1",
+                (found["doi"], found["doi"], found["arxiv_id"], found["arxiv_id"]),
+            )
+            again = cur.fetchone()
+            if again:
+                paper_id = again["paper_id"]
+            else:
+                abstract = found["abstract"] or found["title"]
+                emb = embed_model.encode(f"{found['title']}. {abstract[:600]}").tolist()
+                # File the item under the school and topic of its nearest neighbours, like the rest of the corpus.
+                cur.execute("SELECT topics FROM papers WHERE embedding IS NOT NULL ORDER BY embedding <=> %s::vector LIMIT 7", (emb,))
+                school_votes, topic_votes = {}, {}
+                for row in cur.fetchall():
+                    for t in row["topics"] or []:
+                        bucket = school_votes if t in _SCHOOL_LABELS else topic_votes
+                        bucket[t] = bucket.get(t, 0) + 1
+                topics = [t for t in (max(topic_votes, key=topic_votes.get, default=None), max(school_votes, key=school_votes.get, default=None)) if t]
+                paper_id = uuid.uuid4()
+                cur.execute(
+                    """
+                    INSERT INTO papers (paper_id, doi, arxiv_id, canonical_title, abstract, authors, publication_year, venue,
+                                        topics, sources, minhash_signature, embedding, item_type, url)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s::vector, %s, %s)
+                    """,
+                    (paper_id, found["doi"], found["arxiv_id"], found["title"], abstract, json.dumps(found["authors"]),
+                     found["year"], (found["venue"] or "")[:200], topics, json.dumps([found["source"]]),
+                     psycopg2.Binary(_minhash_bytes(found["title"], abstract)), emb, found["item_type"], found["url"]),
+                )
+                cur.execute(
+                    "INSERT INTO paper_sources (paper_id, source_name, external_id, source_url) VALUES (%s, %s, %s, %s) ON CONFLICT DO NOTHING",
+                    (paper_id, found["source"], found["external_id"][:150], found["url"]),
+                )
+                cur.execute(
+                    "INSERT INTO paper_chunks (paper_id, chunk_index, chunk_text, chunk_embedding) VALUES (%s, 0, %s, %s::vector)",
+                    (paper_id, abstract[:1500], emb),
+                )
+                created = True
+            conn.commit()
+            cur.close()
+
+    with get_db() as conn:
+        cur = conn.cursor()
         cur.execute(
             """
             INSERT INTO library_saves (user_id, paper_id, collection_id, private_notes)
-            VALUES (%s::uuid, %s::uuid, %s::uuid, %s)
+            VALUES (%s::uuid, %s::uuid, %s::uuid, NULLIF(%s, ''))
             ON CONFLICT (user_id, paper_id) DO UPDATE
               SET collection_id = COALESCE(EXCLUDED.collection_id, library_saves.collection_id),
-                  private_notes = COALESCE(NULLIF(EXCLUDED.private_notes, ''), library_saves.private_notes)
+                  private_notes = COALESCE(EXCLUDED.private_notes, library_saves.private_notes)
             """,
-            (user["user_id"], paper_id, payload.collection_id, payload.private_notes or ""),
+            (user["user_id"], paper_id, payload.collection_id, (payload.private_notes or "").strip()),
         )
         cur.execute(
             """
             UPDATE papers
-            SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid),
-                in_chanakya_library = TRUE
+            SET save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid), in_chanakya_library = TRUE
             WHERE paper_id = %s::uuid
-            RETURNING paper_id, canonical_title, save_count
+            RETURNING paper_id, canonical_title, save_count, item_type
             """,
             (paper_id, paper_id),
         )
@@ -1548,8 +1746,8 @@ def save_by_identifier(payload: SaveByIdentifierRequest, user=Depends(current_us
         cur.execute("INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'save_paper', %s::uuid)", (user["user_id"], paper_id))
         conn.commit()
         cur.close()
-
-    return {"status": "saved", "paper": saved_row, "identifier": raw_id}
+    saved_row["paper_id"] = str(saved_row["paper_id"])
+    return {"status": "saved", "created": created, "kind": kind, "paper": saved_row, "identifier": payload.identifier}
 
 
 def _deduplicate_search_results(papers: list[dict]) -> list[dict]:
@@ -1908,11 +2106,13 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
                    (SELECT COUNT(*) FROM paper_citations pc WHERE pc.cited_paper_id = p.paper_id) AS cited_by_count,
                    EXISTS(SELECT 1 FROM library_saves ls WHERE ls.paper_id = p.paper_id AND ls.user_id = %s::uuid) AS is_saved,
                    (SELECT collection_id FROM library_saves ls
-                    WHERE ls.paper_id = p.paper_id AND ls.user_id = %s::uuid) AS collection_id
+                    WHERE ls.paper_id = p.paper_id AND ls.user_id = %s::uuid) AS collection_id,
+                   (SELECT private_notes FROM library_saves ls
+                    WHERE ls.paper_id = p.paper_id AND ls.user_id = %s::uuid) AS private_notes
             FROM papers p JOIN ranked USING (paper_id)
             WHERE p.paper_id = %s
             """,
-            (user_id, user_id, paper_id),
+            (user_id, user_id, user_id, paper_id),
         )
         paper = cur.fetchone()
         if not paper:
@@ -2057,7 +2257,8 @@ def get_trends_and_anomalies(user=Depends(current_user_optional)):
             SELECT topic, recent_7d, ROUND(baseline_weekly_avg::numeric, 2) AS baseline_weekly_avg,
                    ROUND(((recent_7d - baseline_weekly_avg) / GREATEST(baseline_weekly_avg, 1.0))::numeric, 2) AS spike_ratio
             FROM window_counts
-            ORDER BY spike_ratio DESC
+            WHERE recent_7d >= 5  -- a handful of events is noise, not a trend
+            ORDER BY spike_ratio DESC, recent_7d DESC
             LIMIT 10
             """
         )
@@ -2088,23 +2289,25 @@ def get_trends_and_anomalies(user=Depends(current_user_optional)):
 
 
 @app.get("/api/alerts")
-def get_system_alerts(limit: int = Query(25, ge=1, le=100), user=Depends(current_user_optional)):
-    """Fetch unresolved system alerts persisted during ELT or moderation jobs."""
+def get_system_alerts(limit: int = Query(50, ge=1, le=200), user=Depends(require_role("admin"))):
+    """Open alerts (topic spikes, spam accounts) for admin review. Admin only: they name members."""
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT alert_id, alert_type, entity_ref, severity_score, details, is_resolved, detected_at
-            FROM system_alerts
-            WHERE is_resolved = FALSE
-            ORDER BY detected_at DESC
+            SELECT a.alert_id::text, a.alert_type, a.entity_ref, a.severity_score, a.details, a.is_resolved, a.detected_at,
+                   u.full_name AS entity_name, u.department AS entity_department, u.is_flagged_spam AS member_flagged
+            FROM system_alerts a
+            LEFT JOIN users u ON a.alert_type IN ('USER_SPAM', 'spam_account') AND u.user_id::text = a.entity_ref
+            WHERE a.is_resolved = FALSE
+            ORDER BY a.severity_score DESC, a.detected_at DESC
             LIMIT %s
             """,
-            (limit,)
+            (limit,),
         )
         alerts = cur.fetchall()
         cur.close()
-        return alerts
+    return alerts
 
 
 @app.post("/api/analytics/run-spam-job")
@@ -2130,10 +2333,11 @@ def run_spam_detection_job(
                 CASE WHEN COUNT(p.post_id) < 2 THEN 999999
                      ELSE EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / (COUNT(p.post_id) - 1)
                 END AS avg_seconds_between_posts,
-                COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes
+                COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes,
+                u.spam_cleared_at, MAX(p.created_at) AS last_post_at
             FROM users u
             LEFT JOIN posts p ON u.user_id = p.author_id
-            GROUP BY u.user_id, u.full_name, u.department
+            GROUP BY u.user_id, u.full_name, u.department, u.spam_cleared_at
             """
         )
         user_stats = pd.DataFrame(cur.fetchall())
@@ -2148,12 +2352,22 @@ def run_spam_detection_job(
             # Strictly filter by score threshold rather than blind contamination
             outliers = user_stats[user_stats["anomaly_score"] >= threshold].sort_values("anomaly_score", ascending=False)
             for _, row in outliers.iterrows():
+                # An admin already cleared this member; only re-flag if they have posted since.
+                cleared = row.get("spam_cleared_at")
+                if cleared is not None and not pd.isna(cleared) and (pd.isna(row.get("last_post_at")) or row["last_post_at"] <= cleared):
+                    continue
+                cur.execute(
+                    "SELECT 1 FROM system_alerts WHERE NOT is_resolved AND alert_type IN ('USER_SPAM', 'spam_account') AND entity_ref = %s",
+                    (row["user_id"],),
+                )
+                if cur.fetchone():
+                    continue
                 score = round(float(row["anomaly_score"]), 4)
                 user_id = row["user_id"]
                 cur.execute(
                     """
                     INSERT INTO system_alerts (alert_type, entity_ref, severity_score, details, is_resolved)
-                    VALUES ('USER_SPAM', %s, %s, %s::jsonb, FALSE)
+                    VALUES ('spam_account', %s, %s, %s::jsonb, FALSE)
                     """,
                     (
                         user_id,
@@ -2183,31 +2397,112 @@ def run_spam_detection_job(
         return {"status": "completed", "evaluated_users": len(user_stats), "flagged_count": len(flagged), "flagged": flagged}
 
 
+def _clear_spam_flag(cur, member_id: str) -> None:
+    """False positive: unflag the member and their posts, remember the decision, close their open spam alerts."""
+    cur.execute("UPDATE users SET is_flagged_spam = FALSE, spam_cleared_at = NOW() WHERE user_id = %s::uuid", (member_id,))
+    cur.execute("UPDATE posts SET is_flagged_spam = FALSE WHERE author_id = %s::uuid", (member_id,))
+    cur.execute(
+        "UPDATE system_alerts SET is_resolved = TRUE WHERE NOT is_resolved AND alert_type IN ('USER_SPAM', 'spam_account') AND entity_ref = %s",
+        (member_id,),
+    )
+
+
 @app.post("/api/alerts/{alert_id}/resolve")
-def resolve_alert(alert_id: UUID, user=Depends(require_role("admin"))):
-    """Admin endpoint to resolve an anomaly alert and unflag false positives."""
+def resolve_alert(alert_id: UUID, payload: Optional[ResolveAlertRequest] = None, user=Depends(require_role("admin"))):
+    """
+    Close an alert. For spam alerts, action "dismiss" (default) clears a false positive (the member is unflagged and
+    later scans skip them unless they post again); "confirm" keeps the member flagged.
+    """
+    action = (payload or ResolveAlertRequest()).action
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            """
-            UPDATE system_alerts
-            SET is_resolved = TRUE
-            WHERE alert_id = %s::uuid
-            RETURNING alert_id, alert_type, entity_ref
-            """,
-            (alert_id,)
+            "UPDATE system_alerts SET is_resolved = TRUE WHERE alert_id = %s::uuid RETURNING alert_id::text, alert_type, entity_ref",
+            (alert_id,),
         )
         alert = cur.fetchone()
         if not alert:
             cur.close()
             raise HTTPException(status_code=404, detail="Alert not found")
-
-        if alert["alert_type"] == "USER_SPAM":
-            cur.execute("UPDATE users SET is_flagged_spam = FALSE WHERE user_id = %s::uuid", (alert["entity_ref"],))
-
+        if alert["alert_type"] in ("USER_SPAM", "spam_account"):
+            if action == "dismiss":
+                _clear_spam_flag(cur, alert["entity_ref"])
+            else:
+                cur.execute("UPDATE users SET is_flagged_spam = TRUE WHERE user_id = %s::uuid", (alert["entity_ref"],))
         conn.commit()
         cur.close()
-        return {"status": "resolved", "alert": alert}
+    return {"status": "resolved", "action": action, "alert": alert}
+
+
+@app.post("/api/admin/members/{member_id}/spam")
+def set_member_spam_flag(member_id: UUID, payload: SpamFlagRequest, user=Depends(require_role("admin"))):
+    """Flag or clear a member directly from the admin members list."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM users WHERE user_id = %s::uuid", (member_id,))
+        if not cur.fetchone():
+            cur.close()
+            raise HTTPException(status_code=404, detail="Member not found")
+        if payload.flagged:
+            cur.execute("UPDATE users SET is_flagged_spam = TRUE, spam_cleared_at = NULL WHERE user_id = %s::uuid", (member_id,))
+        else:
+            _clear_spam_flag(cur, str(member_id))
+        conn.commit()
+        cur.close()
+    return {"user_id": str(member_id), "is_flagged_spam": payload.flagged}
+
+
+@app.post("/api/analytics/run-spike-scan")
+def run_spike_scan(min_ratio: float = Query(1.5, ge=0.1, le=20), user=Depends(require_role("admin"))):
+    """
+    Topic spike detection on demand (F7): last 7 days vs the weekly average of the 30 days before, anchored to the
+    newest activity. Raises a topic_spike alert for each topic at or above min_ratio that has no open alert yet.
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            WITH anchor AS (SELECT COALESCE(MAX(occurred_at), NOW()) AS t FROM activity_events),
+            expanded AS (
+                SELECT UNNEST(topic_tags) AS topic, occurred_at
+                FROM activity_events, anchor
+                WHERE topic_tags IS NOT NULL AND occurred_at > anchor.t - INTERVAL '37 days' AND occurred_at <= anchor.t
+            ),
+            w AS (
+                SELECT topic,
+                       COUNT(*) FILTER (WHERE occurred_at > (SELECT t FROM anchor) - INTERVAL '7 days') AS recent_7d,
+                       COUNT(*) FILTER (WHERE occurred_at <= (SELECT t FROM anchor) - INTERVAL '7 days') / 4.28 AS baseline
+                FROM expanded GROUP BY topic
+            )
+            SELECT topic, recent_7d, ROUND(baseline::numeric, 2) AS baseline_weekly_avg,
+                   ROUND(((recent_7d - baseline) / GREATEST(baseline, 1.0))::numeric, 2) AS spike_ratio,
+                   (SELECT t FROM anchor) AS anchor
+            FROM w
+            WHERE recent_7d >= 5 AND (recent_7d - baseline) / GREATEST(baseline, 1.0) >= %s
+            ORDER BY spike_ratio DESC
+            """,
+            (min_ratio,),
+        )
+        spikes = cur.fetchall()
+        raised = []
+        for sp in spikes:
+            cur.execute("SELECT 1 FROM system_alerts WHERE NOT is_resolved AND alert_type = 'topic_spike' AND entity_ref = %s", (sp["topic"],))
+            if cur.fetchone():
+                continue
+            details = {
+                "recent_7d": int(sp["recent_7d"]),
+                "baseline_weekly_avg": float(sp["baseline_weekly_avg"]),
+                "spike_ratio": float(sp["spike_ratio"]),
+                "anchor_date": sp["anchor"].isoformat(),
+            }
+            cur.execute(
+                "INSERT INTO system_alerts (alert_type, entity_ref, severity_score, details) VALUES ('topic_spike', %s, %s, %s::jsonb)",
+                (sp["topic"], float(sp["spike_ratio"]), json.dumps(details)),
+            )
+            raised.append(sp["topic"])
+        conn.commit()
+        cur.close()
+    return {"spiking_topics": [s["topic"] for s in spikes], "alerts_raised": raised}
 
 
 # ==========================================
@@ -2274,7 +2569,7 @@ def admin_overview(days: int = Query(30, ge=7, le=90), user=Depends(require_role
             SELECT a.alert_id::text, a.alert_type, a.entity_ref, u.full_name AS entity_name,
                    a.severity_score, a.details, a.detected_at
             FROM system_alerts a
-            LEFT JOIN users u ON a.alert_type = 'USER_SPAM' AND u.user_id::text = a.entity_ref
+            LEFT JOIN users u ON a.alert_type IN ('USER_SPAM', 'spam_account') AND u.user_id::text = a.entity_ref
             WHERE NOT a.is_resolved
             ORDER BY a.severity_score DESC, a.detected_at DESC LIMIT 8
             """
@@ -2814,79 +3109,158 @@ def analytics_overview(department: Optional[str] = None, user=Depends(require_ro
                 """
             )
         monthly_trends = cur.fetchall()
+
+        # 4. Topics over time: monthly activity (saves + posts + comments + views) for the top topics.
+        cur.execute(
+            f"""
+            WITH top_topics AS (
+                SELECT dt.topic_key
+                FROM dw.fact_research_activity f
+                JOIN dw.dim_member dm ON f.member_key = dm.member_key
+                JOIN dw.dim_topic dt ON f.topic_key = dt.topic_key
+                {dept_filter}
+                GROUP BY dt.topic_key
+                ORDER BY SUM(f.saves_count + f.posts_count + f.comments_count + f.views_count) DESC
+                LIMIT 6
+            )
+            SELECT dd.year, dd.month, dd.month_name, dt.topic_name,
+                   SUM(f.saves_count + f.posts_count + f.comments_count + f.views_count) AS activity
+            FROM dw.fact_research_activity f
+            JOIN top_topics tt ON tt.topic_key = f.topic_key
+            JOIN dw.dim_topic dt ON dt.topic_key = f.topic_key
+            JOIN dw.dim_date dd ON dd.date_key = f.date_key
+            JOIN dw.dim_member dm ON f.member_key = dm.member_key
+            {dept_filter}
+            GROUP BY dd.year, dd.month, dd.month_name, dt.topic_name
+            ORDER BY dd.year, dd.month
+            """,
+            params + params,
+        )
+        topic_trends = cur.fetchall()
+
+        # 5. Most saved and most discussed papers (by members of the selected school, if any).
+        member_filter = "AND u.department = %s" if department else ""
+        cur.execute(
+            f"""
+            SELECT p.paper_id::text, p.canonical_title, p.publication_year, p.item_type, COUNT(*)::int AS saves
+            FROM library_saves ls
+            JOIN papers p ON p.paper_id = ls.paper_id
+            JOIN users u ON u.user_id = ls.user_id
+            WHERE NOT u.is_flagged_spam {member_filter}
+            GROUP BY p.paper_id
+            ORDER BY saves DESC, p.pagerank_score DESC
+            LIMIT 8
+            """,
+            params,
+        )
+        top_saved = cur.fetchall()
+        cur.execute(
+            f"""
+            SELECT pa.paper_id::text, pa.canonical_title, pa.publication_year, pa.item_type,
+                   COUNT(DISTINCT po.post_id)::int AS posts,
+                   COUNT(c.comment_id)::int AS comments,
+                   (COUNT(DISTINCT po.post_id) + COUNT(c.comment_id))::int AS discussion
+            FROM posts po
+            JOIN papers pa ON pa.paper_id = po.attached_paper_id
+            JOIN users u ON u.user_id = po.author_id
+            LEFT JOIN comments c ON c.post_id = po.post_id
+            WHERE NOT po.is_flagged_spam {member_filter}
+            GROUP BY pa.paper_id
+            ORDER BY discussion DESC
+            LIMIT 8
+            """,
+            params,
+        )
+        top_discussed = cur.fetchall()
         cur.close()
 
         return {
             "topic_breakdown": topic_breakdown,
             "cross_dept_collaboration": collaboration,
             "monthly_trends": monthly_trends,
+            "topic_trends": topic_trends,
+            "top_saved_papers": top_saved,
+            "top_discussed_papers": top_discussed,
         }
 
 
 @app.get("/api/analytics/drilldown")
 def get_analytics_drilldown(
-    school: Optional[str] = Query(None, description="School filter"),
-    department: Optional[str] = Query(None, description="Department filter"),
+    school: Optional[str] = Query(None, description="School (users.department holds the school)"),
+    topic: Optional[str] = Query(None, description="Topic within the school"),
     user=Depends(require_role("admin")),
 ):
     """
-    Dimensional Drill-Down supporting University -> School -> Department -> Member hierarchy.
+    F9 drill-down over the star schema: university -> school -> topic -> member.
+    Activity = saves + posts + comments + views from dw.fact_research_activity.
+    """
+    measures = """
+        COUNT(DISTINCT f.member_key)::int AS members,
+        SUM(f.saves_count)::int AS saves,
+        SUM(f.posts_count)::int AS posts,
+        SUM(f.comments_count)::int AS comments,
+        SUM(f.views_count)::int AS views,
+        SUM(f.saves_count + f.posts_count + f.comments_count + f.views_count)::int AS activity
     """
     with get_db() as conn:
         cur = conn.cursor()
-        if department:
-            # Level 3: Individual Members within Department
+        if school and topic:
             cur.execute(
-                """
-                SELECT researcher_id, researcher_name, role, department, school_name,
-                       total_publications, total_citations, avg_coauthors, avg_pagerank, topic_breadth
-                FROM dw.vw_researcher_profiles
-                WHERE department = %s
-                ORDER BY avg_pagerank DESC, total_citations DESC
+                f"""
+                SELECT dm.user_id::text, dm.full_name, dm.role, {measures}
+                FROM dw.fact_research_activity f
+                JOIN dw.dim_member dm ON dm.member_key = f.member_key
+                JOIN dw.dim_topic dt ON dt.topic_key = f.topic_key
+                WHERE dm.department = %s AND dt.topic_name = %s AND dm.is_active
+                GROUP BY dm.user_id, dm.full_name, dm.role
+                ORDER BY activity DESC
+                LIMIT 50
                 """,
-                (department,)
+                (school, topic),
             )
-            data = cur.fetchall()
-            cur.close()
-            return {"level": "member", "school": school, "department": department, "count": len(data), "data": data}
-        elif school and school != "ALL":
-            # Level 2: Departments within School
+            level = "member"
+        elif school:
             cur.execute(
-                """
-                SELECT department,
-                       COUNT(DISTINCT researcher_id) AS researcher_count,
-                       SUM(total_publications) AS total_publications,
-                       SUM(total_citations) AS total_citations,
-                       ROUND(AVG(avg_pagerank)::numeric, 5)::float AS avg_pagerank,
-                       ROUND(AVG(topic_breadth)::numeric, 1)::float AS avg_topic_breadth
-                FROM dw.vw_researcher_profiles
-                WHERE school_name = %s
-                GROUP BY department
-                ORDER BY total_citations DESC
+                f"""
+                SELECT dt.topic_name, dt.parent_cluster, {measures}
+                FROM dw.fact_research_activity f
+                JOIN dw.dim_member dm ON dm.member_key = f.member_key
+                JOIN dw.dim_topic dt ON dt.topic_key = f.topic_key
+                WHERE dm.department = %s AND dm.is_active
+                GROUP BY dt.topic_name, dt.parent_cluster
+                ORDER BY activity DESC
+                LIMIT 40
                 """,
-                (school,)
+                (school,),
             )
-            data = cur.fetchall()
-            cur.close()
-            return {"level": "department", "school": school, "count": len(data), "data": data}
+            level = "topic"
         else:
-            # Level 1: Schools across the University
             cur.execute(
-                """
-                SELECT school_name,
-                       COUNT(DISTINCT researcher_id) AS researcher_count,
-                       COUNT(DISTINCT department) AS department_count,
-                       SUM(total_publications) AS total_publications,
-                       SUM(total_citations) AS total_citations,
-                       ROUND(AVG(avg_pagerank)::numeric, 5)::float AS avg_pagerank
-                FROM dw.vw_researcher_profiles
-                GROUP BY school_name
-                ORDER BY total_citations DESC
+                f"""
+                WITH by_topic AS (
+                    SELECT dm.department, dt.topic_name,
+                           SUM(f.saves_count + f.posts_count + f.comments_count + f.views_count) AS act,
+                           ROW_NUMBER() OVER (PARTITION BY dm.department
+                                              ORDER BY SUM(f.saves_count + f.posts_count + f.comments_count + f.views_count) DESC) AS rk
+                    FROM dw.fact_research_activity f
+                    JOIN dw.dim_member dm ON dm.member_key = f.member_key
+                    JOIN dw.dim_topic dt ON dt.topic_key = f.topic_key
+                    WHERE dm.is_active
+                    GROUP BY dm.department, dt.topic_name
+                )
+                SELECT dm.department AS school, {measures},
+                       (SELECT topic_name FROM by_topic b WHERE b.department = dm.department AND b.rk = 1) AS top_topic
+                FROM dw.fact_research_activity f
+                JOIN dw.dim_member dm ON dm.member_key = f.member_key
+                WHERE dm.is_active
+                GROUP BY dm.department
+                ORDER BY activity DESC
                 """
             )
-            data = cur.fetchall()
-            cur.close()
-            return {"level": "school", "count": len(data), "data": data}
+            level = "school"
+        data = cur.fetchall()
+        cur.close()
+    return {"level": level, "school": school, "topic": topic, "count": len(data), "data": data}
 
 
 # ==========================================

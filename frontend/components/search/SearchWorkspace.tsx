@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/ui/Section";
 import { RelatedTopics } from "@/components/search/RelatedTopics";
+import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
 import { ExternalPanel, LibraryPanel, PeoplePanel, PostsPanel } from "@/components/search/ResultPanels";
 import { SkeletonCard } from "@/components/ui/Skeleton";
 import { EmptyState, ErrorState } from "@/components/ui/States";
@@ -46,7 +47,10 @@ export function SearchWorkspace() {
 
       {showing && (
         <div className="space-y-4">
-          <p className="text-meta text-stone-600">Results for <span className="font-medium text-ink">“{showing.query}”</span></p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-meta text-stone-600">Results for <span className="font-medium text-ink">“{showing.query}”</span></p>
+            <FollowTopicButton topic={showing.query} />
+          </div>
           <RelatedTopics
             topics={showing.related_topics}
             onPivot={(t) => go(t)}

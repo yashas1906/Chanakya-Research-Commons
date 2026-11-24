@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { X } from "lucide-react";
 import { PaperRow } from "@/components/library/PaperRow";
@@ -8,6 +8,8 @@ import { CollectionsPanel } from "@/components/library/CollectionsPanel";
 import { RecommendedPanel } from "@/components/library/RecommendedPanel";
 import { FilterOption, FilterToggle, SidebarPortal, SidebarSection } from "@/components/shell/SidebarSlot";
 import { PageHeader } from "@/components/ui/Section";
+import { AddByIdentifierDialog } from "@/components/library/AddByIdentifierDialog";
+import { Link2 } from "lucide-react";
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { SkeletonList } from "@/components/ui/Skeleton";
 import { Tabs } from "@/components/ui/Tabs";
@@ -59,6 +61,7 @@ function RemovableChip({ label, onRemove }: { label: string; onRemove: () => voi
 
 export function LibraryWorkspace() {
   const { status: authStatus, promptLogin } = useAuth();
+  const [addOpen, setAddOpen] = useState(false);
   const saves = useSaves();
   const params = useSearchParams();
   const router = useRouter();
@@ -202,7 +205,17 @@ export function LibraryWorkspace() {
       )}
 
       <div className="space-y-5">
-        <PageHeader eyebrow="Repository" title="Chanakya Library" description="The university’s shared collection, your saved papers and topic-organised reading." />
+        <PageHeader
+          eyebrow="Repository"
+          title="Chanakya Library"
+          description="The university’s shared collection, your saved papers and topic-organised reading."
+          actions={
+            <button type="button" className="btn" onClick={() => (authStatus === "authenticated" ? setAddOpen(true) : promptLogin("login"))}>
+              <Link2 className="h-4 w-4" /> Add by DOI, arXiv or link
+            </button>
+          }
+        />
+        <AddByIdentifierDialog open={addOpen} onClose={() => setAddOpen(false)} />
         <div className="min-w-0">
           <div className="min-w-0 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">

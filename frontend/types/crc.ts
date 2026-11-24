@@ -139,6 +139,8 @@ export interface PaperDetail extends Paper {
   is_saved: boolean;
   collection_id: string | null;
   source_records: SourceRecord[];
+  /** The signed-in member's private note, when they have saved this paper. */
+  private_notes: string | null;
 }
 
 export interface HomePayload {
@@ -354,10 +356,69 @@ export interface MonthlyTrendRow {
   views: number;
 }
 
+export interface TopicTrendRow {
+  year: number;
+  month: number;
+  month_name: string;
+  topic_name: string;
+  activity: number;
+}
+
+export interface TopPaperRow {
+  paper_id: string;
+  canonical_title: string;
+  publication_year: number | null;
+  item_type: "paper" | "article";
+  saves?: number;
+  posts?: number;
+  comments?: number;
+  discussion?: number;
+}
+
 export interface AnalyticsOverview {
   topic_breakdown: TopicActivityRow[];
   cross_dept_collaboration: CollaborationRow[];
   monthly_trends: MonthlyTrendRow[];
+  topic_trends: TopicTrendRow[];
+  top_saved_papers: TopPaperRow[];
+  top_discussed_papers: TopPaperRow[];
+}
+
+export type DrilldownLevel = "school" | "topic" | "member";
+
+export interface DrilldownRow {
+  school?: string;
+  top_topic?: string | null;
+  topic_name?: string;
+  parent_cluster?: string | null;
+  user_id?: string;
+  full_name?: string;
+  role?: Role;
+  members: number;
+  saves: number;
+  posts: number;
+  comments: number;
+  views: number;
+  activity: number;
+}
+
+export interface Drilldown {
+  level: DrilldownLevel;
+  school: string | null;
+  topic: string | null;
+  data: DrilldownRow[];
+}
+
+export interface SystemAlert {
+  alert_id: string;
+  alert_type: string;
+  entity_ref: string;
+  entity_name: string | null;
+  entity_department: string | null;
+  member_flagged: boolean | null;
+  severity_score: number;
+  details: Record<string, unknown> | null;
+  detected_at: string | null;
 }
 
 export interface TrendingTopic {

@@ -29,8 +29,7 @@ import type {
   SearchResponse,
   Severity,
   ThematicBundle,
-  TopicAssociations,
-} from "@/types/crc";
+  TopicAssociations, TopPaperRow } from "@/types/crc";
 
 /* ------------------------------ primitives ------------------------------ */
 
@@ -349,6 +348,27 @@ export function normalizeOverview(raw: unknown): AnalyticsOverview {
         views: num(u.views),
       };
     }),
+    topic_trends: arr("topic_trends").map((r) => {
+      const u = isRecord(r) ? r : {};
+      return { year: num(u.year), month: num(u.month), month_name: str(u.month_name), topic_name: str(u.topic_name), activity: num(u.activity) };
+    }),
+    top_saved_papers: arr("top_saved_papers").map(topPaper),
+    top_discussed_papers: arr("top_discussed_papers").map(topPaper),
+  };
+}
+
+function topPaper(r: unknown): TopPaperRow {
+  const u = isRecord(r) ? r : {};
+  const opt = (k: string) => (u[k] === undefined ? undefined : num(u[k]));
+  return {
+    paper_id: str(u.paper_id),
+    canonical_title: str(u.canonical_title, "Untitled work"),
+    publication_year: numOrNull(u.publication_year),
+    item_type: u.item_type === "article" ? "article" : "paper",
+    saves: opt("saves"),
+    posts: opt("posts"),
+    comments: opt("comments"),
+    discussion: opt("discussion"),
   };
 }
 

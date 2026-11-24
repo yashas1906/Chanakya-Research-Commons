@@ -4,6 +4,10 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { ArrowLeft, ExternalLink } from "lucide-react";
 import { SaveToCollection } from "@/components/paper/SaveToCollection";
+import { NoteEditor } from "@/components/library/NoteEditor";
+import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
+import { useSaves } from "@/lib/saves-context";
+import { SCHOOLS } from "@/types/crc";
 import { CitationMetrics } from "@/components/paper/CitationMetrics";
 import { LinkedDiscussions } from "@/components/paper/LinkedDiscussions";
 import { ShareButton } from "@/components/feed/ShareButton";
@@ -31,6 +35,8 @@ function alsoSavedReason(item: AlsoSavedPaper) {
 
 function PaperView({ paper }: { paper: PaperType }) {
   const alsoSaved = useAsync((signal) => getAlsoSaved(paper.paper_id, signal), [paper.paper_id]);
+  const { savedIds } = useSaves();
+  const savedNow = savedIds.has(paper.paper_id) || paper.is_saved;
   const authors = authorNames(paper.authors);
   return (
     <div className="space-y-8">
@@ -52,7 +58,12 @@ function PaperView({ paper }: { paper: PaperType }) {
           <section className="card p-5 sm:p-7">
             <p className="eyebrow">Abstract</p>
             <p className="mt-3 max-w-prose whitespace-pre-wrap text-body leading-7 text-stone-700">{paper.abstract || "No abstract is available for this paper."}</p>
-            {paper.topics && paper.topics.length > 0 && <div className="mt-5 flex flex-wrap gap-2">{paper.topics.map((topic) => <Link key={topic} href={`/search?q=${encodeURIComponent(topic)}`} className="rounded-full border border-stone-200 bg-canvas px-3 py-1.5 text-meta text-stone-700 hover:bg-sunken">{topic}</Link>)}</div>}
+            {paper.topics && paper.topics.length > 0 && <div className="mt-5 flex flex-wrap gap-2">{paper.topics.map((topic) => (
+              <span key={topic} className="inline-flex items-center gap-1.5 rounded-full border border-stone-200 bg-canvas py-1 pl-3 pr-1 text-meta text-stone-700">
+                <Link href={`/search?q=${encodeURIComponent(topic)}`} className="hover:underline">{topic}</Link>
+                {!(SCHOOLS as readonly string[]).includes(topic) ? <FollowTopicButton topic={topic} compact /> : <span className="w-1" />}
+              </span>
+            ))}</div>}
           </section>
           <section className="card space-y-5 p-5 sm:p-7"><div><p className="eyebrow">Citation graph</p><h2 className="mt-1 font-display text-h2 text-ink">Influence in the corpus</h2></div><CitationMetrics paper={paper} /></section>
           <LinkedDiscussions paper={paper} />
@@ -71,6 +82,7 @@ function PaperView({ paper }: { paper: PaperType }) {
             <p className="text-meta text-stone-600">Citation-graph prestige within the Chanakya corpus.</p>
             <dl className="grid grid-cols-2 gap-3 border-t border-stone-100 pt-4"><div><dt className="text-meta text-stone-500">PageRank</dt><dd className="num mt-1 text-ui font-medium text-ink">{fmtPagerank(paper.pagerank_score)}</dd></div><div><dt className="text-meta text-stone-500">Saved by</dt><dd className="num mt-1 text-ui font-medium text-ink">{fmtInt(paper.save_count)} members</dd></div></dl>
             <SaveToCollection paperId={paper.paper_id} isSaved={paper.is_saved} />
+            {savedNow && <NoteEditor paperId={paper.paper_id} initial={paper.private_notes} />}
             <Link href={`/assistant?paper=${paper.paper_id}&q=${encodeURIComponent("Summarize this paper’s main contribution")}`} className="btn flex w-full">Ask the RAG assistant</Link>
             <ShareButton url={`/papers/${paper.paper_id}`} />
           </section>

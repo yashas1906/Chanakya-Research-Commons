@@ -5,6 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Clock, Flame, TrendingUp, X } from "lucide-react";
 import { Composer } from "@/components/feed/Composer";
 import { FeedRail } from "@/components/feed/FeedRail";
+import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
 import { PostCard } from "@/components/feed/PostCard";
 import { FilterOption, FilterToggle, SidebarPortal, SidebarSection } from "@/components/shell/SidebarSlot";
 import { EmptyState, ErrorState } from "@/components/ui/States";
@@ -175,6 +176,7 @@ export function FeedWorkspace() {
               {query && <RemovableChip label={`Search: “${query}”`} onRemove={clearQuery} />}
               {school !== "ALL" && <RemovableChip label={shortSchool(school)} onRemove={() => setSchool("ALL")} />}
               {topic && <RemovableChip label={`#${topic}`} onRemove={() => setTopic(null)} />}
+              {topic && <FollowTopicButton topic={topic} />}
               <span className="num text-meta text-stone-500">{filtered.length} {filtered.length === 1 ? "post" : "posts"}</span>
             </div>
           )}

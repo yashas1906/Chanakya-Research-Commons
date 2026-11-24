@@ -25,6 +25,7 @@ CREATE TABLE users (
     is_synthetic BOOLEAN DEFAULT FALSE,
     is_flagged_spam BOOLEAN DEFAULT FALSE,
     spam_score FLOAT DEFAULT 0.0,
+    spam_cleared_at TIMESTAMPTZ,            -- admin cleared a false-positive spam flag
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

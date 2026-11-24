@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Tag } from "@/components/ui/Pill";
+import { NoteEditor } from "@/components/library/NoteEditor";
 import { SaveButton } from "@/components/ui/SaveButton";
 import { PrestigeTier } from "@/components/ui/PrestigeTier";
 import { authorsLine, fmtInt, relTime } from "@/lib/format";
@@ -9,6 +10,8 @@ import type { Paper, SavedPaper } from "@/types/crc";
 
 export function PaperRow({ paper }: { paper: Paper | SavedPaper }) {
   const savedAt = "saved_at" in paper && paper.saved_at ? relTime(paper.saved_at) : null;
+  // Rows in "My saves" carry the member's own note; holdings rows do not.
+  const isMine = "saved_at" in paper && !!paper.saved_at;
   const note = "private_notes" in paper ? paper.private_notes : null;
   return (
     <li className="min-w-0 px-4 py-5 transition-colors hover:bg-sunken sm:px-5">
@@ -26,7 +29,7 @@ export function PaperRow({ paper }: { paper: Paper | SavedPaper }) {
         {savedAt && <span>Saved {savedAt}</span>}
         {paper.topics?.slice(0, 3).map((tag) => <Tag key={tag}>{tag}</Tag>)}
       </div>
-      {note && <p className="mt-2 border-l-2 border-stone-200 pl-3 text-meta italic text-stone-500">{note}</p>}
+      {isMine ? <NoteEditor paperId={paper.paper_id} initial={note} className="mt-3" /> : note && <p className="mt-2 border-l-2 border-stone-200 pl-3 text-meta italic text-stone-500">{note}</p>}
     </li>
   );
 }

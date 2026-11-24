@@ -273,7 +273,7 @@ def persist_system_alerts(cur, anchor_dt: datetime):
         SELECT topic, recent_7d, ROUND(baseline_weekly_avg::numeric, 2) AS baseline_weekly_avg,
                ROUND(((recent_7d - baseline_weekly_avg) / GREATEST(baseline_weekly_avg, 1.0))::numeric, 2) AS spike_ratio
         FROM window_counts
-        WHERE ((recent_7d - baseline_weekly_avg) / GREATEST(baseline_weekly_avg, 1.0)) >= 1.5
+        WHERE recent_7d >= 5 AND ((recent_7d - baseline_weekly_avg) / GREATEST(baseline_weekly_avg, 1.0)) >= 1.5
         ORDER BY spike_ratio DESC
         """,
         (anchor_dt, anchor_dt, anchor_dt, anchor_dt),
@@ -315,14 +315,19 @@ def persist_system_alerts(cur, anchor_dt: datetime):
             u.full_name,
             u.department,
             COUNT(DISTINCT p.post_id) AS post_count,
-            COALESCE(EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / GREATEST(COUNT(p.post_id), 1), 999999) AS avg_seconds_between_posts,
-            COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes
+            -- One post has no gap to measure (MAX - MIN = 0), which used to look like a burst-posting bot.
+            CASE WHEN COUNT(p.post_id) < 2 THEN 999999
+                 ELSE EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / (COUNT(p.post_id) - 1)
+            END AS avg_seconds_between_posts,
+            COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes,
+            -- Members an admin cleared are skipped unless they have posted since the clearance.
+            (u.spam_cleared_at IS NOT NULL AND COALESCE(MAX(p.created_at) <= u.spam_cleared_at, TRUE)) AS cleared
         FROM users u
         LEFT JOIN posts p ON u.user_id = p.author_id
-        GROUP BY u.user_id, u.full_name, u.department
+        GROUP BY u.user_id, u.full_name, u.department, u.spam_cleared_at
         """
     )
-    df = pd.DataFrame(cur.fetchall(), columns=["user_id", "full_name", "department", "post_count", "avg_seconds_between_posts", "avg_upvotes"])
+    df = pd.DataFrame(cur.fetchall(), columns=["user_id", "full_name", "department", "post_count", "avg_seconds_between_posts", "avg_upvotes", "cleared"])
 
     if len(df) >= 20:
         features = df[["post_count", "avg_seconds_between_posts", "avg_upvotes"]].fillna(0)
@@ -332,7 +337,7 @@ def persist_system_alerts(cur, anchor_dt: datetime):
         scores = -iso.decision_function(features)
         df["anomaly_score"] = scores
         # Absolute threshold for anomaly
-        flagged = df[df["anomaly_score"] >= 0.15]
+        flagged = df[(df["anomaly_score"] >= 0.15) & (~df["cleared"].astype(bool))]
 
         spam_alert_rows = []
         for _, row in flagged.iterrows():

@@ -2,7 +2,11 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ChevronDown, Flame, PenLine } from "lucide-react";
+import { ChevronDown, Flame, PenLine, TrendingUp } from "lucide-react";
+import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
+import { getTrends } from "@/lib/api";
+import { useAsync } from "@/lib/hooks";
+import { useTopicFollows } from "@/lib/topic-follows";
 import { Avatar } from "@/components/ui/Section";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { cx, shortSchool } from "@/lib/format";
@@ -33,6 +37,10 @@ export function FeedRail({
   onCompose: () => void;
 }) {
   const [rulesOpen, setRulesOpen] = useState(true);
+  // Sliding-window trends from activity across the platform (last 7 days vs the 30 days before).
+  const trends = useAsync((signal) => getTrends(signal), []);
+  const { topics: followed, signedIn } = useTopicFollows();
+  const trending = (trends.data?.trending_topics ?? []).slice(0, 6);
   return (
     <div className="space-y-4">
       {/* Community card */}
@@ -73,23 +81,63 @@ export function FeedRail({
         )}
       </section>
 
-      {/* Trending */}
-      {topics.length > 0 && (
+      {/* Trending: platform-wide sliding window; falls back to tags in the loaded posts. */}
+      {(trending.length > 0 || topics.length > 0) && (
         <section className="card">
           <h2 className="flex items-center gap-2 border-b border-stone-100 px-4 py-3 font-display text-[15px] text-ink">
-            <Flame className="h-4 w-4 text-saffron-500" /> Trending topics
+            <Flame className="h-4 w-4 text-saffron-500" /> Trending this week
           </h2>
           <ul className="p-1.5">
-            {topics.slice(0, 6).map(([topic, count], index) => (
-              <li key={topic}>
-                <button type="button" onClick={() => onTopic(topic)} className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition hover:bg-stone-100">
-                  <span className="num w-4 text-label font-semibold text-stone-400">{index + 1}</span>
-                  <span className="min-w-0 flex-1 truncate text-meta font-medium text-ink">{topic}</span>
-                  <span className="num text-label text-stone-500">{count} posts</span>
-                </button>
-              </li>
-            ))}
+            {trending.length > 0
+              ? trending.map((t, index) => (
+                  <li key={t.topic} className="flex items-center gap-2 rounded-lg pr-2 hover:bg-stone-100">
+                    <button type="button" onClick={() => onTopic(t.topic)} className="flex min-w-0 flex-1 items-center gap-3 px-2.5 py-2 text-left">
+                      <span className="num w-4 text-label font-semibold text-stone-400">{index + 1}</span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-meta font-medium text-ink">{t.topic}</span>
+                        <span className="block text-label text-stone-500">
+                          {t.recent_7d} activities this week
+                          {t.spike_ratio >= 1 && (
+                            <span className="ml-1.5 inline-flex items-center gap-0.5 font-semibold text-brand-600" title={`${Math.round(t.spike_ratio * 100)}% above the usual weekly level`}>
+                              <TrendingUp className="h-3 w-3" /> +{Math.round(t.spike_ratio * 100)}%
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                    </button>
+                    <FollowTopicButton topic={t.topic} compact />
+                  </li>
+                ))
+              : topics.slice(0, 6).map(([topic, count], index) => (
+                  <li key={topic} className="flex items-center gap-2 rounded-lg pr-2 hover:bg-stone-100">
+                    <button type="button" onClick={() => onTopic(topic)} className="flex min-w-0 flex-1 items-center gap-3 px-2.5 py-2 text-left">
+                      <span className="num w-4 text-label font-semibold text-stone-400">{index + 1}</span>
+                      <span className="min-w-0 flex-1 truncate text-meta font-medium text-ink">{topic}</span>
+                      <span className="num text-label text-stone-500">{count} posts</span>
+                    </button>
+                    <FollowTopicButton topic={topic} compact />
+                  </li>
+                ))}
           </ul>
+        </section>
+      )}
+
+      {/* Topics the member follows: they boost matching posts in the "Best" feed. */}
+      {signedIn && (
+        <section className="card">
+          <h2 className="border-b border-stone-100 px-4 py-3 font-display text-[15px] text-ink">Topics you follow</h2>
+          {followed.length === 0 ? (
+            <p className="px-4 py-3 text-meta text-stone-500">Follow a topic with the + button to see more of it in your feed.</p>
+          ) : (
+            <ul className="flex flex-wrap gap-1.5 p-3">
+              {followed.map((topic) => (
+                <li key={topic} className="inline-flex items-center gap-1 rounded-full bg-brand-50 py-0.5 pl-3 pr-0.5 text-meta text-brand-700">
+                  <button type="button" onClick={() => onTopic(topic)} className="max-w-[11rem] truncate font-medium hover:underline">{topic}</button>
+                  <FollowTopicButton topic={topic} compact />
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       )}
 

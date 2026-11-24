@@ -57,6 +57,8 @@ import type {
   SearchResponse,
   TopicAssociations,
   TrendsAndAnomalies,
+  SystemAlert,
+  Drilldown,
 } from "@/types/crc";
 
 export const API_ORIGIN = (process.env.NEXT_PUBLIC_API_ORIGIN ?? "http://localhost:8000").replace(/\/$/, "");
@@ -631,6 +633,7 @@ export async function getPaper(paperId: string, signal?: AbortSignal): Promise<P
     related_posts: posts,
     is_saved: o.is_saved === true,
     collection_id: strOrNull(o.collection_id),
+    private_notes: strOrNull(o.private_notes),
     source_records: Array.isArray(o.source_records)
       ? o.source_records.map((row) => {
           const item = isRecord(row) ? row : {};
@@ -923,5 +926,117 @@ export async function getAdminMembers(query: AdminMemberQuery, signal?: AbortSig
       votes_cast: num(r.votes_cast),
       karma: num(r.karma),
     })),
+  };
+}
+
+/* ----------------------------- phase 2 additions ------------------------ */
+
+export interface SaveByIdentifierResult {
+  created: boolean;
+  kind: "doi" | "arxiv" | "url";
+  paper: { paper_id: string; canonical_title: string; item_type: "paper" | "article" };
+}
+
+/** Save a paper/article by DOI, arXiv ID or web link. The server looks it up and adds it to the corpus if new. */
+export async function saveByIdentifier(identifier: string, collectionId?: string | null, notes?: string): Promise<SaveByIdentifierResult> {
+  const raw = await request("/library/save-by-identifier", {
+    method: "POST",
+    body: { identifier, collection_id: collectionId || null, private_notes: notes ?? "" },
+  });
+  const o = isRecord(raw) ? raw : {};
+  const p = isRecord(o.paper) ? o.paper : {};
+  return {
+    created: o.created === true,
+    kind: o.kind === "arxiv" || o.kind === "url" ? o.kind : "doi",
+    paper: { paper_id: str(p.paper_id), canonical_title: str(p.canonical_title), item_type: p.item_type === "article" ? "article" : "paper" },
+  };
+}
+
+/** Write or clear your private note on a saved paper. */
+export async function updateSaveNotes(paperId: string, notes: string): Promise<string | null> {
+  const raw = await request(`/library/save/${paperId}`, { method: "PATCH", body: { private_notes: notes } });
+  return isRecord(raw) ? strOrNull(raw.private_notes) : null;
+}
+
+export async function getMyFollowedTopics(signal?: AbortSignal): Promise<string[]> {
+  const raw = await request("/users/me/follows", { signal });
+  return isRecord(raw) && Array.isArray(raw.followed_topics) ? (raw.followed_topics as unknown[]).map((t) => str(t)).filter(Boolean) : [];
+}
+
+export async function followTopic(topic: string): Promise<void> {
+  await request(`/topics/${encodeURIComponent(topic)}/follow`, { method: "POST" });
+}
+
+export async function unfollowTopic(topic: string): Promise<void> {
+  await request(`/topics/${encodeURIComponent(topic)}/follow`, { method: "DELETE" });
+}
+
+export async function getAlerts(signal?: AbortSignal): Promise<SystemAlert[]> {
+  const raw = await request("/alerts", { signal });
+  if (!Array.isArray(raw)) return [];
+  return raw.map((r) => {
+    const u = isRecord(r) ? r : {};
+    return {
+      alert_id: str(u.alert_id),
+      alert_type: str(u.alert_type),
+      entity_ref: str(u.entity_ref),
+      entity_name: strOrNull(u.entity_name),
+      entity_department: strOrNull(u.entity_department),
+      member_flagged: typeof u.member_flagged === "boolean" ? u.member_flagged : null,
+      severity_score: num(u.severity_score),
+      details: isRecord(u.details) ? u.details : null,
+      detected_at: strOrNull(u.detected_at),
+    };
+  });
+}
+
+/** dismiss = false positive (member unflagged and remembered as cleared); confirm = keep the flag. */
+export async function resolveAlert(alertId: string, action: "dismiss" | "confirm" = "dismiss"): Promise<void> {
+  await request(`/alerts/${alertId}/resolve`, { method: "POST", body: { action } });
+}
+
+export async function setMemberSpamFlag(userId: string, flagged: boolean): Promise<void> {
+  await request(`/admin/members/${userId}/spam`, { method: "POST", body: { flagged } });
+}
+
+export async function runSpikeScan(): Promise<{ spiking_topics: string[]; alerts_raised: string[] }> {
+  const raw = await request("/analytics/run-spike-scan", { method: "POST" });
+  const o = isRecord(raw) ? raw : {};
+  const list = (k: string) => (Array.isArray(o[k]) ? (o[k] as unknown[]).map((x) => str(x)) : []);
+  return { spiking_topics: list("spiking_topics"), alerts_raised: list("alerts_raised") };
+}
+
+export async function runSpamScan(): Promise<{ evaluated_users: number; flagged_count: number }> {
+  const raw = await request("/analytics/run-spam-job", { method: "POST" });
+  const o = isRecord(raw) ? raw : {};
+  return { evaluated_users: num(o.evaluated_users), flagged_count: num(o.flagged_count) };
+}
+
+export async function getDrilldown(school: string | null, topic: string | null, signal?: AbortSignal): Promise<Drilldown> {
+  const raw = await request("/analytics/drilldown", { query: { school, topic }, signal });
+  const o = isRecord(raw) ? raw : {};
+  const level = o.level === "topic" || o.level === "member" ? o.level : "school";
+  return {
+    level,
+    school: strOrNull(o.school),
+    topic: strOrNull(o.topic),
+    data: (Array.isArray(o.data) ? o.data : []).map((r) => {
+      const u = isRecord(r) ? r : {};
+      return {
+        school: u.school === undefined ? undefined : str(u.school),
+        top_topic: u.top_topic === undefined ? undefined : strOrNull(u.top_topic),
+        topic_name: u.topic_name === undefined ? undefined : str(u.topic_name),
+        parent_cluster: u.parent_cluster === undefined ? undefined : strOrNull(u.parent_cluster),
+        user_id: u.user_id === undefined ? undefined : str(u.user_id),
+        full_name: u.full_name === undefined ? undefined : str(u.full_name),
+        role: u.role === undefined ? undefined : (str(u.role) as Drilldown["data"][number]["role"]),
+        members: num(u.members),
+        saves: num(u.saves),
+        posts: num(u.posts),
+        comments: num(u.comments),
+        views: num(u.views),
+        activity: num(u.activity),
+      };
+    }),
   };
 }

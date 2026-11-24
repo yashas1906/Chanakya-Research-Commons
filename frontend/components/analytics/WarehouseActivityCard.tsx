@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { MatrixHeatmap, Sparkline } from "@/components/analytics/charts";
+import { OverviewExtras } from "@/components/analytics/OverviewExtras";
 import { Meter } from "@/components/ui/Meter";
 import { Panel } from "@/components/ui/Section";
 import { EmptyState, ErrorState } from "@/components/ui/States";
@@ -205,6 +206,7 @@ export function WarehouseActivityCard() {
               )}
             </section>
           </div>
+          <OverviewExtras data={data} />
         </div>
       )}
     </Panel>

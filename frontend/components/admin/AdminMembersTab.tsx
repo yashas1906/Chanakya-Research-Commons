@@ -8,6 +8,7 @@ import { RoleBadge } from "@/components/ui/RoleBadge";
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { getAdminMembers } from "@/lib/api";
+import { SpamToggle } from "@/components/admin/SpamToggle";
 import { cx, fmtInt, relTime } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import type { AdminMemberSort } from "@/types/crc";
@@ -113,6 +114,7 @@ export function AdminMembersTab({ departments }: { departments: string[] }) {
                     </button>
                   </th>
                 ))}
+                <th scope="col" className="px-3 py-2.5"><span className="sr-only">Moderation</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
@@ -139,6 +141,9 @@ export function AdminMembersTab({ departments }: { departments: string[] }) {
                   <td className="num hidden px-3 py-2.5 text-right text-ink xl:table-cell">{fmtInt(m.saves)}</td>
                   <td className="num px-3 py-2.5 text-right font-semibold text-ink">{fmtInt(m.karma)}</td>
                   <td className="hidden whitespace-nowrap px-3 py-2.5 text-stone-500 lg:table-cell">{m.last_active ? relTime(m.last_active) : "—"}</td>
+                  <td className="px-3 py-2.5 text-right">
+                    {m.role !== "admin" && <SpamToggle userId={m.user_id} name={m.full_name} flagged={m.is_flagged_spam} onChanged={reload} />}
+                  </td>
                 </tr>
               ))}
             </tbody>
