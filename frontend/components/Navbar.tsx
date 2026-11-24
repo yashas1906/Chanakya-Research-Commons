@@ -88,8 +88,9 @@ export function Navbar() {
 
   return (
     <header ref={headerRef} className="sticky top-0 z-40 border-b border-stone-200 bg-paper/95 backdrop-blur supports-[backdrop-filter]:bg-paper/85">
-      <div className="mx-auto flex h-16 w-full max-w-[1520px] items-center gap-2 px-3 sm:gap-4 sm:px-6">
-        <Link href="/" className="flex shrink-0 items-center gap-3" aria-label="Chanakya Research Commons home">
+      {/* Three columns: logo | centred icon group | account. Equal side columns keep the icons truly centred. */}
+      <div className="mx-auto grid h-16 w-full max-w-[1520px] grid-cols-[1fr_auto_1fr] items-center gap-2 px-3 sm:gap-4 sm:px-6">
+        <Link href="/" className="flex shrink-0 items-center gap-3 justify-self-start" aria-label="Chanakya Research Commons home">
           <span aria-hidden className="relative flex h-10 w-10 items-center justify-center rounded-xl bg-deep font-display text-[22px] font-bold leading-none text-white">
             C
             <span className="absolute inset-x-2 bottom-1.5 h-[2px] rounded-full bg-saffron-300" />
@@ -100,19 +101,19 @@ export function Navbar() {
           </span>
         </Link>
 
-        <nav aria-label="Primary" className="flex min-w-0 flex-1 items-center justify-center gap-0.5 sm:gap-1.5">
-          {[...NAV, ...(user?.role === "admin" ? [ADMIN_NAV] : [])].map(({ href, label, icon: Icon }) => {
-            const active = isActive(pathname, href);
-            return (
-              <Link key={href} href={href} aria-label={label} aria-current={active ? "page" : undefined} className={iconButton(active)}>
-                <Icon className="h-5 w-5" strokeWidth={1.9} />
-                <Tip>{label}</Tip>
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div className="flex shrink-0 items-center gap-1 sm:gap-2">
+        <div className="flex items-center gap-0.5 sm:gap-1.5">
+          <nav aria-label="Primary" className="flex items-center gap-0.5 sm:gap-1.5">
+            {[...NAV, ...(user?.role === "admin" ? [ADMIN_NAV] : [])].map(({ href, label, icon: Icon }) => {
+              const active = isActive(pathname, href);
+              return (
+                <Link key={href} href={href} aria-label={label} aria-current={active ? "page" : undefined} className={iconButton(active)}>
+                  <Icon className="h-5 w-5" strokeWidth={1.9} />
+                  <Tip>{label}</Tip>
+                </Link>
+              );
+            })}
+          </nav>
+          <span aria-hidden className="mx-1 hidden h-6 w-px bg-stone-200 sm:block" />
           <button
             type="button"
             onClick={() => setSearchOpen((v) => !v)}
@@ -127,6 +128,9 @@ export function Navbar() {
             <Plus className="h-5 w-5" />
             <Tip>Create a post</Tip>
           </button>
+        </div>
+
+        <div className="flex items-center justify-self-end">
           <AccountMenu />
         </div>
       </div>
