@@ -34,8 +34,14 @@ from pathlib import Path
 
 import psycopg2
 from psycopg2.extras import RealDictCursor, register_uuid
+from dotenv import load_dotenv
+load_dotenv()
 
-DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
+DB_URL = os.getenv("DATABASE_URL")
+
+if not DB_URL:
+    raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env and fill it in (see README, Environment Variables).")
+
 SQL_OUT = Path(__file__).with_name("improve_data.sql")
 SEED = 20261124
 TARGET_VOTES = 500

@@ -1,7 +1,7 @@
 # Chanakya Research Commons: Requirements Checklist and Pending Work
 
 Checked against the DMW course project brief (submission due **28 Nov 2026**).
-Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phases 1, 2 and 3 completed 24 Nov 2026** (rows below updated; numbers from `evaluation/evaluation_results.json`).
+Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phases 1–4 completed 24 Nov 2026** (rows below updated; numbers from `evaluation/evaluation_results.json`).
 
 **Legend:** ✅ done · ⚠️ partly done or weak · ❌ missing · `[ ]` pending task
 
@@ -107,7 +107,7 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 | Requirement | Status | Notes |
 |---|---|---|
 | One Git repo with README (setup, architecture, reproduce results) | ⚠️ | README now lists every step (migrations, seed, improve_data, ingest, enrich, ELT, ground truth, evaluation). A clean from-scratch rerun has not been done yet (see Phase 3). |
-| Config via environment files; no secrets committed | ⚠️ | `.env` is ignored, but `docker-compose.yml` and code contain default passwords and a JWT signing key. |
+| Config via environment files; no secrets committed | ✅ | All credentials come from `.env` (ignored by git); code stops with a clear message if one is missing and Docker Compose refuses to start without them. Old defaults remain in git history: they only ever protected local containers, but use fresh values for any shared deployment. |
 | Runs locally on free / open-source software | ✅ | Docker Compose + local Ollama. |
 | Report explains each library and model | ⬜ | Not part of this audit. Pending in the report. |
 
@@ -147,14 +147,14 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 - [x] Comment and vote events backfilled (migration 007) and tagged with topics; save events tagged; search events record the member.
 - [x] Citation counts and reference edges fetched from OpenAlex (`data_pipeline/enrich_citations.py`, also run by the scheduler).
 
-### Phase 4: Security and tidy-up
+### Phase 4: Security and tidy-up ✅ done
 - [x] The warehouse ELT and `/api/analytics/run-spam-job` contain two copies of the spam scan; move them into one shared module. (Done in Phase 3.)
 - [x] Require login on `/api/recommendations/{user_id}` and only allow a member's own recommendations (or admin). (Done in Phase 3.)
-- [ ] `backend/tests/test_endpoints.py` registers new accounts in the live database on every run (76 members now vs 62); point tests at a separate test database or clean up after themselves.
-- [ ] Remove default passwords and the JWT key from `docker-compose.yml` and code defaults; read them from `.env` only.
-- [ ] Replace deprecated `@app.on_event("startup")` with a FastAPI lifespan handler.
-- [ ] Delete `CRC_Patches/`, `crc-frontend.patch` and `crc-frontend.zip` from the repo (old copies of the code).
-- [ ] Add backend tests for the main endpoints (currently 1 test).
+- [x] `backend/tests/test_endpoints.py` registers new accounts in the live database on every run (76 members now vs 62); point tests at a separate test database or clean up after themselves.
+- [x] Remove default passwords and the JWT key from `docker-compose.yml` and code defaults; read them from `.env` only.
+- [x] Replace deprecated `@app.on_event("startup")` with a FastAPI lifespan handler.
+- [x] Delete `CRC_Patches/`, `crc-frontend.patch` and `crc-frontend.zip` from the repo (old copies of the code).
+- [x] Add backend tests for the main endpoints: 21 tests (`backend/tests/test_features.py`, `test_endpoints.py`); throwaway accounts use `@tests.crc.invalid` and are deleted by `conftest.py` (the 19 accounts left by earlier runs were removed).
 
 ### Phase 5: Submission
 - [ ] Technical report: architecture, data design, method per feature and why, evaluation results, limitations, deployment plan for Chanakya.

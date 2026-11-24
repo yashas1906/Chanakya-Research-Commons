@@ -53,14 +53,18 @@ except ImportError:
     from services.search_service import hybrid_paper_sql, hybrid_params
     from services.recommendation_service import RECOMMEND_PAPERS_SQL
 
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from psycopg2 import pool
 
 register_uuid()  # lets psycopg2 bind uuid.UUID path parameters directly
 
 load_dotenv()
 
-DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
+DB_URL = os.getenv("DATABASE_URL")
+
+if not DB_URL:
+    raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env and fill it in (see README, Environment Variables).")
+
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 # The first request after Ollama starts loads the model into memory, which can exceed 60s on CPU.
@@ -69,9 +73,18 @@ AUTH_SECRET = os.getenv("CRC_AUTH_SECRET")
 if not AUTH_SECRET:
     AUTH_SECRET = secrets.token_urlsafe(48)
     print("[Auth] CRC_AUTH_SECRET unset; using an ephemeral development secret.")
-DEMO_PASSCODE = os.getenv("CRC_DEMO_PASSCODE", "chanakya-demo")
+DEMO_PASSCODE = os.getenv("CRC_DEMO_PASSCODE")
+if not DEMO_PASSCODE:
+    raise RuntimeError("CRC_DEMO_PASSCODE is not set. Copy .env.example to .env and fill it in (see README, Environment Variables).")
 
-app = FastAPI(title="Chanakya Research Commons API", version="1.0.0")
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """Startup work (replaces the deprecated @app.on_event("startup")); nothing to clean up on shutdown."""
+    startup_event()
+    yield
+
+
+app = FastAPI(title="Chanakya Research Commons API", version="1.0.0", lifespan=lifespan)
 
 # Security: Configurable explicit CORS origins (avoid wildcards with credentials)
 ALLOWED_ORIGINS = [
@@ -128,7 +141,6 @@ def get_conn():
     return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
 
 
-@app.on_event("startup")
 def startup_event():
     if not os.getenv("CRC_AUTH_SECRET") and os.getenv("ENVIRONMENT", "development").lower() not in ("development", "dev", "test"):
         raise RuntimeError("CRC_AUTH_SECRET must be configured outside development.")

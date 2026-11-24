@@ -121,7 +121,10 @@ def check_database():
     check_code = """
 import psycopg2
 try:
-    conn = psycopg2.connect(host='localhost', port=5434, user='crc_admin', password='crc_secure_pass', dbname='chanakya_commons')
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    conn = psycopg2.connect(os.environ['DATABASE_URL'])
     cur = conn.cursor()
     cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name='papers';")
     has_papers = cur.fetchone()[0] > 0
@@ -218,9 +221,9 @@ def run_app_combined():
     print(f"  {Colors.BOLD}🌐 Frontend UI:{Colors.RESET}         http://localhost:3000")
     print(f"  {Colors.BOLD}⚡ Backend API:{Colors.RESET}         http://localhost:8000")
     print(f"  {Colors.BOLD}📖 API Swagger Docs:{Colors.RESET}    http://localhost:8000/docs")
-    print(f"  {Colors.BOLD}🗄️  MinIO Console:{Colors.RESET}       http://localhost:9001 (minioadmin / minioadmin_pass)")
+    print(f"  {Colors.BOLD}🗄️  MinIO Console:{Colors.RESET}       http://localhost:9001 (credentials in .env)")
     print(f"  {Colors.BOLD}🦙 Ollama LLM:{Colors.RESET}          http://localhost:11434 (llama3.2:3b)")
-    print(f"  {Colors.BOLD}🔑 Demo Auth Passcode:{Colors.RESET}  chanakya-demo")
+    print(f"  {Colors.BOLD}🔑 Demo Auth Passcode:{Colors.RESET}  CRC_DEMO_PASSCODE in .env")
     print("=" * 70)
     print(f"{Colors.YELLOW}Press Ctrl+C to cleanly stop all services.{Colors.RESET}\n")
 
@@ -285,9 +288,9 @@ def run_app_separate_windows():
     print(f"  {Colors.BOLD}🌐 Frontend UI:{Colors.RESET}         http://localhost:3000")
     print(f"  {Colors.BOLD}⚡ Backend API:{Colors.RESET}         http://localhost:8000")
     print(f"  {Colors.BOLD}📖 API Swagger Docs:{Colors.RESET}    http://localhost:8000/docs")
-    print(f"  {Colors.BOLD}🗄️  MinIO Console:{Colors.RESET}       http://localhost:9001 (minioadmin / minioadmin_pass)")
+    print(f"  {Colors.BOLD}🗄️  MinIO Console:{Colors.RESET}       http://localhost:9001 (credentials in .env)")
     print(f"  {Colors.BOLD}🦙 Ollama LLM:{Colors.RESET}          http://localhost:11434 (llama3.2:3b)")
-    print(f"  {Colors.BOLD}🔑 Demo Auth Passcode:{Colors.RESET}  chanakya-demo")
+    print(f"  {Colors.BOLD}🔑 Demo Auth Passcode:{Colors.RESET}  CRC_DEMO_PASSCODE in .env")
     print("=" * 70)
 
     try:

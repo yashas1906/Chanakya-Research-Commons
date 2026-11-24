@@ -42,7 +42,10 @@ from backend.services.recommendation_service import CF_WEIGHT, CONTENT_WEIGHT, P
 from data_pipeline.dedup import find_duplicate_pairs  # noqa: E402
 
 load_dotenv()
-DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
+DB_URL = os.getenv("DATABASE_URL")
+if not DB_URL:
+    raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env and fill it in (see README, Environment Variables).")
+
 EVAL_DIR = ROOT / "evaluation"
 GROUND_TRUTH_PATH = EVAL_DIR / "ground_truth.json"
 AUDIT_PATH = EVAL_DIR / "dedup_audit.json"

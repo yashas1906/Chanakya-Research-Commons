@@ -459,12 +459,12 @@ Configured in `.env`:
 
 ```env
 POSTGRES_USER=crc_admin
-POSTGRES_PASSWORD=crc_secure_pass
+POSTGRES_PASSWORD=<choose-a-database-password>
 POSTGRES_DB=chanakya_commons
-DATABASE_URL=postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons
+DATABASE_URL=postgresql://crc_admin:<database-password>@localhost:5434/chanakya_commons
 
 MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=minioadmin_pass
+MINIO_ROOT_PASSWORD=<choose-a-minio-password>
 MINIO_ENDPOINT=localhost:9000
 
 OLLAMA_BASE_URL=http://localhost:11434
@@ -473,10 +473,10 @@ OLLAMA_MODEL=llama3.2:3b
 # Authentication: configure a stable secret before deployment.
 CRC_AUTH_SECRET=replace-with-a-long-random-secret
 CRC_CORS_ORIGINS=http://localhost:3000
-CRC_DEMO_PASSCODE=chanakya-demo
+CRC_DEMO_PASSCODE=<choose-a-demo-passcode>
 ```
 
-Seeded demo accounts use `member1@chanakyauniversity.edu.in` (or university ID `24CU1000`) and the demo passcode `chanakya-demo` by default. Change `CRC_DEMO_PASSCODE` before seeding shared environments, and configure a strong `CRC_AUTH_SECRET` outside local development.
+Seeded demo accounts use `member1@chanakyauniversity.edu.in` (or university ID `24CU1000`) and the demo passcode you set in `CRC_DEMO_PASSCODE` before seeding (there is no built-in default). Use a different value for any shared environment, and configure a strong `CRC_AUTH_SECRET` outside local development.
 
 ---
 
@@ -531,6 +531,10 @@ Chanakya-Research-Commons/
 | 2026-11-22 | `production-hardening` | Addressed all 6 architectural recommendations: untracked `.env` (added `.env.example`), eliminated write-on-GET anomaly detection, added ThreadedConnectionPool + `get_db()` context manager, fixed HNSW vector search subquery, added bounded inputs, calibrated PageRank boost, enforced RAG similarity floor, and added missing database indexes. |
 | 2026-11-23 | `frontend-redesign` | Full CRC Frontend Redesign: calmed typography and hierarchy, sticky `Navbar` with persistent keyboard-activated (`/`) search, Home discovery page (`/`), threaded discussions (`/feed/[postId]`) with optimistic vote pills and recursive comments, full-page paper reader (`/papers/[paperId]`), PrestigeTier badges, collections integration, hierarchical role-gated views (`student`, `faculty`, `researcher`, `admin`), `AuthContext` with modal sign-in, and removed drawer/instant-switch hacks. |
 | 2026-11-23 | `evaluation-integrity` | Comprehensive evaluation and algorithmic hardening: 51 held-out benchmark queries across 6 schools with 1,000 bootstrap CIs, strict temporal holdouts for recommendations with zero test leakage, threshold-free PR-AUC ($0.8100$) and ROC-AUC ($0.9855$) spam evaluation, date-anchored topic spikes, semantic centroid topic clustering, and low-similarity RAG refusal gate ($80\%$ out-of-corpus refusal). |
+| 2026-11-24 | `phase-1` | Requirements audit (`REQUIREMENTS_CHECKLIST.md`). Entity resolution merges duplicates across sources (`dedup.py`, `paper_merges`); arXiv ingestion fixed; RSS article feeds; incremental, logged ingestion with a 6-hourly scheduler; "also saved" for every library item; profile editing with publication links. |
+| 2026-11-24 | `phase-2` | Website gaps: add by DOI / arXiv / link, private notes, topic follows, live trending topics, admin alert queue with dismiss/confirm and flag/clear, on-demand spike and spam scans, university → school → topic → member drill-down, topics over time, most saved / discussed papers. |
+| 2026-11-24 | `phase-3` | Evaluation rebuilt on the deployed code with regenerated ground truth and dev/test splits; shared search / recommendation / spam modules; PageRank weight and spam threshold tuned; co-save + content recommendations; event history backfilled; OpenAlex citation counts. |
+| 2026-11-24 | `phase-4` | No credentials in code or Compose (all from `.env`); FastAPI lifespan handler; 21 backend tests that clean up their own accounts; old patch/zip copies of the code removed (Gap Analysis PDF moved to `docs/`). |
 
 ## Updating an existing database
 

@@ -35,7 +35,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
+DB_URL = os.getenv("DATABASE_URL")
+
+if not DB_URL:
+    raise RuntimeError("DATABASE_URL is not set. Copy .env.example to .env and fill it in (see README, Environment Variables).")
+
 NUM_PERM = 128
 LSH_THRESHOLD = 0.5
 MIN_JACCARD = 0.5

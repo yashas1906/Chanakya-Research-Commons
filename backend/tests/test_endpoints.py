@@ -14,7 +14,7 @@ client = TestClient(app)
 def test_full_pipeline():
     print("Testing Auth Registration...")
     reg_id = f"24CU{uuid4().hex[:4]}"
-    reg_email = f"test_{uuid4().hex[:6]}@chanakyauniversity.edu.in"
+    reg_email = f"crc-test-{uuid4().hex[:10]}@tests.crc.invalid"  # removed by conftest.py after the run
     reg_resp = client.post("/api/auth/register", json={
         "university_id": reg_id,
         "full_name": "Test Scholar",
@@ -84,7 +84,7 @@ def test_full_pipeline():
     assert edited.status_code == 200 and edited.json()["edited_at"], edited.text
     assert client.get(f"/api/posts/{post_id}").json()["edited_at"]
     other = client.post("/api/auth/register", json={
-        "university_id": f"24CU{uuid4().hex[:4]}", "full_name": "Other Scholar", "email": f"o_{uuid4().hex[:6]}@chanakyauniversity.edu.in",
+        "university_id": f"24CU{uuid4().hex[:4]}", "full_name": "Other Scholar", "email": f"crc-test-{uuid4().hex[:10]}@tests.crc.invalid",
         "password": "Password123!", "role": "student", "department": "School of Engineering"}).json()
     other_headers = {"Authorization": f"Bearer {other['access_token']}"}
     assert client.patch(f"/api/posts/{post_id}", json={"title": "Hijack"}, headers=other_headers).status_code == 403

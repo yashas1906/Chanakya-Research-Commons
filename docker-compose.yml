@@ -4,7 +4,7 @@ services:
     container_name: crc_postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-crc_admin}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-crc_secure_pass}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRES_DB:-chanakya_commons}
     ports:
       - "5434:5432"
@@ -23,7 +23,7 @@ services:
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_pass}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -44,14 +44,14 @@ services:
       dockerfile: Dockerfile
     container_name: crc_backend
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-crc_admin}:${POSTGRES_PASSWORD:-crc_secure_pass}@postgres:5432/${POSTGRES_DB:-chanakya_commons}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-crc_admin}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-chanakya_commons}
       MINIO_ENDPOINT: minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_pass}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-llama3.2:3b}
-      CRC_AUTH_SECRET: ${CRC_AUTH_SECRET:-chanakya_secure_dev_jwt_secret_key_2026_super_hardened}
-      CRC_DEMO_PASSCODE: ${CRC_DEMO_PASSCODE:-chanakya-demo}
+      CRC_AUTH_SECRET: ${CRC_AUTH_SECRET:?Set CRC_AUTH_SECRET in .env}
+      CRC_DEMO_PASSCODE: ${CRC_DEMO_PASSCODE:?Set CRC_DEMO_PASSCODE in .env}
       CRC_CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
     ports:
       - "8000:8000"
@@ -85,11 +85,11 @@ services:
       - ./data_pipeline:/app/data_pipeline:ro
       - ./evaluation:/app/evaluation
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-crc_admin}:${POSTGRES_PASSWORD:-crc_secure_pass}@postgres:5432/${POSTGRES_DB:-chanakya_commons}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-crc_admin}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-chanakya_commons}
       MINIO_ENDPOINT: minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_pass}
-      CRC_DEMO_PASSCODE: ${CRC_DEMO_PASSCODE:-chanakya-demo}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
+      CRC_DEMO_PASSCODE: ${CRC_DEMO_PASSCODE:?Set CRC_DEMO_PASSCODE in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -111,10 +111,10 @@ services:
       - ./data_pipeline:/app/data_pipeline:ro
       - ./evaluation:/app/evaluation
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-crc_admin}:${POSTGRES_PASSWORD:-crc_secure_pass}@postgres:5432/${POSTGRES_DB:-chanakya_commons}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-crc_admin}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-chanakya_commons}
       MINIO_ENDPOINT: minio:9000
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin_pass}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in .env}
     depends_on:
       postgres:
         condition: service_healthy
