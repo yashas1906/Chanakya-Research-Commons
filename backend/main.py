@@ -560,14 +560,16 @@ def get_my_follows(user=Depends(current_user)):
 def get_user_profile(user_id: UUID, viewer=Depends(current_user_optional)):
     """Public profile: identity, activity counts and recent posts/comments (no email)."""
     viewer_id = str(viewer["user_id"]) if viewer else None
+    # Flagged accounts are hidden from the public, but the member themselves and admins can still open them.
+    can_see_flagged = viewer is not None and (viewer_id == str(user_id) or viewer.get("role") == "admin")
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             """
             SELECT user_id, university_id, full_name, role, department, bio, interest_tags, profile_url, created_at
-            FROM users WHERE user_id = %s::uuid AND is_flagged_spam = FALSE
+            FROM users WHERE user_id = %s::uuid AND (is_flagged_spam = FALSE OR %s)
             """,
-            (str(user_id),),
+            (str(user_id), can_see_flagged),
         )
         person = cur.fetchone()
         if not person:
@@ -1952,7 +1954,10 @@ def run_spam_detection_job(
                 u.full_name,
                 u.department,
                 COUNT(DISTINCT p.post_id) AS post_count,
-                COALESCE(EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / GREATEST(COUNT(p.post_id), 1), 999999) AS avg_seconds_between_posts,
+                -- One post has no gap to measure (MAX - MIN = 0), which used to look like a burst-posting bot.
+                CASE WHEN COUNT(p.post_id) < 2 THEN 999999
+                     ELSE EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / (COUNT(p.post_id) - 1)
+                END AS avg_seconds_between_posts,
                 COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes
             FROM users u
             LEFT JOIN posts p ON u.user_id = p.author_id

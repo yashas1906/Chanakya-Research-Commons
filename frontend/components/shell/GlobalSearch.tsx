@@ -37,7 +37,7 @@ function writeRecent(items: string[]) {
   }
 }
 
-export function GlobalSearch() {
+export function GlobalSearch({ autoFocus = false }: { autoFocus?: boolean } = {}) {
   const pathname = usePathname();
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -154,6 +154,7 @@ export function GlobalSearch() {
         )}
         <input
           ref={inputRef}
+          autoFocus={autoFocus}
           type="search"
           value={query}
           onChange={(event) => onChange(event.target.value)}

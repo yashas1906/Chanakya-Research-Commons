@@ -6,7 +6,6 @@ import { PlugZap, RefreshCw } from "lucide-react";
 import { AuthModal } from "@/components/auth/AuthModal";
 import { Navbar } from "@/components/Navbar";
 import { FilterRail } from "@/components/shell/FilterRail";
-import { Sidebar } from "@/components/shell/Sidebar";
 import { ShellContext } from "@/components/shell/SidebarSlot";
 import { ApiError, getMembers } from "@/lib/api";
 import { useAsync } from "@/lib/hooks";
@@ -48,28 +47,23 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <ShellContext.Provider value={shell}>
-      <div className="flex min-h-dvh">
-        <Sidebar />
-        <div className="min-w-0 flex-1">
-          <Navbar />
-          {apiDown != null && (
-            <div role="alert" className="border-b border-terracotta-200 bg-terracotta-50">
-              <div className="flex items-center gap-3 px-4 py-2 text-meta text-terracotta-700 sm:px-6">
-                <PlugZap className="h-4 w-4 shrink-0" />
-                <span className="min-w-0 flex-1">{apiDown instanceof ApiError ? apiDown.message : "The CRC API is unavailable."} Retrying automatically…</span>
-                <button type="button" onClick={reloadHealth} className="inline-flex items-center gap-1 font-semibold underline-offset-2 hover:underline">
-                  <RefreshCw className="h-3.5 w-3.5" />Retry
-                </button>
-              </div>
-            </div>
-          )}
-          <div className="mx-auto flex w-full max-w-[1520px]">
-            {hasRail && <FilterRail />}
-            <main id="main" className="min-w-0 flex-1 px-4 pb-20 pt-5 sm:px-6 xl:px-8 xl:pt-6">
-              <div key={pathname} className="mx-auto w-full max-w-[1120px] animate-rise">{children}</div>
-            </main>
+      <Navbar />
+      {apiDown != null && (
+        <div role="alert" className="border-b border-terracotta-200 bg-terracotta-50">
+          <div className="flex items-center gap-3 px-4 py-2 text-meta text-terracotta-700 sm:px-6">
+            <PlugZap className="h-4 w-4 shrink-0" />
+            <span className="min-w-0 flex-1">{apiDown instanceof ApiError ? apiDown.message : "The CRC API is unavailable."} Retrying automatically…</span>
+            <button type="button" onClick={reloadHealth} className="inline-flex items-center gap-1 font-semibold underline-offset-2 hover:underline">
+              <RefreshCw className="h-3.5 w-3.5" />Retry
+            </button>
           </div>
         </div>
+      )}
+      <div className="mx-auto flex w-full max-w-[1520px]">
+        {hasRail && <FilterRail />}
+        <main id="main" className="min-w-0 flex-1 px-4 pb-20 pt-5 sm:px-6 xl:px-8 xl:pt-6">
+          <div key={pathname} className="mx-auto w-full max-w-[1120px] animate-rise">{children}</div>
+        </main>
       </div>
       <AuthModal />
     </ShellContext.Provider>
