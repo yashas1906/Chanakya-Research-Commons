@@ -23,7 +23,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sentence_transformers import SentenceTransformer
-from sklearn.ensemble import IsolationForest
 from mlxtend.frequent_patterns import fpgrowth, association_rules
 from dotenv import load_dotenv
 
@@ -37,6 +36,9 @@ try:
         submission_detector,
         warmup_submission_detector,
     )
+    from backend.services.spam_service import SPAM_THRESHOLD, load_member_features, members_to_flag, score_members
+    from backend.services.search_service import hybrid_paper_sql, hybrid_params
+    from backend.services.recommendation_service import RECOMMEND_PAPERS_SQL
 except ImportError:
     from services.mining_service import (
         get_topic_associations,
@@ -47,6 +49,9 @@ except ImportError:
         submission_detector,
         warmup_submission_detector,
     )
+    from services.spam_service import SPAM_THRESHOLD, load_member_features, members_to_flag, score_members
+    from services.search_service import hybrid_paper_sql, hybrid_params
+    from services.recommendation_service import RECOMMEND_PAPERS_SQL
 
 from contextlib import contextmanager
 from psycopg2 import pool
@@ -933,8 +938,11 @@ def _set_post_vote(post_id: UUID, user_id: str, value: int):
             )
             if delta != 0:
                 cur.execute(
-                    "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'vote_post', %s)",
-                    (user_id, post_id),
+                    """
+                    INSERT INTO activity_events (user_id, event_type, target_id, topic_tags)
+                    VALUES (%s::uuid, 'vote_post', %s, (SELECT tags FROM posts WHERE post_id = %s::uuid))
+                    """,
+                    (user_id, post_id, str(post_id)),
                 )
         cur.execute(
             "UPDATE posts SET upvote_count = COALESCE(upvote_count, 0) + %s WHERE post_id = %s RETURNING upvote_count",
@@ -1076,8 +1084,11 @@ def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user
         )
         created = cur.fetchone()
         cur.execute(
-            "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'add_comment', %s::uuid)",
-            (user["user_id"], created["comment_id"]),
+            """
+            INSERT INTO activity_events (user_id, event_type, target_id, topic_tags)
+            VALUES (%s::uuid, 'add_comment', %s::uuid, (SELECT tags FROM posts WHERE post_id = %s::uuid))
+            """,
+            (user["user_id"], created["comment_id"], str(post_id)),
         )
         cur.execute(
             """
@@ -1193,8 +1204,8 @@ def save_to_library(req: SavePaperRequest, user=Depends(current_user)):
         )
         updated = cur.fetchone()
         cur.execute(
-            "INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'save_paper', %s::uuid)",
-            (user["user_id"], req.paper_id),
+            "INSERT INTO activity_events (user_id, event_type, target_id, topic_tags) VALUES (%s::uuid, 'save_paper', %s::uuid, (SELECT ARRAY(SELECT t FROM unnest(topics) t ORDER BY t LIKE 'School of %%', t) FROM papers WHERE paper_id = %s::uuid))",
+            (user["user_id"], req.paper_id, req.paper_id),
         )
         conn.commit()
         cur.close()
@@ -1743,7 +1754,10 @@ def save_by_identifier(payload: SaveByIdentifierRequest, user=Depends(current_us
             (paper_id, paper_id),
         )
         saved_row = cur.fetchone()
-        cur.execute("INSERT INTO activity_events (user_id, event_type, target_id) VALUES (%s::uuid, 'save_paper', %s::uuid)", (user["user_id"], paper_id))
+        cur.execute(
+            "INSERT INTO activity_events (user_id, event_type, target_id, topic_tags) VALUES (%s::uuid, 'save_paper', %s::uuid, (SELECT ARRAY(SELECT t FROM unnest(topics) t ORDER BY t LIKE 'School of %%', t) FROM papers WHERE paper_id = %s::uuid))",
+            (user["user_id"], paper_id, paper_id),
+        )
         conn.commit()
         cur.close()
     saved_row["paper_id"] = str(saved_row["paper_id"])
@@ -1786,54 +1800,17 @@ def _deduplicate_search_results(papers: list[dict]) -> list[dict]:
 # F5: Unified 4-Panel Hybrid Search (RRF + PageRank)
 # ==========================================
 @app.get("/api/search")
-def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1, le=50)):
+def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1, le=50), user=Depends(current_user_optional)):
     with get_db() as conn:
         cur = conn.cursor()
         q_vec = vec_literal(q)
 
-        # Panel 1 & 2: True Index-Accelerated Hybrid RRF
-        # Direct ORDER BY ... LIMIT 40 in subqueries leverages pgvector HNSW & full-text GIN index scans
-        paper_sql = """
-            WITH semantic_knn AS (
-                SELECT paper_id, (embedding <=> %s::vector) AS dist
-                FROM papers
-                WHERE in_chanakya_library = %s
-                ORDER BY embedding <=> %s::vector
-                LIMIT 40
-            ),
-            semantic AS (
-                SELECT paper_id, ROW_NUMBER() OVER (ORDER BY dist ASC) AS sem_rank
-                FROM semantic_knn
-            ),
-            keyword_top AS (
-                SELECT paper_id, ts_rank(search_tsv, plainto_tsquery('english', %s)) AS kw_score
-                FROM papers
-                WHERE in_chanakya_library = %s AND search_tsv @@ plainto_tsquery('english', %s)
-                ORDER BY kw_score DESC
-                LIMIT 40
-            ),
-            keyword AS (
-                SELECT paper_id, ROW_NUMBER() OVER (ORDER BY kw_score DESC) AS kw_rank
-                FROM keyword_top
-            )
-            SELECT p.paper_id, p.doi, p.arxiv_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
-                   p.save_count, p.pagerank_score, p.in_chanakya_library, p.item_type, p.url,
-                   COALESCE(ARRAY_AGG(DISTINCT ps.source_name) FILTER (WHERE ps.source_name IS NOT NULL), ARRAY['openalex']) AS sources,
-                   (COALESCE(1.0 / (60 + s.sem_rank), 0) + COALESCE(1.0 / (60 + k.kw_rank), 0) + (LEAST(p.pagerank_score * 50.0, 0.15))) AS rrf_score
-            FROM papers p
-            LEFT JOIN semantic s ON p.paper_id = s.paper_id
-            LEFT JOIN keyword k ON p.paper_id = k.paper_id
-            LEFT JOIN paper_sources ps ON p.paper_id = ps.paper_id
-            WHERE (s.paper_id IS NOT NULL OR k.paper_id IS NOT NULL)
-            GROUP BY p.paper_id, s.sem_rank, k.kw_rank
-            ORDER BY rrf_score DESC
-            LIMIT %s
-        """
-
-        cur.execute(paper_sql, (q_vec, False, q_vec, q, False, q, limit * 2))
+        # Panels 1 & 2: hybrid semantic + keyword ranking (Reciprocal Rank Fusion) with a PageRank prior.
+        # The SQL lives in services/search_service.py so evaluate_all.py scores exactly this ranking.
+        paper_sql = hybrid_paper_sql(library_filter=True)
+        cur.execute(paper_sql, hybrid_params(q_vec, q, limit * 2, in_library=False))
         raw_external = cur.fetchall()
-
-        cur.execute(paper_sql, (q_vec, True, q_vec, q, True, q, limit * 2))
+        cur.execute(paper_sql, hybrid_params(q_vec, q, limit * 2, in_library=True))
         raw_library = cur.fetchall()
 
         external_papers = _deduplicate_search_results(raw_external)[:limit]
@@ -1868,7 +1845,10 @@ def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1
         )
         posts = cur.fetchall()
 
-        cur.execute("INSERT INTO activity_events (event_type, search_query) VALUES ('search', %s)", (q,))
+        cur.execute(
+            "INSERT INTO activity_events (user_id, event_type, search_query) VALUES (%s::uuid, 'search', %s)",
+            (str(user["user_id"]) if user else None, q),
+        )
         conn.commit()
         cur.close()
 
@@ -1891,7 +1871,10 @@ def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1
 # F6: Recommendations + FP-Growth "Also Saved"
 # ==========================================
 @app.get("/api/recommendations/{user_id}")
-def get_recommendations(user_id: str, limit: int = Query(6, ge=1, le=50)):
+def get_recommendations(user_id: str, limit: int = Query(6, ge=1, le=50), viewer=Depends(current_user)):
+    # Recommendations reveal what a member has saved (by exclusion), so only they (or an admin) may read them.
+    if str(viewer["user_id"]) != user_id and viewer["role"] != "admin":
+        raise HTTPException(status_code=403, detail="You can only see your own recommendations")
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute("SELECT user_id, department, profile_embedding FROM users WHERE user_id = %s::uuid", (user_id,))
@@ -1900,52 +1883,22 @@ def get_recommendations(user_id: str, limit: int = Query(6, ge=1, le=50)):
             cur.close()
             raise HTTPException(status_code=404, detail="User not found")
 
-        # Recommended papers (excluding already saved).
-        # Taste vector = the member's profile embedding (bio + interest tags) blended with the centroid of
-        # the papers they saved, so saving papers really does tune the list. "reason" says which signal won.
-        rec_sql_blended = """
-            WITH me AS (SELECT profile_embedding FROM users WHERE user_id = %s::uuid),
-            taste AS (
-                SELECT AVG(p.embedding) AS centroid, COUNT(*) AS n
-                FROM library_saves ls JOIN papers p ON p.paper_id = ls.paper_id
-                WHERE ls.user_id = %s::uuid AND p.embedding IS NOT NULL
-            ),
-            ranked AS (
-                SELECT paper_id, percent_rank() OVER (ORDER BY pagerank_score) AS pagerank_percentile FROM papers
-            )
-            SELECT p.paper_id, p.canonical_title, p.publication_year, p.venue, p.topics, p.save_count, p.pagerank_score,
-                   r.pagerank_percentile,
-                   CASE WHEN t.centroid IS NULL THEN (1 - (p.embedding <=> me.profile_embedding))
-                        ELSE 0.5 * (1 - (p.embedding <=> me.profile_embedding)) + 0.5 * (1 - (p.embedding <=> t.centroid)) END AS match_score,
-                   CASE WHEN t.centroid IS NOT NULL
-                         AND (1 - (p.embedding <=> t.centroid)) > (1 - (p.embedding <=> me.profile_embedding))
-                        THEN 'saved' ELSE 'profile' END AS reason
-            FROM papers p
-            CROSS JOIN me CROSS JOIN taste t
-            JOIN ranked r ON r.paper_id = p.paper_id
-            WHERE p.paper_id NOT IN (SELECT paper_id FROM library_saves WHERE user_id = %s::uuid)
-            ORDER BY match_score DESC, p.pagerank_score DESC
-            LIMIT %s
-        """
+        # Recommended papers: co-save (collaborative) + content hybrid, see services/recommendation_service.py.
         try:
-            cur.execute(rec_sql_blended, (user_id, user_id, user_id, limit))
+            cur.execute(RECOMMEND_PAPERS_SQL, {"uid": user_id, "limit": limit})
             rec_papers = cur.fetchall()
         except psycopg2.Error as exc:
             # Older pgvector without avg(vector): fall back to the profile-only ranking.
             conn.rollback()
-            print(f"[recommendations] blended ranking unavailable, using profile only: {exc}")
+            print(f"[recommendations] hybrid ranking unavailable, using profile only: {exc}")
             cur.execute(
                 """
                 SELECT p.paper_id, p.canonical_title, p.publication_year, p.venue, p.topics, p.save_count, p.pagerank_score,
-                       ranked.pagerank_percentile,
-                       (1 - (p.embedding <=> u.profile_embedding)) AS match_score,
-                       'profile' AS reason
+                       p.item_type, (1 - (p.embedding <=> u.profile_embedding)) AS match_score, 'profile' AS reason
                 FROM papers p
-                JOIN (SELECT paper_id, percent_rank() OVER (ORDER BY pagerank_score) AS pagerank_percentile FROM papers) ranked
-                  ON ranked.paper_id = p.paper_id
                 CROSS JOIN (SELECT profile_embedding FROM users WHERE user_id = %s::uuid) u
                 WHERE p.paper_id NOT IN (SELECT paper_id FROM library_saves WHERE user_id = %s::uuid)
-                ORDER BY match_score DESC, p.pagerank_score DESC
+                ORDER BY match_score DESC
                 LIMIT %s
                 """,
                 (user_id, user_id, limit),
@@ -2312,89 +2265,41 @@ def get_system_alerts(limit: int = Query(50, ge=1, le=200), user=Depends(require
 
 @app.post("/api/analytics/run-spam-job")
 def run_spam_detection_job(
-    threshold: float = Query(0.18, description="Minimum inverted anomaly score to flag an account"),
+    threshold: float = Query(SPAM_THRESHOLD, description="Minimum anomaly score to flag an account (default chosen from the evaluation sweep)"),
     user=Depends(require_role("admin")),
 ):
     """
-    Scheduled / administrative batch anomaly detection job.
-    Uses Isolation Forest with an absolute score threshold rather than hardcoding contamination %,
-    and logs events to system_alerts with an actionable review state.
+    On-demand spam scan (F7) with the same model as the scheduled ELT (backend/services/spam_service.py).
+    Members an admin cleared are skipped unless they posted since; members with an open alert are not re-alerted.
     """
     with get_db() as conn:
         cur = conn.cursor()
-        cur.execute(
-            """
-            SELECT
-                u.user_id::text,
-                u.full_name,
-                u.department,
-                COUNT(DISTINCT p.post_id) AS post_count,
-                -- One post has no gap to measure (MAX - MIN = 0), which used to look like a burst-posting bot.
-                CASE WHEN COUNT(p.post_id) < 2 THEN 999999
-                     ELSE EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / (COUNT(p.post_id) - 1)
-                END AS avg_seconds_between_posts,
-                COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes,
-                u.spam_cleared_at, MAX(p.created_at) AS last_post_at
-            FROM users u
-            LEFT JOIN posts p ON u.user_id = p.author_id
-            GROUP BY u.user_id, u.full_name, u.department, u.spam_cleared_at
-            """
-        )
-        user_stats = pd.DataFrame(cur.fetchall())
-
+        df = load_member_features(cur)
+        scores = score_members(df)
         flagged = []
-        if len(user_stats) >= 10:
-            features = user_stats[["post_count", "avg_seconds_between_posts", "avg_upvotes"]].fillna(0)
-            iso = IsolationForest(contamination=0.08, random_state=42)
-            iso.fit(features)
-            user_stats["anomaly_score"] = -iso.decision_function(features)
-
-            # Strictly filter by score threshold rather than blind contamination
-            outliers = user_stats[user_stats["anomaly_score"] >= threshold].sort_values("anomaly_score", ascending=False)
-            for _, row in outliers.iterrows():
-                # An admin already cleared this member; only re-flag if they have posted since.
-                cleared = row.get("spam_cleared_at")
-                if cleared is not None and not pd.isna(cleared) and (pd.isna(row.get("last_post_at")) or row["last_post_at"] <= cleared):
-                    continue
-                cur.execute(
-                    "SELECT 1 FROM system_alerts WHERE NOT is_resolved AND alert_type IN ('USER_SPAM', 'spam_account') AND entity_ref = %s",
-                    (row["user_id"],),
-                )
-                if cur.fetchone():
-                    continue
-                score = round(float(row["anomaly_score"]), 4)
-                user_id = row["user_id"]
-                cur.execute(
-                    """
-                    INSERT INTO system_alerts (alert_type, entity_ref, severity_score, details, is_resolved)
-                    VALUES ('spam_account', %s, %s, %s::jsonb, FALSE)
-                    """,
-                    (
-                        user_id,
-                        score,
-                        json.dumps({
-                            "full_name": row["full_name"],
-                            "department": row["department"],
-                            "post_count": int(row["post_count"]),
-                            "avg_upvotes": float(row["avg_upvotes"]),
-                            "score": score
-                        })
-                    )
-                )
-                cur.execute(
-                    "UPDATE users SET is_flagged_spam = TRUE, spam_score = %s WHERE user_id = %s::uuid",
-                    (score, user_id),
-                )
-                flagged.append({
-                    "user_id": user_id,
-                    "full_name": row["full_name"],
-                    "department": row["department"],
-                    "anomaly_score": score
-                })
-            conn.commit()
-
+        for _, row in members_to_flag(df, scores, threshold).iterrows():
+            cur.execute(
+                "SELECT 1 FROM system_alerts WHERE NOT is_resolved AND alert_type IN ('USER_SPAM', 'spam_account') AND entity_ref = %s",
+                (row["user_id"],),
+            )
+            if cur.fetchone():
+                continue
+            score = round(float(row["anomaly_score"]), 4)
+            cur.execute(
+                """
+                INSERT INTO system_alerts (alert_type, entity_ref, severity_score, details, is_resolved)
+                VALUES ('spam_account', %s, %s, %s::jsonb, FALSE)
+                """,
+                (row["user_id"], score, json.dumps({
+                    "full_name": row["full_name"], "department": row["department"],
+                    "post_count": int(row["post_count"]), "avg_upvotes": float(row["avg_upvotes"]), "anomaly_score": score,
+                })),
+            )
+            cur.execute("UPDATE users SET is_flagged_spam = TRUE, spam_score = %s WHERE user_id = %s::uuid", (score, row["user_id"]))
+            flagged.append({"user_id": row["user_id"], "full_name": row["full_name"], "department": row["department"], "anomaly_score": score})
+        conn.commit()
         cur.close()
-        return {"status": "completed", "evaluated_users": len(user_stats), "flagged_count": len(flagged), "flagged": flagged}
+    return {"status": "completed", "threshold": threshold, "evaluated_users": len(df), "flagged_count": len(flagged), "flagged": flagged}
 
 
 def _clear_spam_flag(cur, member_id: str) -> None:

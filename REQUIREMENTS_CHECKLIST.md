@@ -1,7 +1,7 @@
 # Chanakya Research Commons: Requirements Checklist and Pending Work
 
 Checked against the DMW course project brief (submission due **28 Nov 2026**).
-Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phase 1 and Phase 2 completed 24 Nov 2026** (rows below updated).
+Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phases 1, 2 and 3 completed 24 Nov 2026** (rows below updated; numbers from `evaluation/evaluation_results.json`).
 
 **Legend:** ✅ done · ⚠️ partly done or weak · ❌ missing · `[ ]` pending task
 
@@ -85,28 +85,28 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 | Requirement | Status | Notes |
 |---|---|---|
 | At least 500 papers with abstracts | ✅ | 741, all with abstracts and embeddings. |
-| Citation links where available | ⚠️ | Only 193 links; PageRank runs on a sparse graph. |
+| Citation links where available | ✅ | 188 internal edges (papers in the corpus rarely cite each other) plus OpenAlex global citation counts for 741 papers, used to validate PageRank (Spearman 0.41). |
 | At least 50 members across at least 6 departments | ✅ | 62 members, 6 schools, all 4 roles. |
 | At least 2,000 posts and comments | ✅ | 600 posts + 2,002 comments. |
 | At least 10,000 save/view/search events over at least 6 months | ✅ | About 11,200 events, 22 May to 24 Nov (just over 6 months). |
 | Follow links between members | ✅ | 360 member follows, 121 topic follows. |
 | Documented generator with realistic patterns | ✅ | `seed_database.py`, `improve_data.py`. |
-| Planted ground truth in a separate file | ⚠️ | `ground_truth.json` is stale: 8 of its 20 planted duplicates no longer exist. |
+| Planted ground truth in a separate file | ✅ | Rebuilt by `evaluation/build_ground_truth.py` from the seed's planting rules: 30 duplicate pairs, 5 spam accounts, 3 spikes with a fixed anchor date. |
 | Synthetic data replaceable without schema changes | ✅ | `users.is_synthetic` flag. |
 
 ### Evaluation
 | Requirement | Status | Notes |
 |---|---|---|
-| Search quality vs baselines | ⚠️ | Deployed setup (hybrid + PageRank, nDCG@10 0.70) scores below semantic-only (0.80). |
-| Matching / dedup quality | ⚠️ | MinHash F1 0.26 (precision 0.195), and the app doesn't use it. |
-| Recommendation quality vs baselines | ⚠️ | Personalised recall@5 0.05 < item-CF baseline 0.075. Popularity baseline at exactly 0.0 suggests a bug. |
-| Spam detection | ⚠️ | App threshold 0.18 sits where evaluated recall falls to 0.4 or lower. |
-| RAG retrieval and refusal | ✅ | Hit@4 0.93; refusal rate 0.8 on out-of-corpus questions. |
+| Search quality vs baselines | ✅ | Held-out nDCG@10: hybrid 0.815 vs keyword 0.197 and old PageRank×50 hybrid 0.724; level with semantic-only (0.822, CIs overlap). PageRank weight tuned on dev queries (best = 0). |
+| Matching / dedup quality | ✅ | Benchmark F1 1.00 vs 0.87 (old word-set MinHash) and 0.10 (exact title). Actual merges 45/46 correct, 30/30 planted duplicates merged. |
+| Recommendation quality vs baselines | ⚠️ | New co-save + content hybrid: held-out recall@10 0.077 = item-CF, > popularity 0.019; beats the old formula on dev members (0.111 vs 0.049). Profile-only scored 0.115 on held-out members, so the result is within noise (26 members). Popularity was legitimately ~0: saves are spread thinly. |
+| Spam detection | ✅ | One shared model, log-scaled features: PR-AUC 0.81, ROC-AUC 0.99; threshold 0.09 → P 0.83 / R 1.00. A post-count baseline scores PR-AUC 0.93 (report this). |
+| RAG retrieval and refusal | ✅ | Hit@4 1.00; refusal rate 0.8 on out-of-corpus questions. |
 
 ### General expectations
 | Requirement | Status | Notes |
 |---|---|---|
-| One Git repo with README (setup, architecture, reproduce results) | ⚠️ | README is thorough, but its steps skip `improve_data.py`, so results don't reproduce. |
+| One Git repo with README (setup, architecture, reproduce results) | ⚠️ | README now lists every step (migrations, seed, improve_data, ingest, enrich, ELT, ground truth, evaluation). A clean from-scratch rerun has not been done yet (see Phase 3). |
 | Config via environment files; no secrets committed | ⚠️ | `.env` is ignored, but `docker-compose.yml` and code contain default passwords and a JWT signing key. |
 | Runs locally on free / open-source software | ✅ | Docker Compose + local Ollama. |
 | Report explains each library and model | ⬜ | Not part of this audit. Pending in the report. |
@@ -133,22 +133,24 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 - [x] **F9:** drill-down view university → school → department → topic → member (add the topic level to the API).
 - [x] **F9:** topic-by-department-over-time chart, and most saved / most discussed papers on the dashboard.
 
-### Phase 3: Evaluation and data consistency
-- [ ] Score duplicate detection from `paper_merges` (the system's actual merges) instead of recomputing MinHash inside `evaluate_all.py`.
-- [ ] Note for the report: with stale ground truth, MinHash looked like precision 0.195; inspection showed nearly all "false positives" were planted or real OpenAlex duplicates.
-- [ ] Regenerate `ground_truth.json` from the current database (or re-seed cleanly), so planted duplicates, spam accounts and spikes all exist.
-- [ ] Add `improve_data.py` to the README pipeline steps in the right order, then re-run the full pipeline from scratch to confirm it reproduces.
-- [ ] Re-run `evaluation/evaluate_all.py` and update the README results table.
-- [ ] Tune the PageRank weight in search so the deployed setup beats semantic-only, or justify it in the report.
-- [ ] Fix the popularity baseline (0.0) in the recommendation evaluation; improve the personalised method so it beats item-CF, or explain why not.
-- [ ] Set the spam threshold from the evaluation curve (ELT uses 0.15, the API job 0.18); review the 3 false positives still flagged (Yashas Hombal, Divya Shetty, Fatima Sheikh) using the new "Clear flag" button.
-- [ ] Improve MinHash precision (shingle size, threshold) and report the numbers of the method the app actually uses.
-- [ ] Log comment and vote events in `activity_events` (currently 2 and 13 events vs 2,002 comments and 503 votes), and record `user_id` on search events.
-- [ ] Optionally fetch more citation links from OpenAlex (`referenced_works`) to strengthen PageRank.
+### Phase 3: Evaluation and data consistency ✅ done (one item open)
+- [x] Duplicate detection scored on a benchmark corpus with the deployed detector, plus the system's actual merges (`paper_merges`) against planted labels and a manual audit (`evaluation/dedup_audit.json`).
+- [x] Report note: the old 0.195 MinHash precision came from a stale ground-truth file; nearly all its "false positives" were planted or real OpenAlex duplicates.
+- [x] `ground_truth.json` rebuilt from the seed's planting rules (`evaluation/build_ground_truth.py`, `evaluation/seed_labels.json`).
+- [x] README pipeline steps complete (migrations, seed, `improve_data.py`, ingest, enrich citations, ELT, ground truth, evaluation).
+- [ ] **Open:** re-run the full pipeline from scratch in a separate database to confirm it reproduces. Not done because re-seeding wipes the live database (including real accounts); OpenAlex results also change over time, so numbers will differ slightly.
+- [x] Evaluation re-run; README results table replaced.
+- [x] PageRank weight tuned on dev queries / reported on held-out queries; best weight is 0 (PageRank kept as tie-breaker, prestige tier, featured papers). Justification in README.
+- [x] Recommendation evaluation fixed (double counting, wrong formula, dev/test member split); new co-save + content hybrid deployed. It ties item-CF on held-out members rather than beating it; explained in README.
+- [x] Spam: one shared model (`backend/services/spam_service.py`), log-scaled features, threshold 0.09 from the sweep. The 3 false positives (Yashas Hombal, Divya Shetty, Fatima Sheikh) still need clearing with "Clear flag".
+- [x] Duplicate detection precision improved (word 3-shingles + verification) and numbers reported for the deployed method.
+- [x] Comment and vote events backfilled (migration 007) and tagged with topics; save events tagged; search events record the member.
+- [x] Citation counts and reference edges fetched from OpenAlex (`data_pipeline/enrich_citations.py`, also run by the scheduler).
 
 ### Phase 4: Security and tidy-up
-- [ ] The warehouse ELT and `/api/analytics/run-spam-job` contain two copies of the spam scan; move them into one shared module.
-- [ ] Require login on `/api/recommendations/{user_id}` and only allow a member's own recommendations (or admin).
+- [x] The warehouse ELT and `/api/analytics/run-spam-job` contain two copies of the spam scan; move them into one shared module. (Done in Phase 3.)
+- [x] Require login on `/api/recommendations/{user_id}` and only allow a member's own recommendations (or admin). (Done in Phase 3.)
+- [ ] `backend/tests/test_endpoints.py` registers new accounts in the live database on every run (76 members now vs 62); point tests at a separate test database or clean up after themselves.
 - [ ] Remove default passwords and the JWT key from `docker-compose.yml` and code defaults; read them from `.env` only.
 - [ ] Replace deprecated `@app.on_event("startup")` with a FastAPI lifespan handler.
 - [ ] Delete `CRC_Patches/`, `crc-frontend.patch` and `crc-frontend.zip` from the repo (old copies of the code).

@@ -74,7 +74,7 @@ export function RecommendedPanel() {
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-0.5 font-semibold text-brand-700">
                   <Sparkles className="h-3.5 w-3.5" /> {pct(paper.match_score)} match
                 </span>
-                <span>{paper.reason === "saved" ? "Similar to papers you saved" : "Fits your profile and interests"}</span>
+                <span>{paper.reason === "co_saved" ? "Saved by readers with libraries like yours" : paper.reason === "saved" ? "Similar to papers you saved" : "Fits your profile and interests"}</span>
                 <PrestigeTier percentile={paper.pagerank_percentile} score={paper.pagerank_score} compact />
                 {paper.topics?.slice(0, 2).map((tag) => <Tag key={tag}>{tag}</Tag>)}
               </div>

@@ -61,6 +61,7 @@ CREATE TABLE papers (
         setweight(to_tsvector('english', coalesce(abstract, '')), 'B')
     ) STORED,
     pagerank_score FLOAT DEFAULT 0.0,
+    cited_by_count INTEGER DEFAULT 0,       -- global citations (OpenAlex), validates PageRank
     save_count INT DEFAULT 0,
     sources JSONB DEFAULT '["openalex"]'::jsonb,
     in_chanakya_library BOOLEAN DEFAULT FALSE,

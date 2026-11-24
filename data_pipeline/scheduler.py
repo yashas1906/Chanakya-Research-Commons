@@ -4,6 +4,7 @@ Simple Python scheduler for the F4 refresh (no cron needed, works the same on Wi
 Every cycle it runs, in order:
   1. ingest.py        next batch from OpenAlex, arXiv and the RSS feeds (incremental, cursors in ingestion_state)
   2. entity resolution merges any new duplicates (part of ingest.py)
+  2b. enrich_citations.py  OpenAlex citation counts and reference edges (scholarly cycles only)
   3. run_dw_elt.py    PageRank, star schema refresh, trend/spike alerts, analytical views
 
 RSS feeds change hourly, scholarly sources slowly, so RSS runs every cycle and the scholarly sources
@@ -42,6 +43,8 @@ def cycle(index: int, scholarly_every: int, per_topic: int) -> None:
     sources = "openalex,arxiv,rss" if index % scholarly_every == 0 else "rss"
     print(f"[scheduler] cycle {index} started {started:%Y-%m-%d %H:%M} (sources: {sources})", flush=True)
     if _run(["data_pipeline/ingest.py", "--sources", sources, "--per-topic", str(per_topic)]):
+        if "openalex" in sources:
+            _run(["data_pipeline/enrich_citations.py"])  # global citation counts + new citation edges
         _run(["data_pipeline/run_dw_elt.py"])
     print(f"[scheduler] cycle {index} finished in {datetime.now() - started}", flush=True)
 

@@ -562,7 +562,7 @@ export async function getRecommendations(
         pagerank_score: num(u.pagerank_score),
         pagerank_percentile: u.pagerank_percentile === null || u.pagerank_percentile === undefined ? null : num(u.pagerank_percentile),
         match_score: num(u.match_score),
-        reason: u.reason === "saved" ? "saved" : "profile",
+        reason: u.reason === "saved" || u.reason === "co_saved" ? u.reason : "profile",
       };
     }),
     people: people.map((r): RecommendedPerson => {

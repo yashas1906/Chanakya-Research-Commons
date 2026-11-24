@@ -1,0 +1,133 @@
+{
+  "_comment": "Manual review of merges that were not planted by the seed (real duplicates in OpenAlex / arXiv). Reviewed 24 Nov 2026 by reading titles, venues, years and abstracts. Used by evaluate_all.py for the operational precision of entity resolution.",
+  "reviewed": [
+    {
+      "duplicate_paper_id": "e3dd90ad-2e08-4fee-a78b-ab07b756b685",
+      "canonical_paper_id": "010a603b-a662-4074-a34c-ebed7c6d771e",
+      "duplicate_title": "Artificial Intelligence Regulation from a Māori Perspective",
+      "canonical_title": "Artificial Intelligence Regulation from a Māori Perspective",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "f2b30008-64e5-4d85-a461-df1be7a2ccdc",
+      "canonical_paper_id": "32187fa5-7ba5-486d-bbd9-86149f28f783",
+      "duplicate_title": "Data, Privacy Laws and Firm Production: Evidence from the GDPR",
+      "canonical_title": "Data, Privacy Laws and Firm Production: Evidence from the GDPR",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "3a1f9b7c-69e3-4723-8ecb-8a2d8733d2da",
+      "canonical_paper_id": "6fd46672-751d-491d-ac5a-5c55c80c73b5",
+      "duplicate_title": "Intellectual Property",
+      "canonical_title": "Intellectual Property",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "d4fd756c-9592-4176-8eac-3c0f588d5ebe",
+      "canonical_paper_id": "53d8ab08-80a0-4faa-b82b-12bd39751bf9",
+      "duplicate_title": "Reviewing the Role of AI and Machine Learning in Supply Chain Analytics",
+      "canonical_title": "Reviewing the role of AI and machine learning in supply chain analytics",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "8d26c68e-9558-4848-8803-94f13da57410",
+      "canonical_paper_id": "4bb764a2-04fc-4bfd-9190-f1e0c1c2ae28",
+      "duplicate_title": "Queer Digital Humanities",
+      "canonical_title": "Queer Digital Humanities",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "7c8ed089-c2e4-4d35-9d28-1dffb8097ba3",
+      "canonical_paper_id": "8b9aaf5b-0669-4b4e-be4e-a0f1b6e6992b",
+      "duplicate_title": "Introduction to VLSI Design Flow",
+      "canonical_title": "Overview of VLSI Design Flow",
+      "verdict": "not_duplicate",
+      "note": "Book (10.1017/9781009200790) and one of its chapters (.002); OpenAlex gives both the same abstract, so the merge is counted as an error."
+    },
+    {
+      "duplicate_paper_id": "7d834c50-24f1-42b8-b92d-8098dd9ddb13",
+      "canonical_paper_id": "2feff8d8-44ca-496e-9628-c59108397976",
+      "duplicate_title": "Computer Vision",
+      "canonical_title": "Computer Vision",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "858365ac-6e3b-4af6-85e1-053036adc891",
+      "canonical_paper_id": "0d7b0572-b9a9-4edd-b1fe-5ccb62d0515b",
+      "duplicate_title": "Public policy",
+      "canonical_title": "Public policy",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "23739267-48c2-43bf-b165-c93f6d78cd3b",
+      "canonical_paper_id": "117b7de7-60a6-4f9c-8730-27fbeedc5262",
+      "duplicate_title": "A Comprehensive Review and Systematic Analysis of Artificial Intelligence Regulation Policies",
+      "canonical_title": "A Comprehensive Review and Systematic Analysis of Artificial Intelligence Regulation Policies",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "15b3e9fc-7001-4deb-bbf2-e03db343a0a3",
+      "canonical_paper_id": "d39c7fd4-3c4d-46a6-9c6c-cf35601bf5d5",
+      "duplicate_title": "Perspectives for self-driving labs in synthetic biology",
+      "canonical_title": "Perspectives for self-driving labs in synthetic biology",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "66ca18f2-fed2-4203-a9ec-0d23375195ef",
+      "canonical_paper_id": "9c95b4ed-870f-48ef-96bd-9c6914381445",
+      "duplicate_title": "Numerical Optimization and Algorithms",
+      "canonical_title": "Numerical Optimization and Algorithms",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "19e985c1-673e-49d8-ae92-190f60fb5064",
+      "canonical_paper_id": "98f857b2-c171-4388-b28e-b6179294cb00",
+      "duplicate_title": "Introduction to Protein Folding",
+      "canonical_title": "Introduction to Protein Folding",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "4279114c-4e0b-4344-9815-6a8a47b5ac7c",
+      "canonical_paper_id": "d27a29c6-e378-48c3-a1fa-89548c7fc631",
+      "duplicate_title": "Solvent: A Framework for Protein Folding",
+      "canonical_title": "Solvent: A Framework for Protein Folding",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "117b87dd-2709-4e05-a05d-8944e92f3763",
+      "canonical_paper_id": "e6983131-a2f5-4c21-b3a4-23909ba5707a",
+      "duplicate_title": "Validity, Reliability, and Transparency in Artificial Intelligence Regulation",
+      "canonical_title": "Validity, Reliability, and Transparency in Artificial Intelligence Regulation",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "792d5651-bc89-4423-aed3-bd522b567d37",
+      "canonical_paper_id": "0f311118-0273-4de4-b801-94a54ae1f040",
+      "duplicate_title": "Supply Chain Analytics: A Data-Driven Approach",
+      "canonical_title": "Supply Chain Analytics: A Data-Driven Approach",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    },
+    {
+      "duplicate_paper_id": "0ba69f29-0d44-4d4c-b3c9-e9959113a106",
+      "canonical_paper_id": "05001d6c-b5c1-4803-b246-1b75a5149ae6",
+      "duplicate_title": "Snowmass '21 Community Engagement Frontier 6: Public Policy and Government Engagement: Congressional Advocacy for Areas Beyond HEP Funding",
+      "canonical_title": "Snowmass '21 Community Engagement Frontier 6: Public Policy and Government Engagement: Non-Congressional Government Engagement",
+      "verdict": "duplicate",
+      "note": "Same work indexed twice (different DOI / version, or the arXiv preprint of an OpenAlex record); titles, abstracts and authors match."
+    }
+  ]
+}

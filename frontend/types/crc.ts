@@ -167,7 +167,7 @@ export interface RecommendedPaper {
   pagerank_percentile: number | null;
   match_score: number;
   /** "saved" = closest to papers you saved, "profile" = closest to your bio and interests. */
-  reason: "saved" | "profile";
+  reason: "saved" | "profile" | "co_saved";
 }
 
 export interface AlsoSavedPaper {

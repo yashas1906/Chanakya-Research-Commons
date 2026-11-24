@@ -87,22 +87,19 @@ def _parse_vec(text) -> np.ndarray | None:
     return v / n if n else None
 
 
-def find_duplicates(cur) -> list[dict]:
-    """Return verified duplicate pairs with their scores. Read-only."""
-    cur.execute(
-        """
-        SELECT paper_id::text, canonical_title, coalesce(abstract, ''), embedding::text, doi, arxiv_id
-        FROM papers
-        """
-    )
-    rows = cur.fetchall()
+def find_duplicate_pairs(records: list[dict]) -> list[dict]:
+    """
+    Verified duplicate pairs among in-memory records. Each record: {"id", "title", "abstract", "emb"
+    (unit-normalised vector or None), "doi", "arxiv"}. Pure function: used by find_duplicates() on the
+    database and by evaluation/evaluate_all.py on a benchmark corpus.
+    """
     meta, hashes = {}, {}
     lsh = MinHashLSH(threshold=LSH_THRESHOLD, num_perm=NUM_PERM)
-    for pid, title, abstract, emb, doi, arxiv_id in rows:
-        mh = minhash_for(title, abstract)
-        hashes[pid] = mh
-        meta[pid] = {"title": title, "emb": _parse_vec(emb), "doi": (doi or "").lower() or None, "arxiv": arxiv_id}
-        lsh.insert(pid, mh)
+    for r in records:
+        pid = r["id"]
+        hashes[pid] = minhash_for(r["title"], r.get("abstract") or "")
+        meta[pid] = {"title": r["title"], "emb": r.get("emb"), "doi": (r.get("doi") or "").lower() or None, "arxiv": r.get("arxiv")}
+        lsh.insert(pid, hashes[pid])
 
     pairs: dict[tuple[str, str], dict] = {}
 
@@ -135,6 +132,21 @@ def find_duplicates(cur) -> list[dict]:
                     "reason": "near_duplicate",
                 }
     return list(pairs.values())
+
+
+def find_duplicates(cur) -> list[dict]:
+    """Verified duplicate pairs among the papers in the database. Read-only."""
+    cur.execute(
+        """
+        SELECT paper_id::text, canonical_title, coalesce(abstract, ''), embedding::text, doi, arxiv_id
+        FROM papers
+        """
+    )
+    records = [
+        {"id": pid, "title": title, "abstract": abstract, "emb": _parse_vec(emb), "doi": doi, "arxiv": arxiv_id}
+        for pid, title, abstract, emb, doi, arxiv_id in cur.fetchall()
+    ]
+    return find_duplicate_pairs(records)
 
 
 def _groups(pairs: list[dict]) -> list[set[str]]:

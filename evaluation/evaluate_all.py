@@ -1,679 +1,510 @@
+"""
+Evaluation suite for Chanakya Research Commons (F4-F8). Every metric scores the code the application runs:
+
+  F4/F5 entity resolution  data_pipeline/dedup.py (find_duplicate_pairs) on a benchmark corpus, plus the merges
+                           the system actually made (paper_merges) checked against planted labels and a manual audit
+  F5 search                backend/services/search_service.py (the exact SQL /api/search runs)
+  F6 recommendations       the /api/recommendations formula (0.5 profile + 0.5 saved-paper centroid), temporal holdout
+  F7 trends / spam         the spike window the app uses, anchored at the planted burst; backend/services/spam_service.py
+  F8 assistant retrieval   the chunk retrieval and similarity refusal gate the assistant uses
+
+Labels come from evaluation/ground_truth.json (rebuild with evaluation/build_ground_truth.py) and
+evaluation/dedup_audit.json. Tunable settings (PageRank weight, spam threshold) are chosen on a development
+split and reported on held-out data, so the reported numbers are not fitted to the test set.
+
+Usage (repository root):  python evaluation/evaluate_all.py
+"""
+from __future__ import annotations
+
+import argparse
+import json
 import os
 import re
-import json
+import sys
 import time
-import argparse
 from datetime import datetime, timezone
+from pathlib import Path
+
 import numpy as np
-import pandas as pd
-import scipy.stats as stats
-from sklearn.metrics import average_precision_score, roc_auc_score, precision_recall_curve
-from sklearn.ensemble import IsolationForest
 import psycopg2
+import scipy.stats as stats
+from datasketch import MinHash, MinHashLSH
+from dotenv import load_dotenv
 from psycopg2.extras import RealDictCursor
 from sentence_transformers import SentenceTransformer
-from dotenv import load_dotenv
+from sklearn.metrics import average_precision_score, roc_auc_score
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+from backend.services.search_service import PAGERANK_WEIGHT, hybrid_paper_sql, hybrid_params  # noqa: E402
+from backend.services.spam_service import SPAM_THRESHOLD, load_member_features, score_members  # noqa: E402
+from backend.services.recommendation_service import CF_WEIGHT, CONTENT_WEIGHT, PROFILE_SHARE  # noqa: E402
+from data_pipeline.dedup import find_duplicate_pairs  # noqa: E402
 
 load_dotenv()
-
 DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
-GROUND_TRUTH_PATH = "evaluation/ground_truth.json"
-PRED_DUPS_PATH = "evaluation/predicted_duplicates.json"
-REPORT_JSON_PATH = "evaluation/evaluation_results.json"
+EVAL_DIR = ROOT / "evaluation"
+GROUND_TRUTH_PATH = EVAL_DIR / "ground_truth.json"
+AUDIT_PATH = EVAL_DIR / "dedup_audit.json"
+REPORT_JSON_PATH = EVAL_DIR / "evaluation_results.json"
+
+PAGERANK_GRID = [0.0, 0.001, 0.0025, 0.005, 0.01, 0.02, 0.05]
+SPAM_GRID = [round(x, 2) for x in np.arange(0.0, 0.21, 0.01)]
+REFUSAL_THRESHOLD = 0.32  # same as the assistant's similarity floor
 
 print("Loading embedding model for evaluation (all-MiniLM-L6-v2)...")
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 
-def get_conn():
-    return psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
-
-
-def eval_pagerank_validation(cur) -> dict:
-    cur.execute(
-        """
-        SELECT pagerank_score, COALESCE(cited_by_count, 0) AS cited_by_count
-        FROM papers
-        WHERE pagerank_score IS NOT NULL
-        """
-    )
-    rows = cur.fetchall()
-    if len(rows) < 3:
-        return {"samples": len(rows), "spearman_rho": None, "p_value": None}
-    pagerank = np.array([float(r["pagerank_score"]) for r in rows])
-    cited = np.array([int(r["cited_by_count"]) for r in rows])
-    rho, p_value = stats.spearmanr(pagerank, cited)
-    return {
-        "samples": len(rows),
-        "spearman_rho": None if not np.isfinite(rho) else round(float(rho), 4),
-        "p_value": None if not np.isfinite(p_value) else round(float(p_value), 6),
-    }
-
+# ------------------------------------------------------------------ helpers
 
 def vec_literal(text: str) -> str:
-    emb = model.encode(text).tolist()
-    return "[" + ",".join(f"{x:.6f}" for x in emb) + "]"
+    return "[" + ",".join(f"{x:.6f}" for x in model.encode(text).tolist()) + "]"
+
+
+def unit(v) -> np.ndarray:
+    v = np.asarray(json.loads(v) if isinstance(v, str) else v, dtype=np.float32)
+    n = np.linalg.norm(v)
+    return v / n if n else v
 
 
 def bootstrap_ci(values: list[float], n_bootstrap: int = 1000, ci: float = 0.95) -> tuple[float, float, float]:
     if not values:
         return 0.0, 0.0, 0.0
-    arr = np.array(values)
-    mean_val = float(np.mean(arr))
+    arr = np.array(values, dtype=float)
+    mean_val = float(arr.mean())
     if len(arr) < 2 or np.all(arr == arr[0]):
         return round(mean_val, 4), round(mean_val, 4), round(mean_val, 4)
     rng = np.random.default_rng(42)
-    boot_means = [np.mean(rng.choice(arr, size=len(arr), replace=True)) for _ in range(n_bootstrap)]
-    lower = float(np.percentile(boot_means, (1 - ci) / 2 * 100))
-    upper = float(np.percentile(boot_means, (1 + ci) / 2 * 100))
-    return round(mean_val, 4), round(lower, 4), round(upper, 4)
+    boots = [rng.choice(arr, size=len(arr), replace=True).mean() for _ in range(n_bootstrap)]
+    return round(mean_val, 4), round(float(np.percentile(boots, (1 - ci) / 2 * 100)), 4), round(float(np.percentile(boots, (1 + ci) / 2 * 100)), 4)
 
 
-def ndcg_at_k(relevance_scores: list[int], k: int = 10) -> float:
-    rel = np.array(relevance_scores[:k], dtype=float)
-    if not len(rel) or np.sum(rel) == 0:
+def ndcg_at_k(rels: list[float], k: int, ideal: list[float] | None = None) -> float:
+    rel = np.array(rels[:k], dtype=float)
+    if not len(rel) or rel.sum() == 0:
         return 0.0
-    dcg = np.sum(rel / np.log2(np.arange(2, len(rel) + 2)))
-    ideal_rel = np.sort(rel)[::-1]
-    idcg = np.sum(ideal_rel / np.log2(np.arange(2, len(ideal_rel) + 2)))
-    return float(dcg / idcg) if idcg > 0 else 0.0
+    dcg = float(np.sum(rel / np.log2(np.arange(2, len(rel) + 2))))
+    ideal_rel = np.sort(np.array(ideal if ideal is not None else rels, dtype=float))[::-1][:k]
+    idcg = float(np.sum(ideal_rel / np.log2(np.arange(2, len(ideal_rel) + 2))))
+    return dcg / idcg if idcg > 0 else 0.0
 
 
-# ==========================================================
-# 1. F4/F5 Evaluation: MinHash + LSH & Author Entity Resolution
-# ==========================================================
-def eval_deduplication(gt_data: dict) -> dict:
-    with open(PRED_DUPS_PATH, "r", encoding="utf-8") as f:
-        pred_data = json.load(f)
+def prf(tp: int, fp: int, fn: int) -> dict:
+    p = tp / (tp + fp) if tp + fp else 0.0
+    r = tp / (tp + fn) if tp + fn else 0.0
+    f = 2 * p * r / (p + r) if p + r else 0.0
+    return {"true_positives": tp, "false_positives": fp, "false_negatives": fn,
+            "precision": round(p, 4), "recall": round(r, 4), "f1_score": round(f, 4)}
 
-    true_pairs = {
-        tuple(sorted([item["original_id"], item["duplicate_id"]]))
-        for item in gt_data.get("duplicate_pairs", [])
-    }
-    pred_pairs = {
-        tuple(sorted([item["paper_a"], item["paper_b"]]))
-        for item in pred_data
-    }
 
-    tp = len(true_pairs & pred_pairs)
-    fp = len(pred_pairs - true_pairs)
-    fn = len(true_pairs - pred_pairs)
+# ------------------------------------------------------------------ F4/F5 entity resolution
 
-    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+def _norm_title(t: str) -> str:
+    t = re.sub(r"\(preprint\)", "", (t or "").lower())
+    return re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", t)).strip()
 
-    # Compute REAL exact-title matching baseline (no hardcoding 0.0)
-    # Checks how many mutated preprint titles ("Title - Subtitle & Preprint") match exact title
-    base_tp, base_fp, base_fn = 0, 0, 0
-    for item in gt_data.get("duplicate_pairs", []):
-        norm_orig = re.sub(r"[^\w\s]", "", item["original_title"].lower()).strip()
-        norm_dup = re.sub(r"[^\w\s]", "", item["duplicate_title"].lower()).strip()
-        if norm_orig == norm_dup:
-            base_tp += 1
+
+def _word_minhash_pairs(records: list[dict]) -> set[tuple[str, str]]:
+    """The previous method: MinHash over the SET OF WORDS of title + first 300 chars, LSH 0.65, no verification."""
+    lsh, hashes = MinHashLSH(threshold=0.65, num_perm=128), {}
+    for r in records:
+        mh = MinHash(num_perm=128)
+        for tok in set(f"{r['title']} {(r['abstract'] or '')[:300]}".lower().split()):
+            mh.update(tok.encode("utf-8"))
+        hashes[r["id"]] = mh
+        lsh.insert(r["id"], mh)
+    return {tuple(sorted((pid, o))) for pid, mh in hashes.items() for o in lsh.query(mh) if o != pid}
+
+
+def eval_entity_resolution(cur, gt: dict) -> dict:
+    # A. Benchmark corpus: today's papers + the planted duplicates re-injected (title from the merge log,
+    #    abstract of the original, embedded the way the seed embedded them). Real duplicates were already
+    #    merged, so any other predicted pair is a false positive.
+    cur.execute("SELECT paper_id::text AS id, canonical_title AS title, abstract, embedding::text AS emb, doi, arxiv_id AS arxiv FROM papers")
+    records = [{**r, "emb": unit(r["emb"]) if r["emb"] else None} for r in cur.fetchall()]
+    by_id = {r["id"]: r for r in records}
+    # Ambiguous labels (two papers share the original title, no seed record) are left out of the benchmark.
+    planted = [p for p in gt.get("duplicate_pairs", []) if p.get("original_live_id") in by_id and not p.get("ambiguous")]
+    for p in planted:
+        original = by_id[p["original_live_id"]]
+        if p["duplicate_id"] in by_id:  # not merged yet: already in the corpus
+            continue
+        text = f"{p['duplicate_title']}. {(original['abstract'] or '')[:600]}"
+        records.append({"id": p["duplicate_id"], "title": p["duplicate_title"], "abstract": original["abstract"],
+                        "emb": unit(model.encode(text)), "doi": None, "arxiv": None})
+    truth = {tuple(sorted((p["duplicate_id"], p["original_live_id"]))) for p in planted}
+
+    def score(pred: set[tuple[str, str]]) -> dict:
+        return prf(len(pred & truth), len(pred - truth), len(truth - pred))
+
+    title_groups: dict[str, list[str]] = {}
+    for r in records:
+        title_groups.setdefault(_norm_title(r["title"]), []).append(r["id"])
+    exact = {tuple(sorted((a, b))) for ids in title_groups.values() for i, a in enumerate(ids) for b in ids[i + 1:]}
+    t0 = time.perf_counter()
+    system = {tuple(sorted((p["paper_a"], p["paper_b"]))) for p in find_duplicate_pairs(records)}
+    system_ms = (time.perf_counter() - t0) * 1000
+
+    # B. What the running system actually merged (paper_merges), judged by planted labels + manual audit.
+    cur.execute("SELECT duplicate_paper_id::text AS d, canonical_paper_id::text AS c, duplicate_title AS t FROM paper_merges")
+    merges = cur.fetchall()
+    merged_to = {m["d"]: m["c"] for m in merges}
+
+    def resolve(pid: str) -> str:
+        seen = set()
+        while pid in merged_to and pid not in seen:
+            seen.add(pid)
+            pid = merged_to[pid]
+        return pid
+
+    planted_by_dup = {p["duplicate_id"]: p for p in gt.get("duplicate_pairs", [])}
+    audit = {a["duplicate_paper_id"]: a["verdict"] for a in json.loads(AUDIT_PATH.read_text(encoding="utf-8"))["reviewed"]} if AUDIT_PATH.exists() else {}
+    correct = wrong = unjudged = 0
+    for m in merges:
+        if m["d"] in planted_by_dup:
+            label = planted_by_dup[m["d"]]
+            ok = resolve(m["d"]) in {resolve(o) for o in label.get("original_ids", [label["original_id"]])}
+        elif m["d"] in audit:
+            ok = audit[m["d"]] == "duplicate"
         else:
-            base_fn += 1
-    base_prec = base_tp / (base_tp + base_fp) if (base_tp + base_fp) > 0 else 0.0
-    base_rec = base_tp / (base_tp + base_fn) if (base_tp + base_fn) > 0 else 0.0
-    base_f1 = (2 * base_prec * base_rec / (base_prec + base_rec)) if (base_prec + base_rec) > 0 else 0.0
+            unjudged += 1
+            continue
+        correct += ok
+        wrong += not ok
+    planted_found = sum(1 for p in gt.get("duplicate_pairs", []) if p["duplicate_id"] in merged_to
+                        and resolve(p["duplicate_id"]) in {resolve(o) for o in p.get("original_ids", [p["original_id"]])})
 
-    # Author Name-Variant Matching Evaluation
-    author_vars = gt_data.get("author_variants", [])
-    auth_tp, auth_fp, auth_tn, auth_fn = 0, 0, 0, 0
-
-    def is_author_variant_match(canonical: str, variant: str) -> bool:
-        c = re.sub(r"[^\w\s]", "", canonical.lower()).split()
-        v = re.sub(r"[^\w\s]", "", variant.lower()).split()
-        if not c or not v:
+    # C. Author name variants (rule: same surname, compatible initials / first names).
+    def variant_match(canonical: str, variant: str) -> bool:
+        c, v = re.sub(r"[^\w\s]", "", canonical.lower()).split(), re.sub(r"[^\w\s]", "", variant.lower()).split()
+        if not c or not v or c[-1] != v[-1] or c[0][0] != v[0][0]:
             return False
-        # Surname must match
-        if c[-1] != v[-1]:
-            return False
-        # First initial must match
-        if c[0][0] != v[0][0]:
-            return False
-        # If both provide full first names (>2 chars), they must be equal
         if len(c[0]) > 2 and len(v[0]) > 2 and c[0] != v[0]:
             return False
-        # If middle names/initials both exist, they must be compatible
-        if len(c) > 2 and len(v) > 2 and c[1][0] != v[1][0]:
-            return False
-        return True
+        return not (len(c) > 2 and len(v) > 2 and c[1][0] != v[1][0])
 
-    for pair in author_vars:
-        pred_match = is_author_variant_match(pair["canonical"], pair["variant"])
-        if pair["is_match"] and pred_match:
-            auth_tp += 1
-        elif not pair["is_match"] and pred_match:
-            auth_fp += 1
-        elif not pair["is_match"] and not pred_match:
-            auth_tn += 1
-        else:
-            auth_fn += 1
-
-    auth_acc = (auth_tp + auth_tn) / len(author_vars) if author_vars else 1.0
+    variants = gt.get("author_variants", [])
+    hits = [variant_match(a["canonical"], a["variant"]) == a["is_match"] for a in variants]
 
     return {
-        "method": "MinHash + LSH (128 permutations, threshold=0.65)",
-        "baseline_exact_title_match": {
-            "precision": round(base_prec, 4),
-            "recall": round(base_rec, 4),
-            "f1_score": round(base_f1, 4),
+        "benchmark_corpus": {"records": len(records), "planted_duplicate_pairs": len(truth),
+                             "ambiguous_labels_excluded": sum(1 for p in gt.get("duplicate_pairs", []) if p.get("ambiguous"))},
+        "baseline_exact_title_match": score(exact),
+        "baseline_word_set_minhash_lsh_0.65": score(_word_minhash_pairs(records)),
+        "system_minhash_shingles_verified": {**score(system), "runtime_ms": round(system_ms, 1),
+                                             "method": "MinHash (128 perm) on word 3-shingles, LSH 0.5; verified by shingle Jaccard >= 0.5, title Jaccard >= 0.4, embedding cosine >= 0.93"},
+        "operational_merges": {
+            "total_merges": len(merges),
+            "judged_correct": correct, "judged_wrong": wrong, "unjudged": unjudged,
+            "precision": round(correct / (correct + wrong), 4) if correct + wrong else None,
+            "planted_duplicates_merged_correctly": f"{planted_found}/{len(gt.get('duplicate_pairs', []))}",
         },
-        "minhash_lsh_system": {
-            "true_positives": tp,
-            "false_positives": fp,
-            "false_negatives": fn,
-            "precision": round(precision, 4),
-            "recall": round(recall, 4),
-            "f1_score": round(f1, 4),
-        },
-        "author_name_variant_resolution": {
-            "pairs_evaluated": len(author_vars),
-            "accuracy": round(auth_acc, 4),
-            "true_positives": auth_tp,
-            "true_negatives": auth_tn,
-        },
+        "author_name_variant_resolution": {"pairs_evaluated": len(variants), "accuracy": round(float(np.mean(hits)), 4) if hits else None},
     }
 
 
-# ==========================================================
-# 2. F5 Evaluation: 50+ Queries Benchmark, 4 Retrieval Modes & Bootstrap CIs
-# ==========================================================
-def eval_unified_search(cur, gt_data: dict) -> dict:
-    benchmark_queries = gt_data.get("benchmark_queries", [])
-    if not benchmark_queries:
-        benchmark_queries = [
-            "large language models instruction tuning",
-            "graph neural networks for molecular representation",
-            "CRISPR Cas9 base editing off-target effects",
-            "governance frameworks for artificial intelligence regulation",
-            "energy efficient routing in wireless sensor networks",
-            "resilient supply chain analytics and disruption management",
-        ]
+# ------------------------------------------------------------------ F5 unified search
 
-    k = 10
-    configs = {
-        "lexical_only": {"ndcg": [], "mrr": []},
-        "semantic_only": {"ndcg": [], "mrr": []},
-        "hybrid_rrf_no_pagerank": {"ndcg": [], "mrr": []},
-        "hybrid_rrf_full": {"ndcg": [], "mrr": []},
-    }
-
-    # Pre-fetch candidate tokens for relevance judgements
-    for query_text in benchmark_queries:
-        q_tokens = [tok.lower() for tok in re.findall(r"\w+", query_text) if len(tok) > 2]
-        q_vec = vec_literal(query_text)
-
-        # 1. Lexical Only (PostgreSQL ts_rank on search_tsv - NOT literal ILIKE)
-        cur.execute(
-            """
-            SELECT paper_id, canonical_title, topics,
-                   ts_rank(search_tsv, plainto_tsquery('english', %s)) AS kw_rank
-            FROM papers
-            WHERE search_tsv @@ plainto_tsquery('english', %s)
-            ORDER BY kw_rank DESC
-            LIMIT %s
-            """,
-            (query_text, query_text, k),
-        )
-        lex_rows = cur.fetchall()
-
-        # 2. Semantic Only (pgvector cosine similarity)
-        cur.execute(
-            """
-            SELECT paper_id, canonical_title, topics,
-                   (1 - (embedding <=> %s::vector)) AS sem_sim
-            FROM papers
-            WHERE embedding IS NOT NULL
-            ORDER BY embedding <=> %s::vector ASC
-            LIMIT %s
-            """,
-            (q_vec, q_vec, k),
-        )
-        sem_rows = cur.fetchall()
-
-        # 3. Hybrid RRF without PageRank
-        cur.execute(
-            """
-            WITH semantic AS (
-                SELECT paper_id, ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector ASC) AS sem_rank
-                FROM papers WHERE embedding IS NOT NULL LIMIT 40
-            ),
-            keyword AS (
-                SELECT paper_id, ROW_NUMBER() OVER (ORDER BY ts_rank(search_tsv, plainto_tsquery('english', %s)) DESC) AS kw_rank
-                FROM papers WHERE search_tsv @@ plainto_tsquery('english', %s) LIMIT 40
-            )
-            SELECT p.paper_id, p.canonical_title, p.topics,
-                   (COALESCE(1.0 / (60 + s.sem_rank), 0) + COALESCE(1.0 / (60 + k.kw_rank), 0)) AS rrf_score
-            FROM papers p
-            LEFT JOIN semantic s ON p.paper_id = s.paper_id
-            LEFT JOIN keyword k ON p.paper_id = k.paper_id
-            WHERE s.paper_id IS NOT NULL OR k.paper_id IS NOT NULL
-            ORDER BY rrf_score DESC
-            LIMIT %s
-            """,
-            (q_vec, query_text, query_text, k),
-        )
-        hyb_no_pr_rows = cur.fetchall()
-
-        # 4. Hybrid RRF Full (with calibrated PageRank boost)
-        cur.execute(
-            """
-            WITH semantic AS (
-                SELECT paper_id, ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector ASC) AS sem_rank
-                FROM papers WHERE embedding IS NOT NULL LIMIT 40
-            ),
-            keyword AS (
-                SELECT paper_id, ROW_NUMBER() OVER (ORDER BY ts_rank(search_tsv, plainto_tsquery('english', %s)) DESC) AS kw_rank
-                FROM papers WHERE search_tsv @@ plainto_tsquery('english', %s) LIMIT 40
-            )
-            SELECT p.paper_id, p.canonical_title, p.topics,
-                   (COALESCE(1.0 / (60 + s.sem_rank), 0) + COALESCE(1.0 / (60 + k.kw_rank), 0) + LEAST(p.pagerank_score * 50.0, 0.15)) AS rrf_score
-            FROM papers p
-            LEFT JOIN semantic s ON p.paper_id = s.paper_id
-            LEFT JOIN keyword k ON p.paper_id = k.paper_id
-            WHERE s.paper_id IS NOT NULL OR k.paper_id IS NOT NULL
-            ORDER BY rrf_score DESC
-            LIMIT %s
-            """,
-            (q_vec, query_text, query_text, k),
-        )
-        hyb_full_rows = cur.fetchall()
-
-        mode_rows = {
-            "lexical_only": lex_rows,
-            "semantic_only": sem_rows,
-            "hybrid_rrf_no_pagerank": hyb_no_pr_rows,
-            "hybrid_rrf_full": hyb_full_rows,
-        }
-
-        for mode_name, rows in mode_rows.items():
-            # Graded relevance: 2 if topic matches, 1 if title terms overlap, 0 otherwise
-            rels = []
-            for r in rows:
-                topics_str = " ".join(r["topics"] or []).lower()
-                title_str = (r["canonical_title"] or "").lower()
-                matches = sum(1 for tok in q_tokens if tok in topics_str or tok in title_str)
-                if matches >= 2:
-                    rels.append(2)
-                elif matches >= 1:
-                    rels.append(1)
-                else:
-                    rels.append(0)
-
-            configs[mode_name]["ndcg"].append(ndcg_at_k(rels, k=k))
-            first_hit_idx = next((i for i, val in enumerate(rels) if val > 0), -1)
-            configs[mode_name]["mrr"].append(1.0 / (first_hit_idx + 1) if first_hit_idx >= 0 else 0.0)
-
-    summary = {"benchmark_queries_count": len(benchmark_queries)}
-    for mode_name, metrics in configs.items():
-        ndcg_mean, ndcg_low, ndcg_high = bootstrap_ci(metrics["ndcg"])
-        mrr_mean, mrr_low, mrr_high = bootstrap_ci(metrics["mrr"])
-        summary[mode_name] = {
-            "ndcg_at_10_mean": ndcg_mean,
-            "ndcg_at_10_95_ci": [ndcg_low, ndcg_high],
-            "mrr_mean": mrr_mean,
-            "mrr_95_ci": [mrr_low, mrr_high],
-        }
-
-    return summary
+def _relevance(row: dict, q_tokens: list[str]) -> int:
+    """Graded relevance: 2 = two or more query terms in title/topics, 1 = one term, 0 = none."""
+    text = (" ".join(row["topics"] or []) + " " + (row["canonical_title"] or "")).lower()
+    hits = sum(1 for tok in q_tokens if tok in text)
+    return 2 if hits >= 2 else 1 if hits == 1 else 0
 
 
-# ==========================================================
-# 3. F6 Evaluation: Temporal Holdout vs Baselines (Popularity & IBCF)
-# ==========================================================
-def eval_recommendations(cur) -> dict:
-    # 1. Fetch active members with at least 2 library saves for temporal holdout
-    cur.execute(
-        """
-        SELECT u.user_id::text, u.department, u.profile_embedding,
-               COUNT(ls.save_id) as total_saves
-        FROM users u
-        JOIN library_saves ls ON u.user_id = ls.user_id
-        WHERE u.is_synthetic = TRUE AND u.is_flagged_spam = FALSE
-        GROUP BY u.user_id, u.department, u.profile_embedding
-        HAVING COUNT(ls.save_id) >= 2
-        LIMIT 40
-        """
+LEGACY_SQL = """
+    WITH semantic AS (
+        SELECT paper_id, ROW_NUMBER() OVER (ORDER BY embedding <=> %s::vector) AS sem_rank
+        FROM papers WHERE embedding IS NOT NULL ORDER BY embedding <=> %s::vector LIMIT 40
+    ),
+    keyword AS (
+        SELECT paper_id, ROW_NUMBER() OVER (ORDER BY ts_rank(search_tsv, plainto_tsquery('english', %s)) DESC) AS kw_rank
+        FROM papers WHERE search_tsv @@ plainto_tsquery('english', %s)
+        ORDER BY ts_rank(search_tsv, plainto_tsquery('english', %s)) DESC LIMIT 40
     )
-    users = cur.fetchall()
+    SELECT p.paper_id, p.canonical_title, p.topics,
+           COALESCE(1.0 / (60 + s.sem_rank), 0) + COALESCE(1.0 / (60 + k.kw_rank), 0) + LEAST(p.pagerank_score * 50.0, 0.15) AS score
+    FROM papers p LEFT JOIN semantic s USING (paper_id) LEFT JOIN keyword k USING (paper_id)
+    WHERE s.paper_id IS NOT NULL OR k.paper_id IS NOT NULL
+    ORDER BY score DESC LIMIT %s
+"""
 
-    # Pre-extract temporal splits: train vs test (most recent save held out)
-    user_splits = {}
-    train_saves_all = []
-    for u in users:
-        uid = u["user_id"]
-        cur.execute(
-            """
-            SELECT paper_id::text, saved_at
-            FROM library_saves
-            WHERE user_id = %s::uuid
-            ORDER BY saved_at DESC
-            """,
-            (uid,),
-        )
-        history = cur.fetchall()
-        test_item = history[0]["paper_id"]
-        train_items = set(r["paper_id"] for r in history[1:])
-        user_splits[uid] = {"test_item": test_item, "train_items": train_items}
-        for item in train_items:
-            train_saves_all.append((uid, item))
 
-    # Pre-build Item-Item co-occurrence matrix strictly from TRAIN items (Zero test leakage)
-    item_cooccur = {}
-    train_item_counts = {}
-    for uid, item in train_saves_all:
-        train_item_counts[item] = train_item_counts.get(item, 0) + 1
+def eval_unified_search(cur, gt: dict, k: int = 10) -> dict:
+    queries = gt.get("benchmark_queries", [])
+    per_query: list[dict] = []
+    for qi, q in enumerate(queries):
+        q_tokens = [t.lower() for t in re.findall(r"\w+", q) if len(t) > 2]
+        q_vec = vec_literal(q)
+        lists = {}
+        cur.execute("""SELECT paper_id, canonical_title, topics FROM papers WHERE search_tsv @@ plainto_tsquery('english', %s)
+                       ORDER BY ts_rank(search_tsv, plainto_tsquery('english', %s)) DESC LIMIT %s""", (q, q, k))
+        lists["lexical_only"] = cur.fetchall()
+        cur.execute("SELECT paper_id, canonical_title, topics FROM papers WHERE embedding IS NOT NULL ORDER BY embedding <=> %s::vector LIMIT %s", (q_vec, k))
+        lists["semantic_only"] = cur.fetchall()
+        cur.execute(LEGACY_SQL, (q_vec, q_vec, q, q, q, k))
+        lists["legacy_hybrid_pagerank_x50"] = cur.fetchall()
+        for w in PAGERANK_GRID:
+            cur.execute(hybrid_paper_sql(library_filter=False, pagerank_weight=w), hybrid_params(q_vec, q, k, in_library=None))
+            lists[f"hybrid_w={w}"] = cur.fetchall()
+        # Pool every system's results so nDCG compares lists against the same ideal ranking.
+        pool = {r["paper_id"]: _relevance(r, q_tokens) for rows in lists.values() for r in rows}
+        ideal = sorted(pool.values(), reverse=True)
+        metrics = {}
+        for name, rows in lists.items():
+            rels = [pool[r["paper_id"]] for r in rows]
+            first = next((i for i, v in enumerate(rels) if v > 0), -1)
+            metrics[name] = (ndcg_at_k(rels, k, ideal), 1.0 / (first + 1) if first >= 0 else 0.0)
+        per_query.append({"split": "dev" if qi % 2 == 0 else "test", "m": metrics})
 
-    user_train_map = {uid: data["train_items"] for uid, data in user_splits.items()}
-    for uid, items in user_train_map.items():
-        item_list = list(items)
-        for i in range(len(item_list)):
-            for j in range(i + 1, len(item_list)):
-                p1, p2 = item_list[i], item_list[j]
-                item_cooccur.setdefault(p1, {})[p2] = item_cooccur.setdefault(p1, {}).get(p2, 0) + 1
-                item_cooccur.setdefault(p2, {})[p1] = item_cooccur.setdefault(p2, {}).get(p1, 0) + 1
+    def summarise(name: str, split: str | None) -> dict:
+        rows = [pq["m"][name] for pq in per_query if split is None or pq["split"] == split]
+        n_mean, n_lo, n_hi = bootstrap_ci([r[0] for r in rows])
+        m_mean, m_lo, m_hi = bootstrap_ci([r[1] for r in rows])
+        return {"ndcg_at_10_mean": n_mean, "ndcg_at_10_95_ci": [n_lo, n_hi], "mrr_mean": m_mean, "mrr_95_ci": [m_lo, m_hi]}
 
-    sorted_train_pop = [p for p, _ in sorted(train_item_counts.items(), key=lambda x: x[1], reverse=True)]
-
-    pop_recalls, pop_ndcgs = [], []
-    cf_recalls, cf_ndcgs = [], []
-    hybrid_recalls, hybrid_ndcgs = [], []
-
-    for u in users:
-        uid = u["user_id"]
-        split = user_splits[uid]
-        test_item = split["test_item"]
-        train_items = split["train_items"]
-
-        # A. Baseline 1: Global Popularity (from train activity only)
-        pop_candidates = [p for p in sorted_train_pop if p not in train_items][:5]
-        pop_hit = 1.0 if test_item in pop_candidates else 0.0
-        pop_recalls.append(pop_hit)
-        pop_rank = next((i for i, p in enumerate(pop_candidates) if p == test_item), -1)
-        pop_ndcgs.append(1.0 / np.log2(pop_rank + 2) if pop_rank >= 0 else 0.0)
-
-        # B. Baseline 2: Item-based Collaborative Filtering (IBCF)
-        cf_scores = {}
-        for tr in train_items:
-            for neighbor, weight in item_cooccur.get(tr, {}).items():
-                if neighbor not in train_items:
-                    cf_scores[neighbor] = cf_scores.get(neighbor, 0) + weight
-        cf_candidates = [p for p, _ in sorted(cf_scores.items(), key=lambda x: x[1], reverse=True)[:5]]
-        cf_hit = 1.0 if test_item in cf_candidates else 0.0
-        cf_recalls.append(cf_hit)
-        cf_rank = next((i for i, p in enumerate(cf_candidates) if p == test_item), -1)
-        cf_ndcgs.append(1.0 / np.log2(cf_rank + 2) if cf_rank >= 0 else 0.0)
-
-        # C. CRC System: Personalized Interaction-Centroid Hybrid
-        cur.execute(
-            "SELECT embedding FROM papers WHERE paper_id = ANY(%s::uuid[]) AND embedding IS NOT NULL",
-            (list(train_items),)
-        )
-        emb_rows = cur.fetchall()
-        if emb_rows:
-            train_vecs = [np.array(json.loads(r["embedding"]) if isinstance(r["embedding"], str) else r["embedding"], dtype=float) for r in emb_rows]
-            centroid = np.mean(train_vecs, axis=0)
-            centroid_str = "[" + ",".join(f"{x:.6f}" for x in centroid) + "]"
-        else:
-            centroid_str = u["profile_embedding"]
-
-        cur.execute(
-            """
-            SELECT p.paper_id::text,
-                   ((1 - (p.embedding <=> %s::vector)) + LEAST(p.pagerank_score * 50.0, 0.15)) AS rec_score
-            FROM papers p
-            WHERE p.embedding IS NOT NULL
-            ORDER BY rec_score DESC
-            LIMIT 50
-            """,
-            (centroid_str,),
-        )
-        raw_candidates = [str(r["paper_id"]) for r in cur.fetchall()]
-        hybrid_candidates = [p for p in raw_candidates if p not in train_items][:5]
-        hyb_hit = 1.0 if test_item in hybrid_candidates else 0.0
-        hybrid_recalls.append(hyb_hit)
-        hyb_rank = next((i for i, p in enumerate(hybrid_candidates) if p == test_item), -1)
-        hybrid_ndcgs.append(1.0 / np.log2(hyb_rank + 2) if hyb_rank >= 0 else 0.0)
-        hybrid_recalls.append(hyb_hit)
-        hyb_rank = next((i for i, p in enumerate(hybrid_candidates) if p == test_item), -1)
-        hybrid_ndcgs.append(1.0 / np.log2(hyb_rank + 2) if hyb_rank >= 0 else 0.0)
-
+    sweep = {str(w): summarise(f"hybrid_w={w}", "dev")["ndcg_at_10_mean"] for w in PAGERANK_GRID}
+    best_w = max(PAGERANK_GRID, key=lambda w: (sweep[str(w)], -w))  # ties -> smaller weight
+    names = ["lexical_only", "semantic_only", "legacy_hybrid_pagerank_x50", "hybrid_w=0.0", f"hybrid_w={best_w}", f"hybrid_w={PAGERANK_WEIGHT}"]
     return {
-        "users_evaluated_temporal_holdout": len(users),
-        "baseline_global_popularity": {
-            "recall_at_5": round(float(np.mean(pop_recalls)), 4),
-            "ndcg_at_5": round(float(np.mean(pop_ndcgs)), 4),
-        },
-        "baseline_item_collaborative_filtering": {
-            "recall_at_5": round(float(np.mean(cf_recalls)), 4),
-            "ndcg_at_5": round(float(np.mean(cf_ndcgs)), 4),
-        },
-        "crc_personalized_hybrid": {
-            "recall_at_5": round(float(np.mean(hybrid_recalls)), 4),
-            "ndcg_at_5": round(float(np.mean(hybrid_ndcgs)), 4),
-        },
+        "benchmark_queries_count": len(queries),
+        "relevance_judgement": "graded 0/1/2 by query terms in title/topics; nDCG ideal pooled over all systems",
+        "pagerank_weight_sweep_dev_ndcg": sweep,
+        "pagerank_weight_selected_on_dev": best_w,
+        "pagerank_weight_deployed": PAGERANK_WEIGHT,
+        "held_out_test_queries": {n: summarise(n, "test") for n in dict.fromkeys(names)},
+        "all_queries": {n: summarise(n, None) for n in dict.fromkeys(names)},
     }
 
 
-# ==========================================================
-# 4. F7 Evaluation: Date-Anchored Spikes & Threshold-Free PR-AUC
-# ==========================================================
-def eval_trends_and_spam(cur, gt: dict, anchor_dt: datetime) -> dict:
-    # A. Date-Anchored Topic Spike Detection
+def eval_pagerank_validation(cur) -> dict:
+    cur.execute("SELECT pagerank_score, COALESCE(cited_by_count, 0) AS cited FROM papers WHERE pagerank_score IS NOT NULL")
+    rows = cur.fetchall()
+    pr = np.array([float(r["pagerank_score"]) for r in rows])
+    cited = np.array([int(r["cited"]) for r in rows])
+    rho, p = stats.spearmanr(pr, cited) if len(rows) > 2 and cited.any() else (np.nan, np.nan)
+    cur.execute("SELECT COUNT(*) AS n FROM paper_citations")
+    return {
+        "samples": len(rows),
+        "internal_citation_edges": cur.fetchone()["n"],
+        "papers_with_global_citation_count": int((cited > 0).sum()),
+        "spearman_pagerank_vs_openalex_cited_by": None if not np.isfinite(rho) else round(float(rho), 4),
+        "p_value": None if not np.isfinite(p) else float(f"{p:.3g}"),
+    }
+
+
+# ------------------------------------------------------------------ F6 recommendations
+
+def eval_recommendations(cur, k: int = 10) -> dict:
+    """Temporal holdout: for each member with >= 5 saves, the most recent 20% (at least one) are hidden."""
+    cur.execute("SELECT paper_id::text AS id, embedding::text AS emb FROM papers WHERE embedding IS NOT NULL")
+    rows = cur.fetchall()
+    ids = [r["id"] for r in rows]
+    index = {pid: i for i, pid in enumerate(ids)}
+    E = np.vstack([unit(r["emb"]) for r in rows])
+
+    cur.execute("""SELECT u.user_id::text AS uid, u.profile_embedding::text AS prof
+                   FROM users u WHERE u.is_synthetic AND NOT u.is_flagged_spam AND u.profile_embedding IS NOT NULL""")
+    profiles = {r["uid"]: unit(r["prof"]) for r in cur.fetchall()}
+    cur.execute("SELECT user_id::text AS uid, paper_id::text AS pid, saved_at FROM library_saves ORDER BY saved_at")
+    history: dict[str, list[str]] = {}
+    for r in cur.fetchall():
+        if r["pid"] in index:
+            history.setdefault(r["uid"], []).append(r["pid"])
+
+    splits = {}
+    for uid, items in history.items():
+        if uid in profiles and len(items) >= 5:
+            n_test = max(1, round(len(items) * 0.2))
+            splits[uid] = (items[:-n_test], set(items[-n_test:]))
+    train_pairs = [(uid, p) for uid, items in history.items() for p in (splits[uid][0] if uid in splits else items)]
+
+    popularity = np.zeros(len(ids))
+    for _, p in train_pairs:
+        popularity[index[p]] += 1
+    baskets: dict[str, set[int]] = {}
+    for uid, p in train_pairs:
+        baskets.setdefault(uid, set()).add(index[p])
+
+    def z(x: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """Standardise over candidate papers only (what the API's window functions do)."""
+        sd = x[~mask].std()
+        return (x - x[~mask].mean()) / sd if sd > 0 else np.zeros_like(x)
+
+    names = ["popularity", "item_cf", "content_profile_only", "content_saved_centroid_only",
+             "previous_0.5_profile_0.5_centroid", "deployed_cf_content_hybrid"]
+    methods = {n: {"dev": [], "test": []} for n in names}
+    for n_user, (uid, (train, test)) in enumerate(sorted(splits.items())):
+        split = "dev" if n_user % 2 == 0 else "test"
+        tr = [index[p] for p in train]
+        mask = np.zeros(len(ids), dtype=bool)
+        mask[tr] = True
+        test_idx = {index[p] for p in test}
+        prof_sim = E @ profiles[uid]
+        cent = unit(E[tr].mean(axis=0))
+        cent_sim = E @ cent
+        co = np.zeros(len(ids))
+        for other, items in baskets.items():
+            if other != uid and items & set(tr):
+                for i in items:
+                    co[i] += len(items & set(tr))
+        content = PROFILE_SHARE * prof_sim + (1 - PROFILE_SHARE) * cent_sim
+        scores = {
+            "popularity": popularity + 1e-6 * prof_sim,           # ties broken by profile, not by id order
+            "item_cf": co + 1e-6 * prof_sim,
+            "content_profile_only": prof_sim,
+            "content_saved_centroid_only": cent_sim,
+            "previous_0.5_profile_0.5_centroid": 0.5 * prof_sim + 0.5 * cent_sim,
+            # /api/recommendations (services/recommendation_service.py)
+            "deployed_cf_content_hybrid": CF_WEIGHT * z(np.log1p(co), mask) + CONTENT_WEIGHT * z(content, mask),
+        }
+        for name, sc in scores.items():
+            sc = np.where(mask, -np.inf, sc)
+            top = list(np.argsort(-sc)[:k])
+            rels = [1.0 if i in test_idx else 0.0 for i in top]
+            methods[name][split].append((sum(rels) / len(test_idx), ndcg_at_k(rels, k, [1.0] * len(test_idx)), float(any(rels))))
+
+    def summary(vals: list[tuple]) -> dict:
+        r_mean, r_lo, r_hi = bootstrap_ci([v[0] for v in vals])
+        return {f"recall_at_{k}": r_mean, f"recall_at_{k}_95_ci": [r_lo, r_hi],
+                f"ndcg_at_{k}": round(float(np.mean([v[1] for v in vals])), 4) if vals else 0.0,
+                f"hit_rate_at_{k}": round(float(np.mean([v[2] for v in vals])), 4) if vals else 0.0}
+
+    out = {
+        "members_evaluated": len(splits),
+        "protocol": f"last 20% of each member's saves held out (>= 1); top-{k} over {len(ids)} papers; "
+                    "hybrid weights chosen on the dev half of members (alternating), reported on the test half",
+        "hybrid_weights": {"cf": CF_WEIGHT, "content": CONTENT_WEIGHT, "profile_share_of_content": PROFILE_SHARE},
+    }
+    for name, vals in methods.items():
+        out[name] = {"dev_members": summary(vals["dev"]), "test_members": summary(vals["test"]), "all_members": summary(vals["dev"] + vals["test"])}
+    return out
+
+
+# ------------------------------------------------------------------ F7 trends and spam
+
+def eval_trends_and_spam(cur, gt: dict) -> dict:
+    anchor = datetime.fromisoformat(gt["spike_anchor"]) if gt.get("spike_anchor") else datetime.now(timezone.utc)
     cur.execute(
         """
         WITH expanded AS (
-            SELECT UNNEST(topic_tags) AS topic, occurred_at
-            FROM activity_events
-            WHERE topic_tags IS NOT NULL
-              AND occurred_at >= %s - INTERVAL '37 days'
-              AND occurred_at <= %s
+            SELECT UNNEST(topic_tags) AS topic, occurred_at FROM activity_events
+            WHERE topic_tags IS NOT NULL AND occurred_at > %(a)s - INTERVAL '37 days' AND occurred_at <= %(a)s
         ),
-        window_counts AS (
-            SELECT
-                topic,
-                COUNT(*) FILTER (WHERE occurred_at >= %s - INTERVAL '7 days') AS recent_7d,
-                COUNT(*) FILTER (WHERE occurred_at < %s - INTERVAL '7 days') / 4.28 AS baseline_weekly_avg
-            FROM expanded
-            GROUP BY topic
+        w AS (
+            SELECT topic,
+                   COUNT(*) FILTER (WHERE occurred_at > %(a)s - INTERVAL '7 days') AS recent_7d,
+                   COUNT(*) FILTER (WHERE occurred_at <= %(a)s - INTERVAL '7 days') / 4.28 AS baseline
+            FROM expanded GROUP BY topic
         )
-        SELECT topic,
-               ((recent_7d - baseline_weekly_avg) / GREATEST(baseline_weekly_avg, 1.0)) AS spike_ratio
-        FROM window_counts
-        ORDER BY spike_ratio DESC
-        LIMIT 3
+        SELECT topic, recent_7d, (recent_7d - baseline) / GREATEST(baseline, 1.0) AS ratio
+        FROM w WHERE recent_7d >= 5 ORDER BY ratio DESC
         """,
-        (anchor_dt, anchor_dt, anchor_dt, anchor_dt),
+        {"a": anchor},
     )
-    top_3_spikes = {r["topic"] for r in cur.fetchall()}
-    true_spikes = set(gt.get("spike_topics", []))
-    spike_recall_at_3 = len(top_3_spikes & true_spikes) / len(true_spikes) if true_spikes else 0.0
+    ranked = cur.fetchall()
+    truth = set(gt.get("spike_topics", []))
+    top3 = [r["topic"] for r in ranked[:3]]
+    alerted = {r["topic"] for r in ranked if float(r["ratio"]) >= 1.5}
 
-    # B. Threshold-Free Isolation Forest Spam Detection (PR-AUC & ROC-AUC)
-    cur.execute(
-        """
-        SELECT
-            u.user_id::text,
-            COUNT(DISTINCT p.post_id) AS post_count,
-            COALESCE(EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / GREATEST(COUNT(p.post_id), 1), 999999) AS avg_seconds_between_posts,
-            COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes
-        FROM users u
-        LEFT JOIN posts p ON u.user_id = p.author_id
-        GROUP BY u.user_id
-        """
-    )
-    df = pd.DataFrame(cur.fetchall())
-    features = df[["post_count", "avg_seconds_between_posts", "avg_upvotes"]].fillna(0)
+    df = load_member_features(cur)
+    scores = score_members(df)
+    y = df["user_id"].isin(set(gt.get("spam_user_ids", []))).astype(int).to_numpy()
+    baseline = np.log1p(df["post_count"].to_numpy(dtype=float))  # "most prolific posters are spammers"
 
-    # Threshold-free evaluation: continuous inverted score (-decision_function)
-    iso = IsolationForest(n_estimators=150, random_state=42)
-    iso.fit(features)
-    continuous_scores = -iso.decision_function(features)
-    df["score"] = continuous_scores
+    def at(th: float) -> dict:
+        pred = scores >= th
+        return prf(int((pred & (y == 1)).sum()), int((pred & (y == 0)).sum()), int((~pred & (y == 1)).sum()))
 
-    true_spam_set = set(gt.get("spam_user_ids", []))
-    y_true = np.array([1 if uid in true_spam_set else 0 for uid in df["user_id"]])
-
-    pr_auc = float(average_precision_score(y_true, continuous_scores)) if len(np.unique(y_true)) > 1 else 1.0
-    roc_auc = float(roc_auc_score(y_true, continuous_scores)) if len(np.unique(y_true)) > 1 else 1.0
-
-    # Multi-threshold metrics
-    threshold_metrics = {}
-    for th in [0.10, 0.15, 0.20]:
-        preds = (continuous_scores >= th).astype(int)
-        tp = int(np.sum((preds == 1) & (y_true == 1)))
-        fp = int(np.sum((preds == 1) & (y_true == 0)))
-        fn = int(np.sum((preds == 0) & (y_true == 1)))
-        prec = tp / (tp + fp) if (tp + fp) > 0 else 0.0
-        rec = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        f1 = (2 * prec * rec / (prec + rec)) if (prec + rec) > 0 else 0.0
-        threshold_metrics[f"threshold_{th}"] = {
-            "precision": round(prec, 4),
-            "recall": round(rec, 4),
-            "f1": round(f1, 4),
-        }
-
+    sweep = {str(th): at(th) for th in SPAM_GRID}
+    best = max(SPAM_GRID, key=lambda th: (sweep[str(th)]["f1_score"], th))  # ties -> stricter threshold
     return {
-        "date_anchored_topic_spikes": {
-            "temporal_anchor": anchor_dt.isoformat(),
-            "planted_spikes": list(true_spikes),
-            "detected_top_3": list(top_3_spikes),
-            "recall_at_3": round(spike_recall_at_3, 4),
+        "topic_spikes": {
+            "anchor": anchor.isoformat(), "planted": sorted(truth), "top_3_by_spike_ratio": top3,
+            "recall_at_3": round(len(set(top3) & truth) / len(truth), 4) if truth else None,
+            "alerts_at_ratio_1.5": sorted(alerted),
+            "alert_precision": round(len(alerted & truth) / len(alerted), 4) if alerted else None,
+            "alert_recall": round(len(alerted & truth) / len(truth), 4) if truth else None,
         },
-        "threshold_free_spam_detection": {
-            "pr_auc": round(pr_auc, 4),
-            "roc_auc": round(roc_auc, 4),
-            "multi_threshold_performance": threshold_metrics,
+        "spam_accounts": {
+            "members": int(len(y)), "planted_spam": int(y.sum()),
+            "isolation_forest_pr_auc": round(float(average_precision_score(y, scores)), 4),
+            "isolation_forest_roc_auc": round(float(roc_auc_score(y, scores)), 4),
+            "baseline_post_count_pr_auc": round(float(average_precision_score(y, baseline)), 4),
+            "baseline_post_count_roc_auc": round(float(roc_auc_score(y, baseline)), 4),
+            "threshold_sweep": sweep,
+            "best_f1_threshold": best,
+            "deployed_threshold": SPAM_THRESHOLD,
+            "at_deployed_threshold": at(SPAM_THRESHOLD),
+            "note": "Threshold chosen on the same 5 planted accounts it is reported on (only 5 positives); treat as optimistic.",
         },
     }
 
 
-# ==========================================================
-# 5. F8 Evaluation: Grounded RAG Faithfulness & Out-of-Corpus Refusal Gate
-# ==========================================================
-def eval_rag_retrieval(cur, gt_data: dict) -> dict:
-    in_corpus = gt_data.get("rag_in_corpus", [])
-    out_of_corpus = gt_data.get("rag_out_of_corpus", [])
+# ------------------------------------------------------------------ F8 assistant retrieval
 
-    in_corpus_hits = []
-    in_corpus_latencies = []
-    in_corpus_top_sims = []
-    in_corpus_overlaps = []
-
-    for item in in_corpus:
-        q = item["question"]
-        expected_topic = item["topic"]
+def eval_rag_retrieval(cur, gt: dict) -> dict:
+    hits, sims, overlaps, latencies = [], [], [], []
+    for item in gt.get("rag_in_corpus", []):
+        q, topic = item["question"], item["topic"]
         t0 = time.perf_counter()
         q_vec = vec_literal(q)
-        cur.execute(
-            """
-            SELECT pc.chunk_text, (1 - (pc.chunk_embedding <=> %s::vector)) AS sim,
-                   p.canonical_title, p.topics
-            FROM paper_chunks pc
-            JOIN papers p ON pc.paper_id = p.paper_id
-            ORDER BY pc.chunk_embedding <=> %s::vector ASC
-            LIMIT 4
-            """,
-            (q_vec, q_vec),
-        )
+        cur.execute("""SELECT pc.chunk_text, 1 - (pc.chunk_embedding <=> %s::vector) AS sim, p.topics
+                       FROM paper_chunks pc JOIN papers p ON p.paper_id = pc.paper_id
+                       ORDER BY pc.chunk_embedding <=> %s::vector LIMIT 4""", (q_vec, q_vec))
         rows = cur.fetchall()
-        in_corpus_latencies.append((time.perf_counter() - t0) * 1000.0)
-
+        latencies.append((time.perf_counter() - t0) * 1000)
         if rows:
-            in_corpus_top_sims.append(float(rows[0]["sim"]))
-            # Check Hit@4: whether retrieved chunk contains topic keywords
-            hit = any(expected_topic in (r["topics"] or []) or expected_topic.lower() in (r["chunk_text"] or "").lower() for r in rows)
-            in_corpus_hits.append(1.0 if hit else 0.0)
-
-            # Lexical overlap between query and retrieved chunks
-            q_words = set(re.findall(r"\w+", q.lower()))
-            chunk_words = set(re.findall(r"\w+", " ".join(r["chunk_text"] for r in rows).lower()))
-            overlap = len(q_words & chunk_words) / len(q_words) if q_words else 0.0
-            in_corpus_overlaps.append(overlap)
-
-    # Out-of-Corpus Refusal Gate Evaluation (Low Similarity Refusal < 0.32)
-    refusals = 0
-    out_top_sims = []
-    for trap_q in out_of_corpus:
-        q_vec = vec_literal(trap_q)
-        cur.execute(
-            """
-            SELECT (1 - (chunk_embedding <=> %s::vector)) AS sim
-            FROM paper_chunks
-            ORDER BY chunk_embedding <=> %s::vector ASC
-            LIMIT 1
-            """,
-            (q_vec, q_vec),
-        )
+            sims.append(float(rows[0]["sim"]))
+            hits.append(float(any(topic in (r["topics"] or []) or topic.lower() in (r["chunk_text"] or "").lower() for r in rows)))
+            qw = set(re.findall(r"\w+", q.lower()))
+            cw = set(re.findall(r"\w+", " ".join(r["chunk_text"] for r in rows).lower()))
+            overlaps.append(len(qw & cw) / len(qw) if qw else 0.0)
+    refused, trap_sims = 0, []
+    for q in gt.get("rag_out_of_corpus", []):
+        q_vec = vec_literal(q)
+        cur.execute("SELECT 1 - (chunk_embedding <=> %s::vector) AS sim FROM paper_chunks ORDER BY chunk_embedding <=> %s::vector LIMIT 1", (q_vec, q_vec))
         row = cur.fetchone()
         sim = float(row["sim"]) if row else 0.0
-        out_top_sims.append(sim)
-        if sim < 0.32:
-            refusals += 1
-
-    refusal_rate = refusals / len(out_of_corpus) if out_of_corpus else 1.0
-
+        trap_sims.append(sim)
+        refused += sim < REFUSAL_THRESHOLD
+    traps = len(gt.get("rag_out_of_corpus", []))
     return {
-        "in_corpus_eval": {
-            "questions_evaluated": len(in_corpus),
-            "hit_at_4": round(float(np.mean(in_corpus_hits)), 4) if in_corpus_hits else 0.0,
-            "avg_top1_similarity": round(float(np.mean(in_corpus_top_sims)), 4) if in_corpus_top_sims else 0.0,
-            "lexical_citation_support_overlap": round(float(np.mean(in_corpus_overlaps)), 4) if in_corpus_overlaps else 0.0,
-            "avg_latency_ms": round(float(np.mean(in_corpus_latencies)), 2) if in_corpus_latencies else 0.0,
-        },
-        "out_of_corpus_refusal_gate": {
-            "trap_questions_evaluated": len(out_of_corpus),
-            "similarity_refusal_threshold": 0.32,
-            "avg_out_of_corpus_top1_sim": round(float(np.mean(out_top_sims)), 4) if out_top_sims else 0.0,
-            "refusal_rate": round(refusal_rate, 4),
-        },
+        "in_corpus": {"questions": len(hits), "hit_at_4": round(float(np.mean(hits)), 4) if hits else None,
+                      "avg_top1_similarity": round(float(np.mean(sims)), 4) if sims else None,
+                      "question_term_coverage_in_passages": round(float(np.mean(overlaps)), 4) if overlaps else None,
+                      "avg_retrieval_latency_ms": round(float(np.mean(latencies)), 1) if latencies else None},
+        "out_of_corpus_refusal": {"trap_questions": traps, "similarity_threshold": REFUSAL_THRESHOLD,
+                                  "avg_top1_similarity": round(float(np.mean(trap_sims)), 4) if trap_sims else None,
+                                  "refusal_rate": round(refused / traps, 4) if traps else None},
     }
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Leakage-Free Evaluation Suite for Chanakya Research Commons")
-    parser.add_argument("--as-of", type=str, default=None, help="Temporal anchor date (YYYY-MM-DD)")
-    args = parser.parse_args()
-
-    with open(GROUND_TRUTH_PATH, "r", encoding="utf-8") as f:
-        gt = json.load(f)
-
-    conn = get_conn()
+def main() -> int:
+    argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter).parse_args()
+    gt = json.loads(GROUND_TRUTH_PATH.read_text(encoding="utf-8"))
+    conn = psycopg2.connect(DB_URL, cursor_factory=RealDictCursor)
     cur = conn.cursor()
-
-    # Determine anchor date from activity_events if not passed
-    if args.as_of:
-        anchor_dt = datetime.fromisoformat(args.as_of).replace(tzinfo=timezone.utc)
-    else:
-        cur.execute("SELECT MAX(occurred_at) FROM public.activity_events")
-        row = cur.fetchone()
-        anchor_dt = row["max"] if row and row["max"] else datetime.now(timezone.utc)
-
-    print(f"\n[Evaluation Suite] Executing evaluation anchored to date: {anchor_dt.isoformat()}")
-
+    started = time.perf_counter()
     results = {
-        "F4_F5_deduplication_and_author_matching": eval_deduplication(gt),
-        "F5_unified_search_benchmark": eval_unified_search(cur, gt),
-        "F5_pagerank_external_citation_validation": eval_pagerank_validation(cur),
-        "F6_recommendations_temporal_holdout": eval_recommendations(cur),
-        "F7_trends_and_spam_detection": eval_trends_and_spam(cur, gt, anchor_dt),
-        "F8_rag_retrieval_and_refusal_gate": eval_rag_retrieval(cur, gt),
+        "_meta": {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                  "ground_truth_generated": gt.get("_generated", {}).get("at")},
+        "F4_F5_entity_resolution": eval_entity_resolution(cur, gt),
+        "F5_unified_search": eval_unified_search(cur, gt),
+        "F5_pagerank_validation": eval_pagerank_validation(cur),
+        "F6_recommendations": eval_recommendations(cur),
+        "F7_trends_and_spam": eval_trends_and_spam(cur, gt),
+        "F8_assistant_retrieval": eval_rag_retrieval(cur, gt),
     }
-
-    with open(REPORT_JSON_PATH, "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
-
+    results["_meta"]["runtime_s"] = round(time.perf_counter() - started, 1)
     cur.close()
     conn.close()
-
-    print("\n" + "=" * 65)
-    print("      CHANAKYA RESEARCH COMMONS — COMPREHENSIVE EVALUATION")
-    print("=" * 65)
+    REPORT_JSON_PATH.write_text(json.dumps(results, indent=2), encoding="utf-8")
     print(json.dumps(results, indent=2))
-    print(f"\nSaved full empirical results to {REPORT_JSON_PATH}")
+    print(f"\nSaved results to {REPORT_JSON_PATH}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

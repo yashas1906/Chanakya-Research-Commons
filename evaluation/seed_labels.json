@@ -1,0 +1,125 @@
+{
+  "_comment": "Duplicate pairs exactly as recorded by seed_database.py when it planted them (copied from the original evaluation/ground_truth.json). build_ground_truth.py uses them to resolve titles shared by more than one paper.",
+  "duplicate_pairs": [
+    {
+      "original_id": "347f610d-e2e9-4fee-bf28-7b7c441d03c3",
+      "duplicate_id": "32dd6c80-2647-46db-9be5-8babd318ed3d",
+      "original_title": "Introduction to Bioinformatics",
+      "duplicate_title": "Introduction to Bioinformatics (Preprint)"
+    },
+    {
+      "original_id": "c93de4fd-d74c-415c-bab3-3412f61ecd4a",
+      "duplicate_id": "33009fd1-5445-475d-a0f7-376c42882e03",
+      "original_title": "Proceedings of the Sixteenth ACM International Conference on Web Search and Data Mining",
+      "duplicate_title": "Proceedings of the Sixteenth ACM International Conference on Web Search & Data Mining (Preprint)"
+    },
+    {
+      "original_id": "e3df562f-ac2b-4d9e-b6d2-3d650e85be46",
+      "duplicate_id": "9a7510dc-0062-47f8-a095-5ca931ac4f01",
+      "original_title": "Synthetic Biology: Bottom-Up Assembly of Molecular Systems",
+      "duplicate_title": "Synthetic Biology - Bottom-Up Assembly of Molecular Systems (Preprint)"
+    },
+    {
+      "original_id": "f7d42b6e-f50a-4789-8e43-7af4a23d9258",
+      "duplicate_id": "16dca90d-9719-45c3-b9af-f53558a46f96",
+      "original_title": "Strategic Concepts of Media Studies",
+      "duplicate_title": "Strategic Concepts of Media Studies (Preprint)"
+    },
+    {
+      "original_id": "9cdddf32-ce19-4796-b8e1-e6747b4b55fe",
+      "duplicate_id": "19e2b83c-9689-4b70-961d-4839db308b4f",
+      "original_title": "Galactica: A Large Language Model for Science",
+      "duplicate_title": "Galactica - A Large Language Model for Science (Preprint)"
+    },
+    {
+      "original_id": "75448d7b-ed53-484d-905a-a7e0647fd5e8",
+      "duplicate_id": "e6bc76d4-8a01-4960-870d-61ffd073492b",
+      "original_title": "Libraries and Digital Humanities",
+      "duplicate_title": "Libraries & Digital Humanities (Preprint)"
+    },
+    {
+      "original_id": "304ad219-c421-4ea1-a970-5d97d1b217df",
+      "duplicate_id": "9ca67284-f7e8-463f-9ded-2772a7e43eeb",
+      "original_title": "Can Abnormality be Detected by Graph Neural Networks?",
+      "duplicate_title": "Can Abnormality be Detected by Graph Neural Networks? (Preprint)"
+    },
+    {
+      "original_id": "40a27dc8-2755-424f-9cb2-2a079622e9ac",
+      "duplicate_id": "4da333c8-3e88-4341-8b2f-b6fdb58820bd",
+      "original_title": "Using cognitive psychology to understand GPT-3",
+      "duplicate_title": "Using cognitive psychology to understand GPT-3 (Preprint)"
+    },
+    {
+      "original_id": "eb34ca6a-d1a1-4389-9a74-d45ff2d64f0b",
+      "duplicate_id": "4e78ea9c-cbfa-42f5-8d5a-eb38545ce4e7",
+      "original_title": "Cognitive Psychology",
+      "duplicate_title": "Cognitive Psychology (Preprint)"
+    },
+    {
+      "original_id": "7d9b996e-57b1-4243-9878-a0cb5d6e9bc9",
+      "duplicate_id": "9c12e2ae-1f7c-4877-9d7a-773df4197e4d",
+      "original_title": "Machine Learning for Embedded Systems: A Survey",
+      "duplicate_title": "Machine Learning for Embedded Systems - A Survey (Preprint)"
+    },
+    {
+      "original_id": "a90940dc-e3a5-4e89-be44-a690e80e1bdf",
+      "duplicate_id": "6d3b45ca-d4f1-4dbd-8153-f7fc686b2067",
+      "original_title": "CRISPR-Cas9-mediated gene editing in human cells",
+      "duplicate_title": "CRISPR-Cas9-mediated gene editing in human cells (Preprint)"
+    },
+    {
+      "original_id": "c6a0b730-1011-4c12-8877-b9c1d102eef5",
+      "duplicate_id": "1d1078ea-48e0-4665-a82f-2dcfef423187",
+      "original_title": "Artificial Intelligence Regulation and Governance",
+      "duplicate_title": "Artificial Intelligence Regulation & Governance (Preprint)"
+    },
+    {
+      "original_id": "7bc260a4-3ee2-4e4d-bfd8-fa9bf4b12398",
+      "duplicate_id": "893ddaa1-6ff2-491c-a931-e128163f9154",
+      "original_title": "Supply Chain Analytics: A Collaborative Approach",
+      "duplicate_title": "Supply Chain Analytics - A Collaborative Approach (Preprint)"
+    },
+    {
+      "original_id": "d0439b18-bfe2-4cb4-8a48-18e47f5263fe",
+      "duplicate_id": "92dbefc1-7440-424b-9721-a3f283287116",
+      "original_title": "Wireless Sensor Networks: Architectures and Protocols",
+      "duplicate_title": "Wireless Sensor Networks - Architectures & Protocols (Preprint)"
+    },
+    {
+      "original_id": "b9015c7e-9762-4217-ba21-125ddbbdcf50",
+      "duplicate_id": "cfa34091-62d2-43fe-a8ca-e490586e921d",
+      "original_title": "Fintech Adoption and Financial Inclusion",
+      "duplicate_title": "Fintech Adoption & Financial Inclusion (Preprint)"
+    },
+    {
+      "original_id": "581d6f5c-8977-4df3-a5c9-9ebcfa601e7e",
+      "duplicate_id": "189ec0a3-fbe5-46aa-a38f-a189f7d23d8c",
+      "original_title": "VLSI Design: Principles and Applications",
+      "duplicate_title": "VLSI Design - Principles & Applications (Preprint)"
+    },
+    {
+      "original_id": "f5e9da56-9781-4ebc-8d19-ee8b92b67272",
+      "duplicate_id": "ee655a68-9635-4ae2-a63b-638e4a787265",
+      "original_title": "Data Privacy Law and the Digital Economy",
+      "duplicate_title": "Data Privacy Law & the Digital Economy (Preprint)"
+    },
+    {
+      "original_id": "ca56ec10-2f19-4ec4-bc48-aa11b827e7d6",
+      "duplicate_id": "1299c8ea-db6e-473d-986c-7fbc321df4e5",
+      "original_title": "Protein Folding and Structure Prediction",
+      "duplicate_title": "Protein Folding & Structure Prediction (Preprint)"
+    },
+    {
+      "original_id": "d76efc23-289b-4688-9d62-f1784918e778",
+      "duplicate_id": "4d13fa9e-ba60-4965-ab9f-7ca29b8c9d2f",
+      "original_title": "Digital Signal Processing for Communications",
+      "duplicate_title": "Digital Signal Processing for Communications (Preprint)"
+    },
+    {
+      "original_id": "402ceca2-ea23-456b-80fb-dc5fe91b5c46",
+      "duplicate_id": "e9cb72b9-dc1a-4663-8a38-c6f1309852ce",
+      "original_title": "Cognitive Psychology: What Is In The Box?",
+      "duplicate_title": "Cognitive Psychology - What Is In The Box? (Preprint)"
+    }
+  ]
+}

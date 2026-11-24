@@ -9,14 +9,21 @@ import scipy.stats as stats
 import psycopg2
 from psycopg2.extras import execute_values
 from sklearn.cluster import AgglomerativeClustering
-from sklearn.ensemble import IsolationForest
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # repository root, for backend.services
 try:  # works both as `python data_pipeline/run_dw_elt.py` and `python -m data_pipeline.run_dw_elt`
     from data_pipeline.dedup import resolve_duplicates
 except ImportError:
     from dedup import resolve_duplicates
+try:  # repository layout, or the backend container (where backend/ is the app root)
+    from backend.services.spam_service import SPAM_THRESHOLD, load_member_features, members_to_flag, score_members
+except ImportError:
+    from services.spam_service import SPAM_THRESHOLD, load_member_features, members_to_flag, score_members
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
@@ -307,68 +314,42 @@ def persist_system_alerts(cur, anchor_dt: datetime):
         )
     print(f"    -> Persisted {len(spike_alert_rows)} topic spike alerts.")
 
-    # B. Isolation Forest Spam Detection & Flagging
-    cur.execute(
-        """
-        SELECT
-            u.user_id::text,
-            u.full_name,
-            u.department,
-            COUNT(DISTINCT p.post_id) AS post_count,
-            -- One post has no gap to measure (MAX - MIN = 0), which used to look like a burst-posting bot.
-            CASE WHEN COUNT(p.post_id) < 2 THEN 999999
-                 ELSE EXTRACT(EPOCH FROM (MAX(p.created_at) - MIN(p.created_at))) / (COUNT(p.post_id) - 1)
-            END AS avg_seconds_between_posts,
-            COALESCE(AVG(p.upvote_count), 0) AS avg_upvotes,
-            -- Members an admin cleared are skipped unless they have posted since the clearance.
-            (u.spam_cleared_at IS NOT NULL AND COALESCE(MAX(p.created_at) <= u.spam_cleared_at, TRUE)) AS cleared
-        FROM users u
-        LEFT JOIN posts p ON u.user_id = p.author_id
-        GROUP BY u.user_id, u.full_name, u.department, u.spam_cleared_at
-        """
-    )
-    df = pd.DataFrame(cur.fetchall(), columns=["user_id", "full_name", "department", "post_count", "avg_seconds_between_posts", "avg_upvotes", "cleared"])
+    # B. Isolation Forest spam detection (shared model: backend/services/spam_service.py)
+    df = load_member_features(cur)
+    scores = score_members(df)
+    flagged = members_to_flag(df, scores)
 
-    if len(df) >= 20:
-        features = df[["post_count", "avg_seconds_between_posts", "avg_upvotes"]].fillna(0)
-        iso = IsolationForest(n_estimators=150, random_state=42)
-        iso.fit(features)
-        # Inverted score: higher is more anomalous
-        scores = -iso.decision_function(features)
-        df["anomaly_score"] = scores
-        # Absolute threshold for anomaly
-        flagged = df[(df["anomaly_score"] >= 0.15) & (~df["cleared"].astype(bool))]
+    spam_alert_rows = []
+    for _, row in flagged.iterrows():
+        cur.execute(
+            "UPDATE users SET is_flagged_spam = TRUE, spam_score = %s WHERE user_id = %s::uuid",
+            (float(row["anomaly_score"]), row["user_id"]),
+        )
+        details = {
+            "full_name": row["full_name"],
+            "department": row["department"],
+            "post_count": int(row["post_count"]),
+            "anomaly_score": round(float(row["anomaly_score"]), 4),
+        }
+        spam_alert_rows.append(("spam_account", row["user_id"], round(float(row["anomaly_score"]), 4), json.dumps(details), anchor_dt))
+    # Keep every member's latest score, flagged or not, for the admin members view.
+    if len(df):
+        execute_values(
+            cur,
+            "UPDATE users AS u SET spam_score = v.score FROM (VALUES %s) AS v(score, id) WHERE u.user_id = v.id::uuid",
+            [(float(sc), uid) for uid, sc in zip(df["user_id"], scores)],
+        )
 
-        spam_alert_rows = []
-        for _, row in flagged.iterrows():
-            cur.execute(
-                "UPDATE users SET is_flagged_spam = TRUE, spam_score = %s WHERE user_id = %s::uuid",
-                (float(row["anomaly_score"]), row["user_id"]),
-            )
-            details = {
-                "full_name": row["full_name"],
-                "department": row["department"],
-                "post_count": int(row["post_count"]),
-                "anomaly_score": round(float(row["anomaly_score"]), 4),
-            }
-            spam_alert_rows.append((
-                "spam_account",
-                row["user_id"],
-                round(float(row["anomaly_score"]), 4),
-                json.dumps(details),
-                anchor_dt,
-            ))
-
-        if spam_alert_rows:
-            execute_values(
-                cur,
-                """
-                INSERT INTO public.system_alerts (alert_type, entity_ref, severity_score, details, detected_at)
-                VALUES %s
-                """,
-                spam_alert_rows,
-            )
-        print(f"    -> Flagged and persisted {len(spam_alert_rows)} Isolation Forest spam account alerts.")
+    if spam_alert_rows:
+        execute_values(
+            cur,
+            """
+            INSERT INTO public.system_alerts (alert_type, entity_ref, severity_score, details, detected_at)
+            VALUES %s
+            """,
+            spam_alert_rows,
+        )
+    print(f"    -> Flagged and persisted {len(spam_alert_rows)} Isolation Forest spam account alerts (threshold {SPAM_THRESHOLD}).")
 
 
 def create_analytical_views(cur):
