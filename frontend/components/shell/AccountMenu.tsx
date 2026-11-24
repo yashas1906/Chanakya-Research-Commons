@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { BookMarked, ChevronDown, LogOut, UserRound, Users } from "lucide-react";
+import { BookMarked, ChevronDown, LogOut, ShieldCheck, UserRound, Users } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { Avatar } from "@/components/ui/Section";
 import { RoleBadge } from "@/components/ui/RoleBadge";
@@ -68,6 +68,11 @@ export function AccountMenu() {
             </div>
           </div>
           <div className="mt-2 space-y-0.5">
+            {user.role === "admin" && (
+              <Link href="/admin" role="menuitem" onClick={() => setOpen(false)} className={cx(row, "font-semibold text-brand-900 bg-saffron-100/60 hover:bg-saffron-200/60")}>
+                <ShieldCheck className="h-4 w-4 text-brand-900" /> Admin dashboard
+              </Link>
+            )}
             <Link href={`/u/${user.user_id}`} role="menuitem" onClick={() => setOpen(false)} className={row}><UserRound className="h-4 w-4" /> View profile</Link>
             <Link href="/library?tab=saves" role="menuitem" onClick={() => setOpen(false)} className={row}><BookMarked className="h-4 w-4" /> Saved papers</Link>
             <button type="button" role="menuitem" onClick={() => { setOpen(false); promptLogin("login"); }} className={row}><Users className="h-4 w-4" /> Switch account</button>

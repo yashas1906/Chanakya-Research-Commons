@@ -25,6 +25,7 @@ export function Navbar() {
   const pathname = usePathname();
   const { user, promptLogin } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
+  const navLinks = user?.role === "admin" ? [...NAV, { href: "/admin", label: "Admin" }] : NAV;
 
   useEffect(() => setMenuOpen(false), [pathname]);
   useEffect(() => {
@@ -66,7 +67,7 @@ export function Navbar() {
         </Link>
 
         <nav aria-label="Primary" className="ml-1 hidden h-full items-stretch lg:flex">
-          {NAV.map(({ href, label }) => {
+          {navLinks.map(({ href, label }) => {
             const active = isActive(pathname, href);
             return (
               <Link
@@ -104,7 +105,7 @@ export function Navbar() {
 
       {menuOpen && (
         <nav aria-label="Primary" className="animate-fade border-t border-white/10 bg-brand-800 px-3 pb-3 pt-2 lg:hidden">
-          {NAV.map(({ href, label }) => {
+          {navLinks.map(({ href, label }) => {
             const active = isActive(pathname, href);
             return (
               <Link
