@@ -286,8 +286,7 @@ The API service is located at `backend/main.py`.
 ### Running the Backend
 
 ```powershell
-cd backend
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 Interactive OpenAPI docs: **http://localhost:8000/docs**
@@ -370,6 +369,42 @@ Defined in `docker-compose.yml`:
 
 ## 10. Quick Start Guide
 
+### 🚀 One-Command Launch (Recommended)
+
+You can set up, verify, and run the entire platform with a single command:
+
+**Windows Batch (Double-click or CMD):**
+```cmd
+start.bat
+```
+
+**PowerShell:**
+```powershell
+.\start.ps1
+```
+
+**Python (Cross-Platform):**
+```bash
+python start.py
+```
+
+*Optional flags:*
+- `python start.py --separate-windows` : Launches Backend and Frontend in separate dedicated command windows.
+- `python start.py --stop` : Gracefully shuts down all Docker containers.
+
+The launcher automatically:
+1. Verifies `.env` configuration.
+2. Checks that Docker Desktop is running and starts the containers (`crc_postgres`, `crc_minio`, `crc_ollama`).
+3. Verifies PostgreSQL on port 5434, checks tables and indexed papers (auto-seeds if empty).
+4. Verifies Ollama LLM weights (`llama3.2:3b`).
+5. Checks frontend dependencies (`npm install` if required).
+6. Starts the FastAPI backend (port 8000) and Next.js frontend (port 3000).
+7. Automatically opens `http://localhost:3000` in your default browser.
+
+---
+
+### Manual Step-by-Step Setup
+
 ### Step 1: Start Infrastructure
 ```powershell
 cd "Chanakya-Research-Commons"
@@ -409,8 +444,7 @@ docker exec -it crc_ollama ollama pull llama3.2:3b
 
 ### Step 7: Launch Backend API
 ```powershell
-cd backend
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+.\.venv\Scripts\python.exe -m uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ### Step 8: Open Frontend
