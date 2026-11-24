@@ -245,7 +245,7 @@ CREATE INDEX idx_events_time ON activity_events (occurred_at DESC);
 python data_pipeline/run_dw_elt.py
 ```
 
-1. **MinHash + LSH Near-Duplicate Detection**: Loads 128-perm signatures into `MinHashLSH(threshold=0.65)`, detects preprint pairs, and writes predictions to `evaluation/predicted_duplicates.json`.
+1. **MinHash + LSH Entity Resolution** (`data_pipeline/dedup.py`): 128-permutation MinHash over word 3-shingles of title + abstract, bucketed with `MinHashLSH(threshold=0.5)`. Each candidate pair is verified (shingle Jaccard >= 0.5, title word Jaccard >= 0.4, embedding cosine >= 0.93, or a shared DOI / arXiv id). Verified pairs are grouped with union-find and **merged** into one canonical record: sources, saves, notes, posts, citations and events move to it, the sources list is unioned, and each merge is logged in `paper_merges`. Predictions (including earlier merges) go to `evaluation/predicted_duplicates.json`.
 2. **PageRank Citation Authority**: Builds a directed graph $G = (V, E)$ using NetworkX over `paper_citations`, computes `nx.pagerank(alpha=0.85)`, and writes continuous authority scores back to `papers.pagerank_score`.
 3. **Star Schema Transformation**:
    - `dw.dim_date`: Extracted from all activity timestamps with semester tags.
@@ -258,6 +258,23 @@ python data_pipeline/run_dw_elt.py
      4. *Applied Analytics & Hardware*
    - `dw.fact_research_activity`: Aggregates activity events across date, member, topic, and paper.
    - `dw.fact_dept_collaboration`: Aggregates cross-department user follows and inter-department comment interactions.
+
+### 5.3 Stage 3: Incremental Ingestion & Scheduled Refresh (`ingest.py`, `scheduler.py`)
+
+```powershell
+python data_pipeline/ingest.py                    # next batch from OpenAlex, arXiv and RSS, then entity resolution
+python data_pipeline/ingest.py --sources rss      # articles only
+python data_pipeline/dedup.py --dry-run           # report duplicates without merging
+python data_pipeline/scheduler.py --once          # one refresh cycle: ingest + run_dw_elt.py
+python data_pipeline/scheduler.py --interval-hours 6   # keep refreshing every 6 hours
+docker compose --profile scheduler up -d scheduler     # same, as a container
+```
+
+- **Sources**: OpenAlex (papers + abstracts + citation links), arXiv (preprints, 3 s between calls as arXiv asks) and the curated RSS/Atom feeds in `data_pipeline/feeds.json` (articles, stored with `papers.item_type = 'article'` so search, saving and the assistant treat them like papers).
+- **Raw first**: every response is archived unchanged in MinIO (`raw-ingestion/{openalex,arxiv,rss}/...`) before it is parsed.
+- **Incremental batches**: `ingestion_state` holds a cursor per source/topic/feed (OpenAlex cursor, arXiv offset, RSS ETag / Last-Modified), so each run fetches only the next batch. Items already stored (same external id, DOI or arXiv id) are skipped before any embedding work.
+- **Audit trail**: each run is a row in `ingestion_runs` (fetched / inserted / skipped).
+- **Entity resolution**: new records that duplicate existing ones (e.g. the arXiv preprint of an OpenAlex paper) are merged, so one paper lists several sources.
 
 ---
 
@@ -384,11 +401,19 @@ python -m venv .venv
 pip install psycopg2-binary minio sentence-transformers datasketch requests python-dotenv fastapi uvicorn scikit-learn mlxtend networkx pandas numpy
 ```
 
-### Step 3: Seed Database (Stage 1)
+### Step 3: Apply Migrations and Seed Database (Stage 1)
 ```powershell
+python db/apply_migrations.py
 python data_pipeline/seed_database.py
+python data_pipeline/improve_data.py
 ```
-*Downloads embedding model, fetches ~720 papers from OpenAlex, archives raw JSON to MinIO, and seeds PostgreSQL.*
+*Applies every migration in `db/migrations/`, downloads the embedding model, fetches papers from OpenAlex and arXiv, archives raw responses to MinIO, seeds PostgreSQL, then replaces placeholder names and comments with realistic ones.*
+
+### Step 3b: Ingest More Content (Stage 3, optional but recommended)
+```powershell
+python data_pipeline/ingest.py
+```
+*Fetches the next batch from OpenAlex, arXiv and the RSS feeds, and merges duplicates. Use `scheduler.py` to repeat this on a schedule.*
 
 ### Step 4: Run Graph Mining & Star Schema ELT (Stage 2)
 ```powershell

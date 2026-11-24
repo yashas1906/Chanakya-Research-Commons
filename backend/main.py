@@ -225,6 +225,15 @@ class RegisterRequest(BaseModel):
     interest_tags: Optional[list[str]] = []
 
 
+class ProfileUpdate(BaseModel):
+    """Fields a member may change on their own profile (F1). Omitted fields are left as they are."""
+    full_name: Optional[str] = Field(None, min_length=2, max_length=120)
+    bio: Optional[str] = Field(None, max_length=2000)
+    interest_tags: Optional[list[str]] = Field(None, max_length=20)
+    profile_url: Optional[str] = Field(None, max_length=500)
+    publication_links: Optional[list[str]] = Field(None, max_length=20)
+
+
 class LoginRequest(BaseModel):
     identifier: str = Field(..., min_length=1, max_length=150)
     passcode: str = Field(..., min_length=1, max_length=256)
@@ -324,6 +333,8 @@ def _safe_user(row: dict) -> dict:
         "department": row["department"],
         "bio": row.get("bio"),
         "interest_tags": row.get("interest_tags"),
+        "profile_url": row.get("profile_url"),
+        "publication_links": row.get("publication_links") or [],
         "is_flagged_spam": bool(row.get("is_flagged_spam", False)),
         **({"email": row["email"]} if row.get("email") else {}),
     }
@@ -339,7 +350,7 @@ def current_user_optional(authorization: Optional[str] = Header(None)):
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
-            "SELECT user_id, university_id, full_name, email, role, department, bio, interest_tags, is_flagged_spam FROM users WHERE user_id = %s::uuid",
+            "SELECT user_id, university_id, full_name, email, role, department, bio, interest_tags, profile_url, publication_links, is_flagged_spam FROM users WHERE user_id = %s::uuid",
             (user_id,),
         )
         user = cur.fetchone()
@@ -447,7 +458,7 @@ def login(payload: LoginRequest):
         cur.execute(
             """
             SELECT user_id, university_id, full_name, email, password_hash, role, department, bio, interest_tags,
-                   is_flagged_spam
+                   profile_url, publication_links, is_flagged_spam
             FROM users
             WHERE lower(email) = lower(%s) OR university_id = %s
             LIMIT 1
@@ -535,6 +546,75 @@ def unfollow_user(user_id: UUID, user=Depends(current_user)):
     return {"status": "unfollowed", "user_id": str(user_id)}
 
 
+_URL_RE = re.compile(r"^https?://[^\s<>\"']+$", re.IGNORECASE)
+
+
+def _clean_url(value: str, field: str) -> str:
+    value = (value or "").strip()
+    if value and not re.match(r"^https?://", value, re.IGNORECASE):
+        value = "https://" + value
+    if value and not _URL_RE.match(value):
+        raise HTTPException(status_code=422, detail=f"{field}: '{value[:60]}' is not a valid web link")
+    return value
+
+
+@app.patch("/api/users/me")
+def update_my_profile(payload: ProfileUpdate, user=Depends(current_user)):
+    """Edit your own profile: name, bio, research interests, personal page and publication links (F1)."""
+    fields = payload.model_dump(exclude_unset=True)
+    if not fields:
+        return _safe_user(user)
+    updates: dict = {}
+    if fields.get("full_name") is not None:
+        updates["full_name"] = fields["full_name"].strip()
+    if "bio" in fields:
+        updates["bio"] = (fields["bio"] or "").strip()
+    if "interest_tags" in fields:
+        tags, seen = [], set()
+        for tag in fields["interest_tags"] or []:
+            tag = re.sub(r"\s+", " ", str(tag)).strip()[:60]
+            if tag and tag.lower() not in seen:
+                seen.add(tag.lower())
+                tags.append(tag)
+        updates["interest_tags"] = tags
+    if "profile_url" in fields:
+        updates["profile_url"] = _clean_url(fields["profile_url"] or "", "Personal page") or None
+    if "publication_links" in fields:
+        links = [_clean_url(link, "Publication link") for link in (fields["publication_links"] or [])]
+        updates["publication_links"] = [link for link in dict.fromkeys(links) if link]
+
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT role, department, bio, interest_tags FROM users WHERE user_id = %s::uuid",
+            (str(user["user_id"]),),
+        )
+        current = cur.fetchone()
+        # Bio and interests drive search, people matching and recommendations, so re-embed when they change.
+        if "bio" in updates or "interest_tags" in updates:
+            bio = updates.get("bio", current["bio"]) or ""
+            tags = updates.get("interest_tags", current["interest_tags"]) or []
+            text = f"{current['role'].title()} in {current['department']}. {bio} Research interests: {', '.join(tags)}."
+            updates["profile_embedding"] = embed_model.encode(text).tolist()
+        assignments = ", ".join(
+            f"{col} = %({col})s::vector" if col == "profile_embedding" else f"{col} = %({col})s" for col in updates
+        )
+        cur.execute(
+            f"""
+            UPDATE users SET {assignments}
+            WHERE user_id = %(uid)s::uuid
+            RETURNING user_id, university_id, full_name, email, role, department, bio, interest_tags,
+                      profile_url, publication_links, is_flagged_spam
+            """,
+            {**updates, "uid": str(user["user_id"])},
+        )
+        row = cur.fetchone()
+        cur.execute("UPDATE dw.dim_member SET full_name = %s WHERE user_id = %s::uuid", (row["full_name"], str(user["user_id"])))
+        conn.commit()
+        cur.close()
+    return _safe_user(row)
+
+
 @app.get("/api/users/me/follows")
 def get_my_follows(user=Depends(current_user)):
     with get_db() as conn:
@@ -566,7 +646,8 @@ def get_user_profile(user_id: UUID, viewer=Depends(current_user_optional)):
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT user_id, university_id, full_name, role, department, bio, interest_tags, profile_url, created_at
+            SELECT user_id, university_id, full_name, role, department, bio, interest_tags, profile_url,
+                   publication_links, created_at
             FROM users WHERE user_id = %s::uuid AND (is_flagged_spam = FALSE OR %s)
             """,
             (str(user_id), can_see_flagged),
@@ -1538,7 +1619,7 @@ def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1
                 FROM keyword_top
             )
             SELECT p.paper_id, p.doi, p.arxiv_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
-                   p.save_count, p.pagerank_score, p.in_chanakya_library,
+                   p.save_count, p.pagerank_score, p.in_chanakya_library, p.item_type, p.url,
                    COALESCE(ARRAY_AGG(DISTINCT ps.source_name) FILTER (WHERE ps.source_name IS NOT NULL), ARRAY['openalex']) AS sources,
                    (COALESCE(1.0 / (60 + s.sem_rank), 0) + COALESCE(1.0 / (60 + k.kw_rank), 0) + (LEAST(p.pagerank_score * 50.0, 0.15))) AS rrf_score
             FROM papers p
@@ -1693,42 +1774,120 @@ def get_recommendations(user_id: str, limit: int = Query(6, ge=1, le=50)):
         return {"recommended_papers": rec_papers, "recommended_people": rec_people}
 
 
-@app.get("/api/papers/{paper_id}/also-saved")
-def get_also_saved(paper_id: str, limit: int = Query(5, ge=1, le=20)):
-    """Association Rule Mining (FP-Growth) on user library baskets."""
-    with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT user_id, paper_id::text FROM library_saves")
-        rows = cur.fetchall()
+_also_saved_cache: dict = {"key": None, "rules": {}}
+_also_saved_lock = threading.Lock()
 
-        if not rows:
-            cur.close()
-            return []
 
+def _saved_together_rules(cur) -> dict[str, list[dict]]:
+    """
+    FP-Growth association rules over member libraries (each member's saves = one basket), mined once and
+    cached until the library changes. Returns {antecedent paper_id: [{paper_id, confidence, lift, support}]}.
+    Minimum support is two members, so a rule always reflects more than one person's taste.
+    """
+    cur.execute("SELECT COUNT(*) AS n, MAX(saved_at) AS last FROM library_saves")
+    stamp = cur.fetchone()
+    key = (stamp["n"], stamp["last"])
+    with _also_saved_lock:
+        if _also_saved_cache["key"] == key:
+            return _also_saved_cache["rules"]
+    cur.execute("SELECT user_id::text AS user_id, paper_id::text AS paper_id FROM library_saves")
+    rows = cur.fetchall()
+    by_paper: dict[str, list[dict]] = {}
+    if rows:
         df = pd.DataFrame(rows)
         basket = pd.crosstab(df["user_id"], df["paper_id"]).astype(bool)
+        # Only papers saved by 2+ members can be in a rule; dropping the rest keeps mining fast.
+        basket = basket.loc[:, basket.sum() >= 2]
+        if len(basket) >= 5 and basket.shape[1] >= 2:
+            min_support = 2 / len(basket)
+            itemsets = fpgrowth(basket, min_support=min_support, use_colnames=True, max_len=2)
+            if not itemsets.empty and (itemsets["itemsets"].apply(len) == 2).any():
+                rules = association_rules(itemsets, metric="lift", min_threshold=1.0)
+                for _, r in rules.iterrows():
+                    if len(r["antecedents"]) != 1 or len(r["consequents"]) != 1:
+                        continue
+                    (a,), (c,) = tuple(r["antecedents"]), tuple(r["consequents"])
+                    by_paper.setdefault(a, []).append({
+                        "paper_id": c,
+                        "confidence": round(float(r["confidence"]), 3),
+                        "lift": round(float(r["lift"]), 2),
+                        "support": round(float(r["support"]), 3),
+                    })
+                for lst in by_paper.values():
+                    lst.sort(key=lambda x: (-x["confidence"], -x["lift"]))
+    with _also_saved_lock:
+        _also_saved_cache.update(key=key, rules=by_paper)
+    return by_paper
 
-        recommendations = []
-        if paper_id in basket.columns and len(basket) >= 5:
-            freq_items = fpgrowth(basket, min_support=0.04, use_colnames=True)
-            if not freq_items.empty:
-                rules = association_rules(freq_items, metric="lift", min_threshold=1.1)
-                matched = rules[rules["antecedents"].apply(lambda x: paper_id in x)]
-                consequent_ids = []
-                for _, r in matched.sort_values("confidence", ascending=False).iterrows():
-                    for cid in r["consequents"]:
-                        if cid != paper_id and cid not in consequent_ids:
-                            consequent_ids.append(cid)
 
-                if consequent_ids:
-                    cur.execute(
-                        "SELECT paper_id, canonical_title, publication_year, save_count FROM papers WHERE paper_id = ANY(%s::uuid[]) LIMIT %s",
-                        (consequent_ids[:limit], limit),
-                    )
-                    recommendations = cur.fetchall()
+@app.get("/api/papers/{paper_id}/also-saved")
+def get_also_saved(paper_id: UUID, limit: int = Query(5, ge=1, le=20)):
+    """
+    "Members who saved this also saved" (F6), filled in three tiers so every library item gets an answer:
+      1. association_rule  FP-Growth rules (support >= 2 members), ranked by confidence then lift
+      2. co_saved          other papers in the libraries of members who saved this one
+      3. similar           nearest library papers by embedding (for items nobody has co-saved yet)
+    Each result says which tier produced it.
+    """
+    pid = str(paper_id)
+    with get_db() as conn:
+        cur = conn.cursor()
+        picked: list[dict] = []
+        seen = {pid}
 
+        for rule in _saved_together_rules(cur).get(pid, []):
+            if rule["paper_id"] not in seen:
+                seen.add(rule["paper_id"])
+                picked.append({**rule, "reason": "association_rule"})
+
+        if len(picked) < limit:
+            cur.execute(
+                """
+                SELECT other.paper_id::text AS paper_id, COUNT(DISTINCT other.user_id) AS shared_savers
+                FROM library_saves mine
+                JOIN library_saves other ON other.user_id = mine.user_id AND other.paper_id <> mine.paper_id
+                WHERE mine.paper_id = %s::uuid
+                GROUP BY other.paper_id
+                ORDER BY shared_savers DESC, MAX(other.saved_at) DESC
+                LIMIT %s
+                """,
+                (pid, limit * 3),
+            )
+            for row in cur.fetchall():
+                if row["paper_id"] not in seen and len(picked) < limit:
+                    seen.add(row["paper_id"])
+                    picked.append({"paper_id": row["paper_id"], "shared_savers": row["shared_savers"], "reason": "co_saved"})
+
+        if len(picked) < limit:
+            cur.execute(
+                """
+                SELECT p.paper_id::text AS paper_id,
+                       1 - (p.embedding <=> (SELECT embedding FROM papers WHERE paper_id = %s::uuid)) AS similarity
+                FROM papers p
+                WHERE p.in_chanakya_library = TRUE AND p.paper_id <> %s::uuid AND p.embedding IS NOT NULL
+                ORDER BY p.embedding <=> (SELECT embedding FROM papers WHERE paper_id = %s::uuid)
+                LIMIT %s
+                """,
+                (pid, pid, pid, limit * 2),
+            )
+            for row in cur.fetchall():
+                if row["paper_id"] not in seen and len(picked) < limit:
+                    seen.add(row["paper_id"])
+                    picked.append({"paper_id": row["paper_id"], "similarity": round(float(row["similarity"] or 0), 3), "reason": "similar"})
+
+        picked = picked[:limit]
+        details = {}
+        if picked:
+            cur.execute(
+                """
+                SELECT paper_id::text AS paper_id, canonical_title, publication_year, save_count, item_type
+                FROM papers WHERE paper_id = ANY(%s::uuid[])
+                """,
+                ([p["paper_id"] for p in picked],),
+            )
+            details = {r["paper_id"]: r for r in cur.fetchall()}
         cur.close()
-        return recommendations
+    return [{**details[p["paper_id"]], **p} for p in picked if p["paper_id"] in details]
 
 
 @app.get("/api/papers/{paper_id}")
@@ -1744,7 +1903,7 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
             )
             SELECT p.paper_id, p.doi, p.arxiv_id, p.canonical_title, p.abstract, p.authors,
                    p.publication_year, p.venue, p.topics, p.in_chanakya_library, p.pagerank_score,
-                   p.save_count, ranked.pagerank_percentile,
+                   p.save_count, ranked.pagerank_percentile, p.item_type, p.url,
                    (SELECT COUNT(*) FROM paper_citations pc WHERE pc.citing_paper_id = p.paper_id) AS cites_count,
                    (SELECT COUNT(*) FROM paper_citations pc WHERE pc.cited_paper_id = p.paper_id) AS cited_by_count,
                    EXISTS(SELECT 1 FROM library_saves ls WHERE ls.paper_id = p.paper_id AND ls.user_id = %s::uuid) AS is_saved,
@@ -1789,6 +1948,19 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
             (paper_id,),
         )
         paper["related_posts"] = cur.fetchall()
+        # Every source this paper was found in (several after entity resolution merged duplicates).
+        cur.execute(
+            """
+            SELECT source_name, external_id, source_url
+            FROM paper_sources WHERE paper_id = %s
+            ORDER BY source_name
+            """,
+            (paper_id,),
+        )
+        paper["source_records"] = [
+            {**r, "source_url": r["source_url"] if str(r["source_url"] or "").startswith("http") else None}
+            for r in cur.fetchall()
+        ]
         cur.close()
     paper["paper_id"] = str(paper["paper_id"])
     if paper.get("collection_id"):

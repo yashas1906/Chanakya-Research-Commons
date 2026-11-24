@@ -223,8 +223,23 @@ function parseAuthUser(raw: unknown): AuthUser {
     department: str(u.department),
     bio: strOrNull(u.bio),
     interest_tags: Array.isArray(u.interest_tags) ? (u.interest_tags as string[]) : null,
+    profile_url: strOrNull(u.profile_url),
+    publication_links: Array.isArray(u.publication_links) ? (u.publication_links as unknown[]).map((x) => str(x)).filter(Boolean) : [],
     is_flagged_spam: u.is_flagged_spam === true,
   };
+}
+
+export interface ProfileUpdateInput {
+  full_name?: string;
+  bio?: string;
+  interest_tags?: string[];
+  profile_url?: string;
+  publication_links?: string[];
+}
+
+/** Edit the signed-in member's own profile. Returns the updated member. */
+export async function updateProfile(input: ProfileUpdateInput): Promise<AuthUser> {
+  return parseAuthUser(await request("/users/me", { method: "PATCH", body: input }));
 }
 
 function parseAuthResponse(raw: unknown): { token: string; expires_at: string; user: AuthUser } {
@@ -567,11 +582,17 @@ export async function getAlsoSaved(paperId: string, signal?: AbortSignal): Promi
   if (!Array.isArray(raw)) return [];
   return raw.map((r): AlsoSavedPaper => {
     const u = isRecord(r) ? r : {};
+    const reason = u.reason === "association_rule" || u.reason === "co_saved" ? u.reason : "similar";
     return {
       paper_id: str(u.paper_id),
       canonical_title: str(u.canonical_title),
       publication_year: u.publication_year === null ? null : num(u.publication_year),
       save_count: num(u.save_count),
+      reason,
+      confidence: u.confidence === undefined ? undefined : num(u.confidence),
+      lift: u.lift === undefined ? undefined : num(u.lift),
+      shared_savers: u.shared_savers === undefined ? undefined : num(u.shared_savers),
+      similarity: u.similarity === undefined ? undefined : num(u.similarity),
     };
   });
 }
@@ -610,6 +631,12 @@ export async function getPaper(paperId: string, signal?: AbortSignal): Promise<P
     related_posts: posts,
     is_saved: o.is_saved === true,
     collection_id: strOrNull(o.collection_id),
+    source_records: Array.isArray(o.source_records)
+      ? o.source_records.map((row) => {
+          const item = isRecord(row) ? row : {};
+          return { source_name: str(item.source_name), external_id: strOrNull(item.external_id), source_url: strOrNull(item.source_url) };
+        })
+      : [],
   };
 }
 

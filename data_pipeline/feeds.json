@@ -1,0 +1,19 @@
+{
+  "_comment": "Curated open RSS/Atom feeds for F4 article ingestion. Only feeds published for syndication are listed; pages are never scraped. 'school' is the Chanakya school the feed's articles are filed under.",
+  "feeds": [
+    { "name": "MIT News - Research", "url": "https://news.mit.edu/rss/research", "school": "School of Engineering", "topic": "university research news" },
+    { "name": "Google Research Blog", "url": "https://research.google/blog/rss/", "school": "School of Engineering", "topic": "machine learning" },
+    { "name": "CMU Machine Learning Blog", "url": "https://blog.ml.cmu.edu/feed/", "school": "School of Engineering", "topic": "machine learning" },
+    { "name": "Berkeley AI Research Blog", "url": "https://bair.berkeley.edu/blog/feed.xml", "school": "School of Engineering", "topic": "artificial intelligence" },
+    { "name": "MIT Technology Review", "url": "https://www.technologyreview.com/feed/", "school": "School of Engineering", "topic": "technology" },
+    { "name": "ScienceDaily - Biotechnology", "url": "https://www.sciencedaily.com/rss/plants_animals/biotechnology.xml", "school": "School of Biosciences", "topic": "biotechnology" },
+    { "name": "Nature", "url": "https://www.nature.com/nature.rss", "school": "School of Biosciences", "topic": "science" },
+    { "name": "Quanta Magazine", "url": "https://www.quantamagazine.org/feed/", "school": "School of Mathematics and Natural Sciences", "topic": "mathematics and physics" },
+    { "name": "Phys.org", "url": "https://phys.org/rss-feed/", "school": "School of Mathematics and Natural Sciences", "topic": "physical sciences" },
+    { "name": "Electronic Frontier Foundation", "url": "https://www.eff.org/rss/updates.xml", "school": "School of Law, Governance and Public Policy", "topic": "digital rights" },
+    { "name": "Lawfare", "url": "https://www.lawfaremedia.org/feeds/articles", "school": "School of Law, Governance and Public Policy", "topic": "law and policy" },
+    { "name": "Knowledge at Wharton", "url": "https://knowledge.wharton.upenn.edu/feed/", "school": "School of Management Sciences", "topic": "business research" },
+    { "name": "The Conversation - Technology", "url": "https://theconversation.com/global/technology/articles.atom", "school": "School of Arts, Humanities and Social Sciences", "topic": "technology and society" },
+    { "name": "The Hindu - Science", "url": "https://www.thehindu.com/sci-tech/science/feeder/default.rss", "school": "School of Mathematics and Natural Sciences", "topic": "science news" }
+  ]
+}

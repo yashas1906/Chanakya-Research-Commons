@@ -18,7 +18,8 @@ CREATE TABLE users (
     role VARCHAR(20) CHECK (role IN ('student', 'faculty', 'researcher', 'admin')) NOT NULL,
     department VARCHAR(100) NOT NULL,
     bio TEXT,
-    profile_url TEXT,
+    profile_url TEXT,                       -- personal page
+    publication_links TEXT[] NOT NULL DEFAULT '{}',
     interest_tags TEXT[],
     profile_embedding VECTOR(384),
     is_synthetic BOOLEAN DEFAULT FALSE,
@@ -62,6 +63,8 @@ CREATE TABLE papers (
     save_count INT DEFAULT 0,
     sources JSONB DEFAULT '["openalex"]'::jsonb,
     in_chanakya_library BOOLEAN DEFAULT FALSE,
+    item_type VARCHAR(20) NOT NULL DEFAULT 'paper' CONSTRAINT papers_item_type_check CHECK (item_type IN ('paper', 'article')),
+    url TEXT,                               -- landing page for RSS articles
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -167,6 +170,41 @@ CREATE TABLE system_alerts (
     detected_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- F4/F5: Near-duplicate merge log, ingestion audit trail and incremental cursors
+CREATE TABLE paper_merges (
+    merge_id BIGSERIAL PRIMARY KEY,
+    duplicate_paper_id UUID NOT NULL,
+    canonical_paper_id UUID NOT NULL REFERENCES papers(paper_id) ON DELETE CASCADE,
+    duplicate_title TEXT,
+    minhash_jaccard FLOAT,
+    embedding_cosine FLOAT,
+    method VARCHAR(60) NOT NULL,
+    merged_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (duplicate_paper_id)
+);
+
+CREATE TABLE ingestion_runs (
+    run_id BIGSERIAL PRIMARY KEY,
+    source_name VARCHAR(50) NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    fetched_count INT DEFAULT 0,
+    inserted_count INT DEFAULT 0,
+    skipped_count INT DEFAULT 0,
+    status VARCHAR(20) DEFAULT 'running',
+    details JSONB
+);
+
+CREATE TABLE ingestion_state (
+    source_name VARCHAR(50) NOT NULL,
+    state_key TEXT NOT NULL,
+    cursor_value TEXT,
+    etag TEXT,
+    last_modified TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (source_name, state_key)
+);
+
 -- Vector & Full-Text Indexes
 CREATE INDEX idx_papers_embedding ON papers USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX idx_papers_library_embedding ON papers USING hnsw (embedding vector_cosine_ops) WHERE in_chanakya_library = TRUE;
@@ -181,6 +219,9 @@ CREATE INDEX idx_events_topic_tags ON activity_events USING GIN (topic_tags);
 CREATE INDEX idx_library_saves_user ON library_saves (user_id);
 CREATE INDEX idx_comments_post ON comments (post_id);
 CREATE INDEX idx_posts_created_at ON posts (created_at DESC);
+CREATE INDEX idx_paper_sources_paper ON paper_sources (paper_id);
+CREATE INDEX idx_papers_item_type ON papers (item_type);
+CREATE INDEX idx_library_saves_paper ON library_saves (paper_id);
 CREATE INDEX idx_system_alerts_unresolved ON system_alerts (alert_type, is_resolved) WHERE is_resolved = FALSE;
 
 -- ==========================================

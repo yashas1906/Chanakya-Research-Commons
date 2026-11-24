@@ -1,5 +1,7 @@
 import os
 import io
+import re
+import time
 import json
 import uuid
 import random
@@ -13,8 +15,12 @@ import psycopg2
 from psycopg2.extras import execute_values
 from minio import Minio
 from sentence_transformers import SentenceTransformer
-from datasketch import MinHash
 from dotenv import load_dotenv
+
+try:
+    from data_pipeline.dedup import minhash_signature
+except ImportError:
+    from dedup import minhash_signature
 
 load_dotenv()
 
@@ -184,10 +190,8 @@ def get_minio_client() -> Minio:
 
 
 def compute_minhash(text: str) -> bytes:
-    mh = MinHash(num_perm=128)
-    for token in set(text.lower().split()):
-        mh.update(token.encode("utf-8"))
-    return mh.hashvalues.tobytes()
+    """Same MinHash (word 3-shingles) the dedup step uses, so stored signatures are comparable."""
+    return minhash_signature(text, "")
 
 
 def reconstruct_abstract(inverted_index: dict) -> str:
@@ -287,10 +291,14 @@ def fetch_arxiv_papers(minio_client: Minio, per_topic: int = 5) -> list[dict]:
 
     for dept, topics in DEPARTMENTS.items():
         for topic in topics[:2]:  # Sample representative topics
-            url = f"http://export.arxiv.org/api/query?search_query=all:{requests.utils.quote(topic)}&start=0&max_results={per_topic}"
+            # arXiv asks API clients to use https and wait ~3 s between calls; without the pause it throttles
+            # and every request used to fail silently, which is why no arXiv records were loaded.
+            url = f"https://export.arxiv.org/api/query?search_query=all:%22{requests.utils.quote(topic)}%22&start=0&max_results={per_topic}"
+            time.sleep(3)
             try:
-                resp = requests.get(url, headers=headers, timeout=12)
+                resp = requests.get(url, headers=headers, timeout=30)
                 if resp.status_code != 200:
+                    print(f"Warning: arXiv returned {resp.status_code} for '{topic}'")
                     continue
                 raw_xml = resp.content
                 batch_key = f"arxiv/{topic.replace(' ', '_')}_{datetime.now(timezone.utc).strftime('%Y%m%d')}.xml"
@@ -317,7 +325,7 @@ def fetch_arxiv_papers(minio_client: Minio, per_topic: int = 5) -> list[dict]:
                     title = (title_elem.text or "").strip().replace("\n", " ")
                     abstract = (summary_elem.text or "").strip().replace("\n", " ")
                     id_url = (id_elem.text or "").strip()
-                    arxiv_id = id_url.split("/abs/")[-1].split("v")[0] if "/abs/" in id_url else id_url
+                    arxiv_id = re.sub(r"v\d+$", "", id_url.split("/abs/")[-1]) if "/abs/" in id_url else id_url
 
                     if not title or len(abstract) < 80 or arxiv_id in seen_ids:
                         continue
@@ -452,7 +460,7 @@ def main():
         if arxiv_val:
             seen_arxiv.add(arxiv_val)
 
-        mh_bytes = compute_minhash(p["title"] + " " + p["abstract"][:300])
+        mh_bytes = minhash_signature(p["title"], p["abstract"])
         emb_list = emb.tolist()
         sources_list = p.get("sources", ["openalex"])
 

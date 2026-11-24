@@ -13,7 +13,21 @@ import { SkeletonCard } from "@/components/ui/Skeleton";
 import { getAlsoSaved, getPaper } from "@/lib/api";
 import { authorNames, fmtInt, fmtPagerank } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
-import type { PaperDetail as PaperType } from "@/types/crc";
+import type { AlsoSavedPaper, PaperDetail as PaperType } from "@/types/crc";
+
+const SOURCE_LABELS: Record<string, string> = { openalex: "OpenAlex", arxiv: "arXiv", rss: "RSS feed", crossref: "Crossref", external: "External" };
+
+/** Why a "readers also saved" suggestion appears. */
+function alsoSavedReason(item: AlsoSavedPaper) {
+  if (item.reason === "association_rule") {
+    return `Saved together · ${Math.round((item.confidence ?? 0) * 100)}% of readers · lift ${(item.lift ?? 0).toFixed(1)}`;
+  }
+  if (item.reason === "co_saved") {
+    const n = item.shared_savers ?? 1;
+    return `In the library of ${n} reader${n === 1 ? "" : "s"} who saved this`;
+  }
+  return `Similar topic · ${Math.round((item.similarity ?? 0) * 100)}% match`;
+}
 
 function PaperView({ paper }: { paper: PaperType }) {
   const alsoSaved = useAsync((signal) => getAlsoSaved(paper.paper_id, signal), [paper.paper_id]);
@@ -22,13 +36,14 @@ function PaperView({ paper }: { paper: PaperType }) {
     <div className="space-y-8">
       <Link href="/library" className="inline-flex items-center gap-2 text-ui font-medium text-stone-600 hover:text-ink"><ArrowLeft className="h-4 w-4" />Library</Link>
       <header className="max-w-4xl">
-        <p className="eyebrow">Research paper</p>
+        <p className="eyebrow">{paper.item_type === "article" ? "Article" : "Research paper"}</p>
         <h1 className="mt-2 font-display text-h1 tracking-tight text-ink">{paper.canonical_title}</h1>
         <p className="mt-3 text-body text-stone-700">{authors.join(", ") || "Authors not listed"}</p>
         <p className="mt-1 text-meta text-stone-500">{[paper.venue, paper.publication_year].filter(Boolean).join(" · ") || "Publication details unavailable"}</p>
         <div className="mt-3 flex flex-wrap gap-4 text-meta">
           {paper.doi && <a href={paper.doi.startsWith("http") ? paper.doi : `https://doi.org/${paper.doi}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-stone-600 hover:text-ink">DOI <ExternalLink className="h-3.5 w-3.5" /></a>}
           {paper.arxiv_id && <a href={`https://arxiv.org/abs/${paper.arxiv_id}`} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-stone-600 hover:text-ink">arXiv:{paper.arxiv_id} <ExternalLink className="h-3.5 w-3.5" /></a>}
+          {paper.url && <a href={paper.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-stone-600 hover:text-ink">Read the original <ExternalLink className="h-3.5 w-3.5" /></a>}
         </div>
       </header>
 
@@ -46,7 +61,7 @@ function PaperView({ paper }: { paper: PaperType }) {
             {alsoSaved.loading && !alsoSaved.data ? <SkeletonCard rows={3} className="mt-4 border-0" />
               : alsoSaved.error ? <ErrorState className="mt-4" error={alsoSaved.error} onRetry={alsoSaved.reload} />
                 : !alsoSaved.data?.length ? <EmptyState title="No related saves yet" hint="More suggestions appear as readers organise their libraries." />
-                  : <ul className="mt-4 divide-y divide-stone-100">{alsoSaved.data.map((item) => <li key={item.paper_id} className="py-3"><Link href={`/papers/${item.paper_id}`} className="font-display text-h3 text-ink hover:underline">{item.canonical_title}</Link><p className="mt-1 text-meta text-stone-500">{item.publication_year ?? "Year unavailable"} · {fmtInt(item.save_count)} saves</p></li>)}</ul>}
+                  : <ul className="mt-4 divide-y divide-stone-100">{alsoSaved.data.map((item) => <li key={item.paper_id} className="py-3"><Link href={`/papers/${item.paper_id}`} className="font-display text-h3 text-ink hover:underline">{item.canonical_title}</Link><p className="mt-1 text-meta text-stone-500">{item.publication_year ?? "Year unavailable"} · {fmtInt(item.save_count)} saves</p><p className="mt-0.5 text-label font-medium text-brand-600">{alsoSavedReason(item)}</p></li>)}</ul>}
           </section>
         </main>
         <aside className="min-w-0 space-y-5">
@@ -59,6 +74,29 @@ function PaperView({ paper }: { paper: PaperType }) {
             <Link href={`/assistant?paper=${paper.paper_id}&q=${encodeURIComponent("Summarize this paper’s main contribution")}`} className="btn flex w-full">Ask the RAG assistant</Link>
             <ShareButton url={`/papers/${paper.paper_id}`} />
           </section>
+          {paper.source_records.length > 0 && (
+            <section className="card p-5">
+              <p className="eyebrow">Found in</p>
+              <p className="mt-1 text-meta text-stone-500">
+                {paper.source_records.length > 1 ? "Duplicate records from these sources were merged into this one entry." : "Where this record came from."}
+              </p>
+              <ul className="mt-3 space-y-2">
+                {paper.source_records.map((record) => (
+                  <li key={`${record.source_name}-${record.external_id}`} className="flex items-center justify-between gap-3 text-meta">
+                    <span className="font-medium text-ink">{SOURCE_LABELS[record.source_name] ?? record.source_name}</span>
+                    {record.source_url ? (
+                      <a href={record.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex min-w-0 items-center gap-1 text-stone-500 hover:text-ink">
+                        <span className="truncate">{record.external_id?.startsWith("rss:") ? "Open" : (record.external_id ?? "Open").replace(/^https?:\/\/[^/]+\//, "")}</span>
+                        <ExternalLink className="h-3.5 w-3.5 shrink-0" />
+                      </a>
+                    ) : (
+                      <span className="truncate text-stone-400">{record.external_id}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           {paper.references.length > 0 && <section className="card p-5"><p className="eyebrow">Quick references</p><p className="mt-1 text-meta text-stone-500">{paper.cites_count} references · {paper.cited_by_count} citations</p><ul className="mt-3 space-y-2">{paper.references.slice(0, 4).map((reference) => <li key={reference.paper_id}><Link href={`/papers/${reference.paper_id}`} className="text-meta text-stone-700 hover:text-ink hover:underline">{reference.canonical_title}</Link></li>)}</ul></section>}
         </aside>
       </div>

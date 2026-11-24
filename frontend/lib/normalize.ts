@@ -149,6 +149,8 @@ export function normalizePaper(raw: unknown): Paper {
     sources: Array.isArray(o.sources) ? strList(o.sources) : null,
     rrf_score: o.rrf_score === undefined ? undefined : num(o.rrf_score),
     doi: strOrNull(o.doi),
+    item_type: o.item_type === "article" ? "article" : "paper",
+    url: strOrNull(o.url),
   };
 }
 

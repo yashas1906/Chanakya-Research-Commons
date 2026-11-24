@@ -23,6 +23,8 @@ interface AuthContextValue {
   /** Opens the sign-in dialog. Safe to pass straight to onClick (non-string arguments are ignored). */
   promptLogin: (mode?: AuthMode | unknown) => void;
   closeLogin: () => void;
+  /** Replace the signed-in member after they edit their profile. */
+  updateUser: (next: AuthUser) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -130,6 +132,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setLoginOpen(true);
     },
     closeLogin: () => setLoginOpen(false),
+    updateUser: (next) => setUser(next),
   }), [user, token, status, login, register, logout, loginOpen, authMode]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

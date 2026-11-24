@@ -8,11 +8,15 @@ import networkx as nx
 import scipy.stats as stats
 import psycopg2
 from psycopg2.extras import execute_values
-from datasketch import MinHash, MinHashLSH
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.ensemble import IsolationForest
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
+
+try:  # works both as `python data_pipeline/run_dw_elt.py` and `python -m data_pipeline.run_dw_elt`
+    from data_pipeline.dedup import resolve_duplicates
+except ImportError:
+    from dedup import resolve_duplicates
 
 load_dotenv()
 DB_URL = os.getenv("DATABASE_URL", "postgresql://crc_admin:crc_secure_pass@localhost:5434/chanakya_commons")
@@ -44,32 +48,11 @@ def get_anchor_date(cur, as_of_arg: str = None) -> datetime:
 
 
 def run_minhash_deduplication(cur):
-    print("1/5 Running MinHash + LSH near-duplicate detection (F4/F5)...")
-    cur.execute("SELECT paper_id, canonical_title, minhash_signature FROM papers WHERE minhash_signature IS NOT NULL")
-    rows = cur.fetchall()
-
-    lsh = MinHashLSH(threshold=0.65, num_perm=128)
-    minhashes = {}
-
-    for paper_id, title, sig_bytes in rows:
-        mh = MinHash(num_perm=128)
-        mh.hashvalues = np.frombuffer(bytes(sig_bytes), dtype=np.uint32)
-        minhashes[str(paper_id)] = mh
-        lsh.insert(str(paper_id), mh)
-
-    detected_pairs = set()
-    for pid, mh in minhashes.items():
-        matches = lsh.query(mh)
-        for m in matches:
-            if m != pid:
-                pair = tuple(sorted([pid, m]))
-                detected_pairs.add(pair)
-
-    os.makedirs("evaluation", exist_ok=True)
-    with open("evaluation/predicted_duplicates.json", "w", encoding="utf-8") as f:
-        json.dump([{"paper_a": a, "paper_b": b} for a, b in detected_pairs], f, indent=2)
-
-    print(f"    -> Detected {len(detected_pairs)} candidate duplicate pairs (saved to evaluation/predicted_duplicates.json).")
+    """Detect near-duplicates (MinHash + LSH, verified by title and embedding) and merge them (F4/F5)."""
+    print("1/5 Running MinHash + LSH near-duplicate detection and entity resolution (F4/F5)...")
+    result = resolve_duplicates(cur)
+    print(f"    -> {result['pairs']} verified duplicate pairs; merged {result['merged']} records into "
+          f"{result['groups']} canonical papers (log: paper_merges, predictions: evaluation/predicted_duplicates.json).")
 
 
 def run_citation_pagerank(cur):

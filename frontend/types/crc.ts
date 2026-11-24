@@ -25,6 +25,10 @@ export interface Member {
   department: string;
   bio: string | null;
   interest_tags: string[] | null;
+  /** Personal page. */
+  profile_url?: string | null;
+  /** Links to the member's publications. */
+  publication_links?: string[];
   is_flagged_spam: boolean;
 }
 
@@ -103,6 +107,17 @@ export interface Paper {
   doi?: string | null;
   pagerank_percentile?: number | null;
   school?: string | null;
+  /** "article" for items ingested from RSS feeds, otherwise "paper". */
+  item_type?: "paper" | "article";
+  /** Landing page (articles). */
+  url?: string | null;
+}
+
+/** One place a paper was found (several after duplicate records were merged). */
+export interface SourceRecord {
+  source_name: string;
+  external_id: string | null;
+  source_url: string | null;
 }
 
 export interface PaperDetail extends Paper {
@@ -123,6 +138,7 @@ export interface PaperDetail extends Paper {
   }>;
   is_saved: boolean;
   collection_id: string | null;
+  source_records: SourceRecord[];
 }
 
 export interface HomePayload {
@@ -157,6 +173,12 @@ export interface AlsoSavedPaper {
   canonical_title: string;
   publication_year: number | null;
   save_count: number;
+  /** Which tier produced the suggestion. */
+  reason: "association_rule" | "co_saved" | "similar";
+  confidence?: number;
+  lift?: number;
+  shared_savers?: number;
+  similarity?: number;
 }
 
 export interface Collection {

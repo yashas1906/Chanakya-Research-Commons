@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Cake, Check, Flame, MessageSquare, Share2, UserPlus } from "lucide-react";
+import { BookOpenText, Cake, Check, ExternalLink, Flame, Globe, MessageSquare, Pencil, Share2, UserPlus } from "lucide-react";
 import { AppearanceSetting } from "@/components/profile/AppearanceSetting";
+import { EditProfileDialog } from "@/components/profile/EditProfileDialog";
 import { ProfileCollections } from "@/components/profile/ProfileCollections";
 import { PostCard } from "@/components/feed/PostCard";
 import { PaperRow } from "@/components/library/PaperRow";
@@ -27,6 +28,17 @@ function joined(iso: string | null | undefined) {
   return Number.isNaN(d.getTime()) ? "Recently" : d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+/** "orcid.org/0000-…" style label for a publication link. */
+function linkLabel(url: string) {
+  try {
+    const u = new URL(url);
+    const path = u.pathname.replace(/\/$/, "");
+    return `${u.hostname.replace(/^www\./, "")}${path.length > 1 ? path : ""}`;
+  } catch {
+    return url;
+  }
+}
+
 function ProfileSkeleton() {
   return (
     <div className="space-y-4" aria-hidden>
@@ -46,6 +58,7 @@ export function ProfileView({ userId }: { userId: string }) {
   const [following, setFollowing] = useState(false);
   const [followers, setFollowers] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
 
   const data = profile.data;
   const isSelf = !!user && user.user_id === userId;
@@ -154,7 +167,10 @@ export function ProfileView({ userId }: { userId: string }) {
           <div className="flex gap-2">
             <button type="button" onClick={share} className="btn"><Share2 className="h-4 w-4" /> Share</button>
             {isSelf ? (
-              <Link href="/feed?compose=1" className="btn-primary">New post</Link>
+              <>
+                <button type="button" onClick={() => setEditing(true)} className="btn"><Pencil className="h-4 w-4" /> Edit profile</button>
+                <Link href="/feed?compose=1" className="btn-primary">New post</Link>
+              </>
             ) : (
               <button type="button" onClick={toggleFollow} disabled={busy} aria-pressed={following} className={cx(following ? "btn" : "btn-primary")}>
                 {following ? <><Check className="h-4 w-4" /> Following</> : <><UserPlus className="h-4 w-4" /> Follow</>}
@@ -221,6 +237,27 @@ export function ProfileView({ userId }: { userId: string }) {
               <li className="flex items-center gap-2"><Cake className="h-4 w-4 text-stone-400" /> Joined {joined(person.created_at)}</li>
               <li className="flex items-center gap-2"><MessageSquare className="h-4 w-4 text-stone-400" /> <span className="num">{fmtCount(stats.comment_count)}</span> comments · <span className="num">{fmtCount(stats.following_count)}</span> following</li>
             </ul>
+            {(person.profile_url || (person.publication_links?.length ?? 0) > 0) && (
+              <div className="space-y-2">
+                <h3 className="text-label font-semibold text-stone-500">Links</h3>
+                <ul className="space-y-1.5 text-meta">
+                  {person.profile_url && (
+                    <li>
+                      <a href={person.profile_url} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-center gap-2 text-brand-700 hover:underline">
+                        <Globe className="h-4 w-4 shrink-0" /><span className="truncate">Personal page</span><ExternalLink className="h-3 w-3 shrink-0" />
+                      </a>
+                    </li>
+                  )}
+                  {(person.publication_links ?? []).map((link) => (
+                    <li key={link}>
+                      <a href={link} target="_blank" rel="noopener noreferrer" className="inline-flex max-w-full items-center gap-2 text-brand-700 hover:underline" title={link}>
+                        <BookOpenText className="h-4 w-4 shrink-0" /><span className="truncate">{linkLabel(link)}</span><ExternalLink className="h-3 w-3 shrink-0" />
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
             {interests.length > 0 && (
               <div>
                 <h3 className="mb-2 text-label font-semibold text-stone-500">Research interests</h3>
@@ -231,6 +268,9 @@ export function ProfileView({ userId }: { userId: string }) {
           {isSelf && <AppearanceSetting />}
         </aside>
       </div>
+      {isSelf && user && (
+        <EditProfileDialog open={editing} onClose={() => setEditing(false)} user={{ ...user, ...person }} onSaved={() => profile.reload()} />
+      )}
     </div>
   );
 }

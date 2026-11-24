@@ -12,6 +12,8 @@ import { authorsLine, cx, fmtInt, fmtPct, shortSchool } from "@/lib/format";
 import Link from "next/link";
 import type { Paper, PersonMatch, PostHit } from "@/types/crc";
 
+const SOURCE_LABELS: Record<string, string> = { openalex: "OpenAlex", arxiv: "arXiv", rss: "RSS feed", crossref: "Crossref", external: "External" };
+
 /* ----------------------------- shared pieces ----------------------------- */
 
 function PanelEmpty({ what }: { what: string }) {
@@ -106,9 +108,20 @@ function ExternalItem({ p }: { p: Paper }) {
         </div>
       )}
       <div className="mt-2.5 flex flex-wrap items-center gap-2">
+        {p.item_type === "article" && <Pill>Article</Pill>}
         {p.sources?.map((s) => (
-          <Pill key={s}>{s}</Pill>
+          <Pill key={s}>{SOURCE_LABELS[s.toLowerCase()] ?? s}</Pill>
         ))}
+        {p.item_type === "article" && p.url && (
+          <a
+            href={p.url}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1 text-meta font-medium text-stone-600 underline decoration-stone-300 underline-offset-2 hover:text-ink"
+          >
+            Original <ExternalLink className="h-3 w-3" />
+          </a>
+        )}
         {href && (
           <a
             href={href}
