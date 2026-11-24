@@ -388,9 +388,8 @@ def register(payload: RegisterRequest):
         salt = bcrypt.gensalt()
         pw_hash = "bcrypt$" + bcrypt.hashpw(payload.password.encode("utf-8"), salt).decode("utf-8")
 
-        # Self-registration always creates a student. Faculty / researcher / admin access is
-        # granted by the university (an admin updates users.role); a client-supplied role is ignored.
-        self_role = "student"
+        # Self-registration sets student, faculty, or researcher; admin access is restricted.
+        self_role = payload.role if payload.role in ("student", "faculty", "researcher") else "student"
 
         # Initial profile embedding computed from role, department, tags & bio
         bio_text = f"{self_role.title()} in {payload.department}. {payload.bio or ''}"
@@ -415,6 +414,20 @@ def register(payload: RegisterRequest):
             ),
         )
         new_user = cur.fetchone()
+
+        # Keep Star Schema member dimension in sync
+        try:
+            cur.execute(
+                """
+                INSERT INTO dw.dim_member (user_id, full_name, role, department, is_active)
+                VALUES (%s::uuid, %s, %s, %s, TRUE)
+                ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role, department = EXCLUDED.department, full_name = EXCLUDED.full_name
+                """,
+                (new_user["user_id"], new_user["full_name"], new_user["role"], new_user["department"])
+            )
+        except Exception:
+            pass
+
         conn.commit()
         cur.close()
 

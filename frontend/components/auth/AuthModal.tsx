@@ -57,6 +57,7 @@ export function AuthModal() {
   const [identifier, setIdentifier] = useState("");
   const [passcode, setPasscode] = useState("");
   const [fullName, setFullName] = useState("");
+  const [role, setRole] = useState<"student" | "faculty" | "researcher">("student");
   const [universityId, setUniversityId] = useState("");
   const [email, setEmail] = useState("");
   const [department, setDepartment] = useState<string>(SCHOOLS[0]);
@@ -104,6 +105,7 @@ export function AuthModal() {
           university_id: universityId.trim(),
           email: email.trim(),
           password,
+          role,
           department,
           interest_tags: interests.split(",").map((tag) => tag.trim().toLowerCase()).filter(Boolean),
         });
@@ -238,16 +240,28 @@ export function AuthModal() {
                 </label>
                 <div className="grid gap-4 sm:grid-cols-2">
                   <label className="flex flex-col gap-1.5 text-meta font-semibold text-stone-700">
+                    Role / Identity
+                    <select
+                      value={role}
+                      onChange={(event) => setRole(event.target.value as "student" | "faculty" | "researcher")}
+                      className="input font-normal capitalize"
+                    >
+                      <option value="student">Student</option>
+                      <option value="faculty">Faculty</option>
+                      <option value="researcher">Researcher</option>
+                    </select>
+                  </label>
+                  <label className="flex flex-col gap-1.5 text-meta font-semibold text-stone-700">
                     University ID
                     <input value={universityId} onChange={(event) => setUniversityId(event.target.value)} className="input font-normal" placeholder="24CU1234" required minLength={3} />
                   </label>
-                  <label className="flex flex-col gap-1.5 text-meta font-semibold text-stone-700">
-                    Department
-                    <select value={department} onChange={(event) => setDepartment(event.target.value)} className="input font-normal">
-                      {SCHOOLS.map((school) => <option key={school}>{school}</option>)}
-                    </select>
-                  </label>
                 </div>
+                <label className="flex flex-col gap-1.5 text-meta font-semibold text-stone-700">
+                  Department / School
+                  <select value={department} onChange={(event) => setDepartment(event.target.value)} className="input font-normal">
+                    {SCHOOLS.map((school) => <option key={school}>{school}</option>)}
+                  </select>
+                </label>
                 <label className="flex flex-col gap-1.5 text-meta font-semibold text-stone-700">
                   University email
                   <input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} className="input font-normal" placeholder="name@chanakyauniversity.edu.in" required />

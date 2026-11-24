@@ -240,12 +240,12 @@ export interface RegisterInput {
   email: string;
   password: string;
   department: string;
+  role?: "student" | "faculty" | "researcher";
   interest_tags?: string[];
 }
 
-/** Self-registration always creates a student; the backend ignores any requested role. */
 export async function register(input: RegisterInput): Promise<{ token: string; expires_at: string; user: AuthUser }> {
-  return parseAuthResponse(await request("/auth/register", { method: "POST", body: { ...input, role: "student" } }));
+  return parseAuthResponse(await request("/auth/register", { method: "POST", body: { role: "student", ...input } }));
 }
 
 export async function getMe(signal?: AbortSignal): Promise<AuthUser> {
