@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { FileText } from "lucide-react";
 import { PostActionBar } from "@/components/feed/PostActionBar";
 import { UnderReviewNote } from "@/components/feed/UnderReviewNote";
+import { FollowUserButton } from "@/components/ui/FollowUserButton";
 import { EditedMark, PostMenu, type PostEdit } from "@/components/feed/PostMenu";
 import { Avatar } from "@/components/ui/Section";
 import { Tag } from "@/components/ui/Pill";
@@ -14,7 +15,18 @@ import { relTime, shortSchool } from "@/lib/format";
 import { useToast } from "@/components/ui/Toast";
 import type { FeedPost } from "@/types/crc";
 
-export function PostCard({ post: initial, onTagClick, onDeleted }: { post: FeedPost; onTagClick?: (tag: string) => void; onDeleted?: (postId: string) => void }) {
+export function PostCard({
+  post: initial,
+  onTagClick,
+  onDeleted,
+  reason,
+}: {
+  post: FeedPost;
+  onTagClick?: (tag: string) => void;
+  onDeleted?: (postId: string) => void;
+  /** Why the post is in this member's feed ("From someone you follow" …). */
+  reason?: string | null;
+}) {
   const { user, promptLogin } = useAuth();
   const toast = useToast();
   const [override, setOverride] = useState<PostEdit | null>(null);
@@ -58,12 +70,14 @@ export function PostCard({ post: initial, onTagClick, onDeleted }: { post: FeedP
   const flair = post.tags?.[0];
   return (
     <article className="group card card-hover relative min-w-0 overflow-hidden px-4 pb-3 pt-3.5 sm:px-5">
+      {reason && <p className="relative z-10 mb-2 text-label font-semibold uppercase tracking-wide text-stone-400">{reason}</p>}
       <header className="relative z-10 flex min-w-0 items-center gap-2.5">
         <Link href={`/u/${post.author_id}`} className="shrink-0" aria-label={`Open ${post.author_name}'s profile`}>
           <Avatar name={post.author_name} size={32} />
         </Link>
         <p className="min-w-0 flex-1 truncate text-meta text-stone-500">
           <Link href={`/u/${post.author_id}`} className="font-semibold text-ink hover:text-brand-700 hover:underline">{post.author_name}</Link>
+          <FollowUserButton userId={post.author_id} name={post.author_name} compact className="ml-1 align-middle" />
           <span className="mx-1.5 text-stone-300">•</span>
           {shortSchool(post.author_dept)}
           <span className="mx-1.5 text-stone-300">•</span>

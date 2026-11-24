@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CheckCircle2, Clock, Flame, TrendingUp, X } from "lucide-react";
+import { CheckCircle2, Clock, Flame, Loader2, TrendingUp, Users, X } from "lucide-react";
+import { FollowUserButton } from "@/components/ui/FollowUserButton";
+import type { FeedPost } from "@/types/crc";
 import { Composer, type AttachedPaper } from "@/components/feed/Composer";
 import { FeedRail } from "@/components/feed/FeedRail";
 import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
@@ -18,14 +20,25 @@ import { useAsync } from "@/lib/hooks";
 import { useAuth } from "@/context/AuthContext";
 import { SCHOOLS } from "@/types/crc";
 
-type FeedSort = "best" | "new" | "top";
-const isSort = (value: string | null): value is FeedSort => value === "best" || value === "new" || value === "top";
+type FeedSort = "best" | "following" | "new" | "top";
+const isSort = (value: string | null): value is FeedSort => value === "best" || value === "following" || value === "new" || value === "top";
 
-const SORTS: Array<{ id: FeedSort; label: string; icon: typeof Flame }> = [
+const SORTS: Array<{ id: FeedSort; label: string; icon: typeof Flame; signedInOnly?: boolean }> = [
   { id: "best", label: "Best", icon: Flame },
+  { id: "following", label: "Following", icon: Users, signedInOnly: true },
   { id: "new", label: "New", icon: Clock },
   { id: "top", label: "Top", icon: TrendingUp },
 ];
+const PAGE = 40;
+const MAX_POSTS = 200;
+
+/** Why a post is in a signed-in member's "Best" or "Following" feed. */
+function feedReason(post: FeedPost, sort: FeedSort, signedIn: boolean): string | null {
+  if (!signedIn || (sort !== "best" && sort !== "following")) return null;
+  if (post.author_followed) return "From someone you follow";
+  if (post.topic_followed) return "On a topic you follow";
+  return sort === "best" ? "Recommended for you" : null;
+}
 
 function PostSkeleton() {
   return (
@@ -66,13 +79,17 @@ export function FeedWorkspace() {
   const composeRequested = params.get("compose") === "1";
   const attachId = params.get("attach");
   const sortParam = params.get("sort");
-  const sort: FeedSort = isSort(sortParam) ? sortParam : "best";
+  // "Following" needs an account; logged-out visitors fall back to Best.
+  const sort: FeedSort = isSort(sortParam) && (sortParam !== "following" || !!userId) ? sortParam : "best";
   const school = params.get("school") ?? "ALL";
   const topic = params.get("topic");
   const [attach, setAttach] = useState<AttachedPaper | null>(null);
   const [justPosted, setJustPosted] = useState<string | null>(null);
 
-  const feed = useAsync((signal) => getFeed(userId, signal, sort), [userId, sort]);
+  // Load more grows the list a page at a time; it starts over when the sort or member changes.
+  const [limit, setLimit] = useState(PAGE);
+  useEffect(() => setLimit(PAGE), [sort, userId]);
+  const feed = useAsync((signal) => getFeed(userId, signal, sort, limit), [userId, sort, limit], true, `feed:${userId ?? "anon"}:${sort}:${limit}`);
   const recs = useAsync((signal) => getRecommendations(userId!, signal), [userId], !!userId);
   const posts = useMemo(() => feed.data ?? [], [feed.data]);
 
@@ -193,7 +210,7 @@ export function FeedWorkspace() {
       <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
           <div id="compose">
-            <Composer onPosted={onPosted} autoOpen={composeRequested} onOpened={consumeCompose} attach={attach} />
+            <Composer onPosted={onPosted} autoOpen={composeRequested} onOpened={consumeCompose} attach={attach} topicSuggestions={topics.map(([name]) => name)} />
             {justPosted && (
               <div role="status" className="mt-3 flex items-center gap-2.5 rounded-xl bg-sage-50 px-4 py-2.5 text-meta text-sage-700 ring-1 ring-inset ring-sage-200 animate-fade">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
@@ -208,7 +225,7 @@ export function FeedWorkspace() {
 
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-1 rounded-full border border-stone-200 bg-paper p-1" role="group" aria-label="Sort posts">
-              {SORTS.map(({ id, label, icon: Icon }) => (
+              {SORTS.filter((s) => !s.signedInOnly || userId).map(({ id, label, icon: Icon }) => (
                 <button
                   key={id}
                   type="button"
@@ -240,6 +257,26 @@ export function FeedWorkspace() {
             <div className="space-y-3" role="status" aria-label="Loading feed"><PostSkeleton /><PostSkeleton /><PostSkeleton /></div>
           ) : feed.error ? (
             <div className="card"><ErrorState error={feed.error} onRetry={feed.reload} /></div>
+          ) : filtered.length === 0 && sort === "following" && posts.length === 0 ? (
+            <div className="card">
+              <EmptyState
+                icon={<Users className="h-6 w-6" />}
+                title="Nothing from people or topics you follow yet"
+                hint="Follow scholars (the Follow button next to any name) or topics (the + on any topic) and their posts collect here."
+                action={
+                  <div className="flex flex-col items-center gap-3">
+                    {(recs.data?.people ?? []).slice(0, 3).map((person) => (
+                      <span key={person.user_id} className="flex items-center gap-2 text-meta">
+                        <Link href={`/u/${person.user_id}`} className="font-semibold text-ink hover:underline">{person.full_name}</Link>
+                        <span className="text-stone-500">{shortSchool(person.department)}</span>
+                        <FollowUserButton userId={person.user_id} name={person.full_name} compact />
+                      </span>
+                    ))}
+                    <button type="button" className="btn" onClick={() => setSort("best")}>Back to Best</button>
+                  </div>
+                }
+              />
+            </div>
           ) : filtered.length === 0 ? (
             <div className="card">
               <EmptyState
@@ -250,7 +287,17 @@ export function FeedWorkspace() {
             </div>
           ) : (
             <div className="space-y-3">
-              {filtered.map((post) => <PostCard key={post.post_id} post={post} onTagClick={setTopic} />)}
+              {filtered.map((post) => <PostCard key={post.post_id} post={post} onTagClick={setTopic} reason={feedReason(post, sort, !!userId)} />)}
+            </div>
+          )}
+
+          {/* The filters above apply to the posts loaded so far; load more to search further back. */}
+          {!feed.error && posts.length >= limit && limit < MAX_POSTS && (
+            <div className="flex flex-col items-center gap-1 pt-1">
+              <button type="button" className="btn" disabled={feed.loading} onClick={() => setLimit((n) => Math.min(MAX_POSTS, n + PAGE))}>
+                {feed.loading && <Loader2 className="h-4 w-4 animate-spin" />} Load more posts
+              </button>
+              <span className="num text-label text-stone-400">Showing the {posts.length} most {sort === "new" ? "recent" : "relevant"} posts</span>
             </div>
           )}
         </div>

@@ -18,11 +18,20 @@ export function AnalyticsWorkspace({ embedded = false, basePath = "/analytics" }
   const params = useSearchParams();
   const router = useRouter();
   const [tab, setTab] = useState<AnalyticsTab>(() => isTab(params.get("tab")) ? params.get("tab") as AnalyticsTab : "activity");
+  // Follow ?tab= when it changes from outside (the browser Back button).
+  const urlTab = params.get("tab");
+  useEffect(() => {
+    if (isTab(urlTab)) setTab(urlTab);
+  }, [urlTab]);
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
+    const current = query.get("tab");
+    if (current === tab) return;
     query.set("tab", tab);
-    const next = `?${query.toString()}`;
-    if (window.location.search !== next) router.replace(`${basePath}${next}`, { scroll: false });
+    const next = `${basePath}?${query.toString()}`;
+    // Filling in the default tab replaces; a tab the admin clicks gets its own history entry.
+    if (current === null) router.replace(next, { scroll: false });
+    else router.push(next, { scroll: false });
   }, [tab, router, basePath]);
   const tabs = [
     { id: "activity" as const, label: "Activity" },

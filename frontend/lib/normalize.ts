@@ -208,6 +208,7 @@ export function normalizeSearch(raw: unknown, fallbackQuery: string): SearchResp
     query: str(o.query, fallbackQuery),
     related_topics: normalizeRelatedTopics(related, 1.5),
     panels: {
+      papers: Array.isArray(p.papers) ? paperList(p.papers) : [...paperList(library), ...paperList(external)].sort((a, b) => (b.rrf_score ?? 0) - (a.rrf_score ?? 0)),
       library: paperList(library),
       external: paperList(external),
       people: people.map((r): PersonMatch => {
@@ -220,6 +221,7 @@ export function normalizeSearch(raw: unknown, fallbackQuery: string): SearchResp
           bio: strOrNull(u.bio),
           interest_tags: Array.isArray(u.interest_tags) ? strList(u.interest_tags) : null,
           similarity: num(u.similarity),
+          is_following: u.is_following === true,
         };
       }),
       posts: posts.map((r): PostHit => {
@@ -233,6 +235,11 @@ export function normalizeSearch(raw: unknown, fallbackQuery: string): SearchResp
           author_name: str(u.author_name),
           department: str(u.department),
           similarity: num(u.similarity),
+          author_id: strOrNull(u.author_id) ?? undefined,
+          created_at: strOrNull(u.created_at),
+          comment_count: u.comment_count === undefined ? undefined : num(u.comment_count),
+          attached_paper_id: strOrNull(u.attached_paper_id),
+          attached_paper_title: strOrNull(u.attached_paper_title),
         };
       }),
     },
@@ -263,6 +270,8 @@ export function normalizeFeed(raw: unknown): FeedPost[] {
       attached_paper_id: strOrNull(u.attached_paper_id),
       relevance_score: u.relevance_score === undefined ? undefined : num(u.relevance_score),
       under_review: u.under_review === true,
+      author_followed: u.author_followed === true,
+      topic_followed: u.topic_followed === true,
     };
   });
 }

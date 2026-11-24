@@ -787,45 +787,55 @@ def list_users(department: Optional[str] = None, limit: int = Query(30, ge=1, le
 @app.get("/api/feed")
 def get_feed(
     user_id: Optional[str] = None,
-    limit: int = Query(25, ge=1, le=100),
-    sort: str = Query("best", pattern="^(best|new|top)$"),
+    limit: int = Query(25, ge=1, le=200),
+    sort: str = Query("best", pattern="^(best|new|top|following)$"),
     user=Depends(current_user_optional),
 ):
+    """
+    Sorts: best (followed people > followed topics > profile similarity, signed-in only), new, top, and
+    following (only posts by people or on topics the member follows, newest first). Each row says why it is
+    there for this member: `author_followed`, `topic_followed`, and `relevance_score`.
+    """
     acting_id = str(user["user_id"]) if user else None
+    if sort == "following" and not acting_id:
+        raise HTTPException(status_code=401, detail="Sign in to see posts from people and topics you follow")
     with get_db() as conn:
         cur = conn.cursor()
         cur.execute(
             """
-            SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at, p.edited_at,
-                   u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
-                   pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
-                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
-                   COALESCE(mine.value, 0) AS my_vote,
-                   (p.is_flagged_spam OR u.is_flagged_spam) AS under_review,
-                   CASE WHEN followed.followee_id IS NOT NULL THEN 2.0 ELSE 0.0 END +
-                     CASE WHEN EXISTS (SELECT 1 FROM topic_follows tf WHERE tf.user_id = %s::uuid AND tf.topic_tag = ANY(p.tags)) THEN 1.5 ELSE 0.0 END +
+            WITH feed AS (
+              SELECT p.post_id, p.author_id, p.title, p.body, p.tags, p.upvote_count, p.created_at, p.edited_at,
+                     u.full_name AS author_name, u.department AS author_dept, u.role AS author_role,
+                     pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
+                     (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
+                     COALESCE(mine.value, 0) AS my_vote,
+                     (p.is_flagged_spam OR u.is_flagged_spam) AS under_review,
+                     (followed.followee_id IS NOT NULL) AS author_followed,
+                     EXISTS (SELECT 1 FROM topic_follows tf WHERE tf.user_id = %(me)s::uuid AND tf.topic_tag = ANY(p.tags)) AS topic_followed,
                      CASE WHEN me.profile_embedding IS NOT NULL AND p.post_embedding IS NOT NULL
-                       THEN (1 - (p.post_embedding <=> me.profile_embedding)) ELSE 0.0 END AS relevance_score
-            FROM posts p
-            JOIN users u ON p.author_id = u.user_id
-            LEFT JOIN papers pa ON p.attached_paper_id = pa.paper_id
-            LEFT JOIN users me ON me.user_id = %s::uuid
-            LEFT JOIN user_follows followed ON followed.follower_id = %s::uuid AND followed.followee_id = p.author_id
-            LEFT JOIN post_upvotes mine ON mine.post_id = p.post_id AND mine.user_id = %s::uuid
-            -- Flagged posts stay hidden from everyone except their author, who sees them marked "under review".
-            WHERE (p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE) OR p.author_id = me.user_id
+                       THEN (1 - (p.post_embedding <=> me.profile_embedding)) ELSE 0.0 END AS similarity
+              FROM posts p
+              JOIN users u ON p.author_id = u.user_id
+              LEFT JOIN papers pa ON p.attached_paper_id = pa.paper_id
+              LEFT JOIN users me ON me.user_id = %(me)s::uuid
+              LEFT JOIN user_follows followed ON followed.follower_id = %(me)s::uuid AND followed.followee_id = p.author_id
+              LEFT JOIN post_upvotes mine ON mine.post_id = p.post_id AND mine.user_id = %(me)s::uuid
+              -- Flagged posts stay hidden from everyone except their author, who sees them marked "under review".
+              WHERE (p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE) OR p.author_id = me.user_id
+            )
+            SELECT *,
+                   (CASE WHEN author_followed THEN 2.0 ELSE 0.0 END + CASE WHEN topic_followed THEN 1.5 ELSE 0.0 END + similarity) AS relevance_score
+            FROM feed
+            WHERE %(sort)s <> 'following' OR author_followed OR topic_followed
             ORDER BY
-              CASE WHEN %s = 'top' THEN p.upvote_count END DESC,
-              CASE WHEN %s = 'best' AND %s::uuid IS NOT NULL THEN
-                CASE WHEN followed.followee_id IS NOT NULL THEN 2.0 ELSE 0.0 END +
-                  CASE WHEN EXISTS (SELECT 1 FROM topic_follows tf WHERE tf.user_id = %s::uuid AND tf.topic_tag = ANY(p.tags)) THEN 1.5 ELSE 0.0 END +
-                  CASE WHEN me.profile_embedding IS NOT NULL AND p.post_embedding IS NOT NULL
-                    THEN (1 - (p.post_embedding <=> me.profile_embedding)) ELSE 0.0 END
+              CASE WHEN %(sort)s = 'top' THEN upvote_count END DESC,
+              CASE WHEN %(sort)s = 'best' AND %(me)s::uuid IS NOT NULL THEN
+                CASE WHEN author_followed THEN 2.0 ELSE 0.0 END + CASE WHEN topic_followed THEN 1.5 ELSE 0.0 END + similarity
               END DESC,
-              p.created_at DESC
-            LIMIT %s
+              created_at DESC
+            LIMIT %(limit)s
             """,
-            (acting_id, acting_id, acting_id, acting_id, sort, sort, acting_id, acting_id, limit),
+            {"me": acting_id, "sort": sort, "limit": limit},
         )
         rows = cur.fetchall()
         cur.close()
@@ -1825,43 +1835,64 @@ def _deduplicate_search_results(papers: list[dict]) -> list[dict]:
 # F5: Unified 4-Panel Hybrid Search (RRF + PageRank)
 # ==========================================
 @app.get("/api/search")
-def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1, le=50), user=Depends(current_user_optional)):
+def unified_search(
+    q: str = Query(..., min_length=2),
+    limit: int = Query(8, ge=1, le=50),
+    paper_limit: Optional[int] = Query(None, ge=1, le=60),
+    log: bool = True,
+    user=Depends(current_user_optional),
+):
+    """
+    One search box, four kinds of result. `limit` sizes the people and posts lists, `paper_limit` the paper lists
+    (defaults to `limit`). `papers` is one ranked list over the whole corpus; `chanakya_library` and
+    `external_sources` are the same ranking restricted to each side. `log=false` skips the search event
+    (used when the page only asks for more results of a search already logged).
+    """
+    paper_limit = paper_limit or limit
+    viewer_id = str(user["user_id"]) if user else None
     with get_db() as conn:
         cur = conn.cursor()
         q_vec = vec_literal(q)
 
-        # Panels 1 & 2: hybrid semantic + keyword ranking (Reciprocal Rank Fusion) with a PageRank prior.
+        # Papers: hybrid semantic + keyword ranking (Reciprocal Rank Fusion) with a PageRank prior.
         # The SQL lives in services/search_service.py so evaluate_all.py scores exactly this ranking.
+        cur.execute(hybrid_paper_sql(library_filter=False), hybrid_params(q_vec, q, paper_limit * 2, in_library=None))
+        all_papers = _deduplicate_search_results(cur.fetchall())[:paper_limit]
         paper_sql = hybrid_paper_sql(library_filter=True)
-        cur.execute(paper_sql, hybrid_params(q_vec, q, limit * 2, in_library=False))
+        cur.execute(paper_sql, hybrid_params(q_vec, q, paper_limit * 2, in_library=False))
         raw_external = cur.fetchall()
-        cur.execute(paper_sql, hybrid_params(q_vec, q, limit * 2, in_library=True))
+        cur.execute(paper_sql, hybrid_params(q_vec, q, paper_limit * 2, in_library=True))
         raw_library = cur.fetchall()
 
-        external_papers = _deduplicate_search_results(raw_external)[:limit]
-        library_papers = _deduplicate_search_results(raw_library)[:limit]
+        external_papers = _deduplicate_search_results(raw_external)[:paper_limit]
+        library_papers = _deduplicate_search_results(raw_library)[:paper_limit]
 
-        # Panel 3: University Members working in that area
+        # University members working in that area (with whether the viewer already follows them).
         cur.execute(
             """
-            SELECT user_id, full_name, role, department, bio, interest_tags,
-                   (1 - (profile_embedding <=> %s::vector)) AS similarity
-            FROM users
-            WHERE is_flagged_spam = FALSE
-            ORDER BY profile_embedding <=> %s::vector
+            SELECT u.user_id, u.full_name, u.role, u.department, u.bio, u.interest_tags,
+                   (1 - (u.profile_embedding <=> %s::vector)) AS similarity,
+                   EXISTS (SELECT 1 FROM user_follows uf WHERE uf.follower_id = %s::uuid AND uf.followee_id = u.user_id) AS is_following
+            FROM users u
+            WHERE u.is_flagged_spam = FALSE
+            ORDER BY u.profile_embedding <=> %s::vector
             LIMIT %s
             """,
-            (q_vec, q_vec, limit),
+            (q_vec, viewer_id, q_vec, limit),
         )
         people = cur.fetchall()
 
-        # Panel 4: Related Posts & Discussions
+        # Discussions, with their author and the paper they discuss.
         cur.execute(
             """
-            SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, u.full_name AS author_name, u.department,
+            SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, p.created_at, p.author_id,
+                   u.full_name AS author_name, u.department,
+                   pa.paper_id AS attached_paper_id, pa.canonical_title AS attached_paper_title,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
                    (1 - (p.post_embedding <=> %s::vector)) AS similarity
             FROM posts p
             JOIN users u ON p.author_id = u.user_id
+            LEFT JOIN papers pa ON pa.paper_id = p.attached_paper_id
             WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
             ORDER BY p.post_embedding <=> %s::vector
             LIMIT %s
@@ -1870,11 +1901,12 @@ def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1
         )
         posts = cur.fetchall()
 
-        cur.execute(
-            "INSERT INTO activity_events (user_id, event_type, search_query) VALUES (%s::uuid, 'search', %s)",
-            (str(user["user_id"]) if user else None, q),
-        )
-        conn.commit()
+        if log:
+            cur.execute(
+                "INSERT INTO activity_events (user_id, event_type, search_query) VALUES (%s::uuid, 'search', %s)",
+                (viewer_id, q),
+            )
+            conn.commit()
         cur.close()
 
     # Search Expansion Hook: Match query against antecedents in high-lift rules (lift >= 1.5)
@@ -1884,6 +1916,7 @@ def unified_search(q: str = Query(..., min_length=2), limit: int = Query(8, ge=1
         "query": q,
         "related_topics": related_topics,
         "panels": {
+            "papers": all_papers,
             "external_sources": external_papers,
             "chanakya_library": library_papers,
             "people": people,

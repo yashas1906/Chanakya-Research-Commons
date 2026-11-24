@@ -412,8 +412,9 @@ pip install psycopg2-binary minio sentence-transformers datasketch requests pyth
 python db/apply_migrations.py
 python data_pipeline/seed_database.py
 python data_pipeline/improve_data.py
+python -m data_pipeline.fix_post_papers --apply
 ```
-*Applies every migration in `db/migrations/`, downloads the embedding model, fetches papers from OpenAlex and arXiv, archives raw responses to MinIO, seeds PostgreSQL, then replaces placeholder names and comments with realistic ones.*
+*Applies every migration in `db/migrations/`, downloads the embedding model, fetches papers from OpenAlex and arXiv, archives raw responses to MinIO, seeds PostgreSQL, then replaces placeholder names and comments with realistic ones. The last step re-attaches any seeded discussion post to a paper on its own topics (posts keep their tags, so the planted topic spikes are unchanged); without `--apply` it only reports what it would change.*
 
 ### Step 3b: Ingest More Content (Stage 3, optional but recommended)
 ```powershell

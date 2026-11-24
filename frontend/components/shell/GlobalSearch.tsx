@@ -144,10 +144,10 @@ export function GlobalSearch({ autoFocus = false }: { autoFocus?: boolean } = {}
               setDismissed(true);
               inputRef.current?.focus();
             }}
-            title="Search everywhere instead"
+            title={`Typing filters the ${scope.label} page. Click to search the whole site instead.`}
             className="inline-flex shrink-0 items-center gap-1 rounded-full bg-brand-50 py-0.5 pl-2.5 pr-1.5 text-label font-semibold text-brand-700 transition hover:bg-brand-100"
           >
-            In {scope.label}
+            Filtering {scope.label}
             <X className="h-3 w-3" aria-hidden />
             <span className="sr-only">Search everywhere instead</span>
           </button>
@@ -192,6 +192,11 @@ export function GlobalSearch({ autoFocus = false }: { autoFocus?: boolean } = {}
           onMouseDown={(event) => event.preventDefault()}
           className="absolute inset-x-0 top-full z-50 mt-2 animate-pop overflow-hidden rounded-2xl border border-stone-200 bg-paper p-2 shadow-pop"
         >
+          {scoped && scope && (
+            <p className="px-3 pb-1.5 pt-1 text-label text-stone-500">
+              Typing filters this {scope.label.toLowerCase()} page as you go. To search papers, people and discussions everywhere, pick the option below or press Shift+Enter.
+            </p>
+          )}
           {trimmed ? (
             <button type="button" onClick={() => goGlobal(trimmed)} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-stone-100">
               <Search className="h-4 w-4 shrink-0 text-brand-600" />

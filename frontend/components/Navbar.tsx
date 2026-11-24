@@ -158,10 +158,12 @@ export function Navbar() {
                       href={href}
                       aria-label={label}
                       aria-current={active ? "page" : undefined}
-                      className={iconButton(active)}
+                      className={cx(iconButton(active), "xl:w-auto xl:gap-2 xl:px-3")}
                     >
-                      <Icon className="h-5 w-5" strokeWidth={1.9} />
-                      <Tip>{label}</Tip>
+                      <Icon className="h-5 w-5 shrink-0" strokeWidth={1.9} />
+                      {/* Wide screens show the word; narrow ones keep the icon and show the word on hover. */}
+                      <span aria-hidden className="hidden text-meta font-semibold xl:inline">{label}</span>
+                      <span className="xl:hidden"><Tip>{label}</Tip></span>
                     </Link>
                   );
                 },

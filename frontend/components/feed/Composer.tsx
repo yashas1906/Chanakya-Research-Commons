@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FileText, Loader2, Paperclip, PenLine, Search, X } from "lucide-react";
 import { Avatar } from "@/components/ui/Section";
+import { TagInput } from "@/components/feed/TagInput";
 import { createPost, describeError, isAbort, suggestPapers, type PaperSuggestion } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useSaves } from "@/lib/saves-context";
@@ -112,18 +113,21 @@ export function Composer({
   autoOpen = false,
   onOpened,
   attach = null,
+  topicSuggestions = [],
 }: {
   onPosted: (postId: string) => void;
   autoOpen?: boolean;
   onOpened?: () => void;
   /** Paper to pre-attach (from "Start a discussion" on a paper page). */
   attach?: AttachedPaper | null;
+  /** Topics already used on the Commons, offered while typing tags. */
+  topicSuggestions?: string[];
 }) {
   const { user, promptLogin } = useAuth();
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
-  const [tags, setTags] = useState("");
+  const [tags, setTags] = useState<string[]>([]);
   const [paper, setPaper] = useState<AttachedPaper | null>(null);
   const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -149,7 +153,7 @@ export function Composer({
   const reset = () => {
     setTitle("");
     setBody("");
-    setTags("");
+    setTags([]);
     setPaper(null);
     setPicking(false);
     setErr(null);
@@ -166,7 +170,7 @@ export function Composer({
         author_id: user.user_id,
         title: title.trim(),
         body: body.trim(),
-        tags: tags.split(",").map((t) => t.trim().toLowerCase()).filter(Boolean),
+        tags,
         attached_paper_id: paper?.paper_id ?? null,
       });
       reset();
@@ -242,13 +246,7 @@ export function Composer({
           </button>
         )}
 
-        <input
-          value={tags}
-          onChange={(e) => setTags(e.target.value)}
-          placeholder="Topics, comma-separated: data mining, graph neural networks"
-          aria-label="Topics"
-          className="input"
-        />
+        <TagInput value={tags} onChange={setTags} suggestions={topicSuggestions} />
         {err && <p role="alert" className="text-meta text-terracotta-600">{err}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={reset} className="btn">Cancel</button>

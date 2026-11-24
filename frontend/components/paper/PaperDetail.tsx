@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect } from "react";
 import { ExternalLink, MessageSquarePlus, Sparkles } from "lucide-react";
 import { BackLink } from "@/components/ui/BackLink";
+import { useAuth } from "@/context/AuthContext";
 import { SaveToCollection } from "@/components/paper/SaveToCollection";
 import { NoteEditor } from "@/components/library/NoteEditor";
 import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
@@ -132,7 +133,9 @@ function PaperView({ paper }: { paper: PaperType }) {
 }
 
 export function PaperDetail({ paperId }: { paperId: string }) {
-  const { data, error, loading, reload } = useAsync((signal) => getPaper(paperId, signal), [paperId]);
+  const { user } = useAuth();
+  // Per member: the response carries their saved state and private note.
+  const { data, error, loading, reload } = useAsync((signal) => getPaper(paperId, signal), [paperId, user?.user_id], true, `paper:${paperId}:${user?.user_id ?? "anon"}`);
   useEffect(() => {
     if (data) document.title = `${data.canonical_title} · Chanakya Research Commons`;
   }, [data]);

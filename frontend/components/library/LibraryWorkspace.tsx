@@ -134,7 +134,7 @@ export function LibraryWorkspace() {
 
   const openAdd = () => (authStatus === "authenticated" ? setAddOpen(true) : promptLogin("login"));
 
-  const holdings = useAsync((signal) => getHoldings(HOLDINGS_LIMIT, signal), []);
+  const holdings = useAsync((signal) => getHoldings(HOLDINGS_LIMIT, signal), [], true, "library:holdings");
 
   const fullHoldings = useMemo(() => withPercentiles(holdings.data ?? []), [holdings.data]);
   const fullSaves = useMemo(() => withPercentiles(saves.saves), [saves.saves]);

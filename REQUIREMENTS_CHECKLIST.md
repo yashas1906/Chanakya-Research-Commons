@@ -217,26 +217,26 @@ Shell: the navbar has icon-only links (Home, Feed, Library, Assistant, plus Anal
 - [x] Recommended: the "How this list is made" box is a one-line summary that expands on click.
 - [x] Paper page: sidebar split into **Your actions** (save + collection, note, ask the assistant, discuss this paper, share) and **About this record** (prestige, PageRank, saved by, sources, references). On phones the actions card sits above the abstract.
 
-### Phase 8: Search redesign
-- [ ] Replace the 2×2 grid of scroll boxes with **one results page and tabs: All · Papers · People · Discussions**.
-- [ ] Papers: one ranked list (library and external merged), with an "In Chanakya library" badge and a source filter (All / Library / External).
-- [ ] "All" tab: top 5 papers, top 3 people and top 3 discussions, each with "See all →".
-- [ ] Remove the internal scroll boxes; use page scroll and "Load more".
-- [ ] People results: link to `/u/{id}` and add a Follow button. Discussion results: show the attached paper.
-- [ ] Tab and query in the URL (`/search?q=&tab=`) so Back works.
-- [ ] Scores (RRF, similarity) behind a "Why this result" tooltip rather than raw numbers.
+### Phase 8: Search redesign ✅ done (25 Nov 2026)
+- [x] The 2×2 grid of scroll boxes is replaced by **one results page with tabs: All · Papers · People · Discussions** (counts on each tab).
+- [x] Papers: one ranked list over the whole corpus (new `panels.papers` from `/api/search`, same hybrid ranking with no library filter), each with an "In Chanakya library" or "Open literature" badge, and a source filter (All sources / Chanakya library / Open literature).
+- [x] "All" tab: top 5 papers, top 3 people and top 3 discussions, each with "See all →".
+- [x] No inner scroll boxes; the Papers tab has "Load more papers" (20 → 60). `/api/search?log=false` keeps "load more" from counting as a new search event.
+- [x] People results link to `/u/{id}` and have a Follow button; discussion results show author (linked), date, comments and the attached paper.
+- [x] Query, tab and source are in the URL (`/search?q=&tab=&source=`), so Back works.
+- [x] Scores (RRF, similarity) are behind a "Why this result" hint.
 
-### Phase 9: Feed and social
-- [ ] **Follow from posts:** Follow / Following button on `PostCard`, on the `PostThread` author card, and in "Scholars you may know".
-- [ ] **"Following" feed:** a Following sort or filter with posts from people and topics you follow; empty state linking to suggested people.
-- [ ] Mark posts in "Best" with why they appear ("From someone you follow", "Topic you follow", "Recommended").
-- [ ] Feed loads only 40 posts and the rail counts only those 40; add "Load more" and label the counts honestly.
-- [ ] Composer: tag input as chips with suggestions from existing topics.
-- [ ] Data: fix the 120 seeded posts whose title does not match their attached paper, and make templated bodies match the paper's school and topic.
+### Phase 9: Feed and social ✅ done (25 Nov 2026)
+- [x] **Follow from posts:** Follow / Following next to the author on every `PostCard`, on the `PostThread` author card (name now links to the profile), in "Scholars you may know" and in search People. One shared store (`lib/member-follows.ts`) keeps every button and the profile page in step.
+- [x] **"Following" feed:** new sort `following` (`/api/feed?sort=following`, login required) with posts from people and topics you follow; its empty state suggests people to follow.
+- [x] Posts in Best and Following say why they appear ("From someone you follow", "On a topic you follow", "Recommended for you"); the API returns `author_followed` and `topic_followed`.
+- [x] "Load more posts" (40 at a time, up to 200; API limit raised to 200). The rail says its counts are for the posts shown.
+- [x] Composer: topics are chips (Enter or comma adds, Backspace removes, up to 6) with suggestions from topics already used.
+- [x] Data: the 120 "mismatched" posts were the planted spam posts (kept for the spam ground truth; their authors are flagged, so they are hidden). The real problem was that 443 of 480 normal seeded posts discussed a random paper outside their own topics. `data_pipeline/fix_post_papers.py --apply` re-attached all 443 to a paper sharing their topics (tags, authors, votes and dates unchanged) and recomputed their embeddings; the seed now picks on-topic papers too.
 
-### Phase 10: Navigation and polish
-- [ ] Navbar is icon-only; add text labels on wide screens (or a visible label for the active page).
-- [ ] One global search entry; label the scope chip clearly when the bar filters the current page on `/feed` and `/library`.
-- [ ] Keep scroll position and loaded data when going Back to a list (cache `useAsync` results per URL).
-- [ ] Consistent empty, loading and error states; every logged-out action (Start a discussion, Save, Follow) opens login and returns to the same place.
-- [ ] Re-check every link and button in C1 after Phases 6–9, and add frontend smoke tests for these flows.
+### Phase 10: Navigation and polish ✅ done (25 Nov 2026)
+- [x] Navbar shows text labels next to the icons on wide screens; narrow screens keep icons with hover labels.
+- [x] Scope chip now reads "Filtering Library" / "Filtering Feed", and the search dropdown explains that typing filters the page and how to search everywhere (option or Shift+Enter).
+- [x] `useAsync` keeps the last response per key for the tab's life; feed, library holdings, search, paper and post pages render instantly on Back (so the browser can restore scroll) and refresh quietly. Analytics sub-tabs now push history too.
+- [x] Logged-out Save, Follow (members and topics), Post and Start a discussion all open login on the same page.
+- [x] `npm run smoke` (`frontend/scripts/smoke.mjs`) checks the API flows above and opens 20 pages, including a real paper, post and profile. 27/27 passed against a production build on 25 Nov. It checks that pages render, not what a browser shows after scripts run; a click-through in a browser is still worth doing before the demo.

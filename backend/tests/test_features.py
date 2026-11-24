@@ -161,7 +161,7 @@ def test_search_has_four_panels_and_logs_the_member(client, member):
     r = client.get("/api/search", params={"q": "protein folding"}, headers=member["headers"])
     assert r.status_code == 200
     panels = r.json()["panels"]
-    assert set(panels) == {"external_sources", "chanakya_library", "people", "posts"}
+    assert set(panels) == {"papers", "external_sources", "chanakya_library", "people", "posts"}
     assert panels["external_sources"] or panels["chanakya_library"]
     first = (panels["external_sources"] or panels["chanakya_library"])[0]
     assert "protein" in first["canonical_title"].lower() or any("protein" in t.lower() for t in first["topics"] or [])
@@ -170,6 +170,40 @@ def test_search_has_four_panels_and_logs_the_member(client, member):
         cur.execute("SELECT 1 FROM activity_events WHERE event_type = 'search' AND user_id = %s::uuid AND search_query = %s",
                     (member["user_id"], "protein folding"))
         assert cur.fetchone()
+
+
+def test_search_merged_papers_people_and_discussion_details(client, member):
+    r = client.get("/api/search", params={"q": "graph neural networks", "limit": 5, "paper_limit": 12, "log": "false"}, headers=member["headers"])
+    assert r.status_code == 200, r.text
+    panels = r.json()["panels"]
+    papers = panels["papers"]
+    assert 0 < len(papers) <= 12 and len(panels["people"]) <= 5
+    assert all("in_chanakya_library" in p for p in papers)
+    scores = [p["rrf_score"] for p in papers]
+    assert scores == sorted(scores, reverse=True)                            # one ranking, best first
+    assert len({p["paper_id"] for p in papers}) == len(papers)               # no duplicates across sources
+    assert all("is_following" in u for u in panels["people"])
+    if panels["posts"]:
+        assert {"author_id", "attached_paper_id", "attached_paper_title", "comment_count"} <= set(panels["posts"][0])
+    with _db() as conn, conn.cursor() as cur:                                 # log=false: "load more" is not a new search
+        cur.execute("SELECT 1 FROM activity_events WHERE event_type = 'search' AND user_id = %s::uuid AND search_query = %s",
+                    (member["user_id"], "graph neural networks"))
+        assert cur.fetchone() is None
+
+
+# ---------------------------------------------------------------- F2 feed: following and reasons (Phase 9)
+
+def test_following_feed_and_reasons(client, member, other_member):
+    assert client.get("/api/feed", params={"sort": "following"}).status_code == 401
+    assert client.get("/api/feed", params={"sort": "following"}, headers=member["headers"]).json() == []   # follows nobody yet
+
+    post_id = str(client.post("/api/posts", json={"title": "From someone you follow", "body": "b"}, headers=other_member["headers"]).json()["post_id"])
+    assert client.post(f"/api/users/{other_member['user_id']}/follow", headers=member["headers"]).status_code == 200
+    following = client.get("/api/feed", params={"sort": "following", "limit": 50}, headers=member["headers"]).json()
+    assert [p["post_id"] for p in following] == [post_id]
+    assert following[0]["author_followed"] is True
+    best = client.get("/api/feed", params={"sort": "best", "limit": 5}, headers=member["headers"]).json()
+    assert best[0]["post_id"] == post_id                                      # followed authors rank first in Best
 
 
 # ---------------------------------------------------------------- F6 recommendations

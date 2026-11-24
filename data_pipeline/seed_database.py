@@ -656,7 +656,9 @@ def main():
     post_items = []
     for idx in range(600):
         u = random.choice(users[-5:]) if idx < 120 else random.choice(users[:-5])
-        p = random.choice(all_fetched)
+        # Spam posts attach any paper; research posts discuss a paper in the author's own topics when one exists.
+        on_topic = [] if u["is_spam"] else [q for q in all_fetched if set(q["topics"]) & set(u["tags"])]
+        p = random.choice(on_topic or all_fetched)
         pid = str(uuid.uuid4())
         if u["is_spam"]:
             ts = now - timedelta(minutes=random.randint(1, 120))

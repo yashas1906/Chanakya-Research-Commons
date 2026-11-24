@@ -306,8 +306,19 @@ export async function getMembers(limit = 60, signal?: AbortSignal): Promise<Memb
 
 /* --------------------------------- search ------------------------------- */
 
-export async function search(q: string, signal?: AbortSignal): Promise<SearchResponse> {
-  const raw = await request("/search", { query: { q, limit: 8 }, signal });
+/**
+ * Unified search. `paperLimit` sizes the paper lists, `limit` the people and discussion lists.
+ * `log: false` asks for more results of a search that was already logged.
+ */
+export async function search(
+  q: string,
+  signal?: AbortSignal,
+  opts: { limit?: number; paperLimit?: number; log?: boolean } = {},
+): Promise<SearchResponse> {
+  const raw = await request("/search", {
+    query: { q, limit: opts.limit ?? 8, paper_limit: opts.paperLimit ?? opts.limit ?? 8, log: opts.log === false ? "false" : undefined },
+    signal,
+  });
   return normalizeSearch(raw, q);
 }
 
@@ -353,8 +364,15 @@ export async function unfollowUser(userId: string): Promise<void> {
 
 /* ---------------------------------- feed -------------------------------- */
 
-export async function getFeed(userId: string | null, signal?: AbortSignal, sort = "best"): Promise<FeedPost[]> {
-  return normalizeFeed(await request("/feed", { query: { user_id: userId, limit: 40, sort }, signal }));
+export async function getFeed(userId: string | null, signal?: AbortSignal, sort = "best", limit = 40): Promise<FeedPost[]> {
+  return normalizeFeed(await request("/feed", { query: { user_id: userId, limit, sort }, signal }));
+}
+
+/** IDs of the members the signed-in member follows. */
+export async function getMyFollowedMembers(signal?: AbortSignal): Promise<string[]> {
+  const raw = await request("/users/me/follows", { signal });
+  const list = isRecord(raw) && Array.isArray(raw.followed_users) ? raw.followed_users : [];
+  return list.map((u) => (isRecord(u) ? str(u.user_id) : "")).filter(Boolean);
 }
 
 export async function createPost(input: {

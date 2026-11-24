@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/Skeleton";
 import { useToast } from "@/components/ui/Toast";
 import { useAuth } from "@/context/AuthContext";
 import { describeError, followUser, getProfile, unfollowUser } from "@/lib/api";
+import { noteMemberFollow } from "@/lib/member-follows";
 import { cx, fmtCount, relTime, shortSchool } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { useSaves } from "@/lib/saves-context";
@@ -81,6 +82,7 @@ export function ProfileView({ userId }: { userId: string }) {
     setFollowers((n) => Math.max(0, n + (next ? 1 : -1)));
     try {
       await (next ? followUser(userId) : unfollowUser(userId));
+      noteMemberFollow(userId, next);
     } catch (e) {
       setFollowing(!next);
       setFollowers((n) => Math.max(0, n + (next ? -1 : 1)));

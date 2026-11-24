@@ -210,6 +210,7 @@ export interface PersonMatch {
   bio: string | null;
   interest_tags: string[] | null;
   similarity: number;
+  is_following?: boolean;
 }
 
 export interface RecommendedPerson {
@@ -240,6 +241,9 @@ export interface FeedPost {
   relevance_score?: number;
   /** Flagged by the spam check; only the author sees these, so the card says so. */
   under_review?: boolean;
+  /** Why the post is in this member's feed. */
+  author_followed?: boolean;
+  topic_followed?: boolean;
 }
 
 export interface PostDetail extends FeedPost {
@@ -271,6 +275,11 @@ export interface PostHit {
   author_name: string;
   department: string;
   similarity: number;
+  author_id?: string;
+  created_at?: string | null;
+  comment_count?: number;
+  attached_paper_id?: string | null;
+  attached_paper_title?: string | null;
 }
 
 export interface Comment {
@@ -299,6 +308,8 @@ export interface SearchResponse {
   query: string;
   related_topics: RelatedTopic[];
   panels: {
+    /** One ranked list over the whole corpus (library and external together). */
+    papers: Paper[];
     library: Paper[];
     external: Paper[];
     people: PersonMatch[];

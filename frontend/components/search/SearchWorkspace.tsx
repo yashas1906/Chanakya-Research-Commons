@@ -1,103 +1,180 @@
 "use client";
 
-import { useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useState } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { ArrowRight, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/Section";
 import { RelatedTopics } from "@/components/search/RelatedTopics";
 import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
-import { ExternalPanel, LibraryPanel, PeoplePanel, PostsPanel } from "@/components/search/ResultPanels";
-import { SkeletonCard } from "@/components/ui/Skeleton";
+import { DiscussionResult, PaperResult, PersonResult } from "@/components/search/ResultPanels";
+import { SkeletonList } from "@/components/ui/Skeleton";
 import { EmptyState, ErrorState } from "@/components/ui/States";
+import { Tabs } from "@/components/ui/Tabs";
 import { search } from "@/lib/api";
+import { cx } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 
 const EXAMPLES = ["graph neural networks", "federated learning", "protein structure prediction", "contract law and AI"];
 
+type Tab = "all" | "papers" | "people" | "discussions";
+type Source = "all" | "library" | "external";
+const isTab = (v: string | null): v is Tab => v === "all" || v === "papers" || v === "people" || v === "discussions";
+const isSource = (v: string | null): v is Source => v === "all" || v === "library" || v === "external";
+
+const PAPER_PAGE = 20;
+const PAPER_MAX = 60;
+const OTHER_LIMIT = 10;
+const SOURCE_LABELS: Record<Source, string> = { all: "All sources", library: "Chanakya library", external: "Open literature" };
+
+function Section({ title, count, onSeeAll, children }: { title: string; count: number; onSeeAll?: () => void; children: React.ReactNode }) {
+  return (
+    <section className="card overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-stone-100 px-4 py-3 sm:px-5">
+        <h2 className="font-display text-[17px] text-ink">{title} <span className="num ml-1 text-meta text-stone-400">{count}</span></h2>
+        {onSeeAll && (
+          <button type="button" onClick={onSeeAll} className="inline-flex items-center gap-1 text-meta font-semibold text-brand-600 hover:underline">
+            See all <ArrowRight className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 export function SearchWorkspace() {
   const router = useRouter();
+  const pathname = usePathname();
   const params = useSearchParams();
   const q = (params.get("q") ?? "").trim();
+  const tabParam = params.get("tab");
+  const tab: Tab = isTab(tabParam) ? tabParam : "all";
+  const sourceParam = params.get("source");
+  const source: Source = isSource(sourceParam) ? sourceParam : "all";
+
+  // "Load more" asks for a longer paper list; the first page of a query is the only one logged as a search.
+  const [paperLimit, setPaperLimit] = useState(PAPER_PAGE);
+  useEffect(() => setPaperLimit(PAPER_PAGE), [q]);
 
   const enabled = q.length >= 2;
-  const { data, error, loading, reload } = useAsync((signal) => search(q, signal), [q], enabled);
-
-  const go = useCallback(
-    (next: string) => {
-      const t = next.trim();
-      if (t.length < 2) return;
-      router.push(`/search?q=${encodeURIComponent(t)}`);
-    },
-    [router],
+  const { data, error, loading, reload } = useAsync(
+    (signal) => search(q, signal, { limit: OTHER_LIMIT, paperLimit, log: paperLimit === PAPER_PAGE }),
+    [q, paperLimit],
+    enabled,
+    `search:${q}:${paperLimit}`,
   );
 
+  const go = useCallback((next: string) => {
+    const t = next.trim();
+    if (t.length < 2) return;
+    router.push(`/search?q=${encodeURIComponent(t)}`);
+  }, [router]);
+
+  const setParams = useCallback((patch: Record<string, string | null>) => {
+    const next = new URLSearchParams(params.toString());
+    Object.entries(patch).forEach(([k, v]) => (v === null ? next.delete(k) : next.set(k, v)));
+    router.push(`${pathname}?${next.toString()}`, { scroll: false });
+  }, [params, pathname, router]);
+  const setTab = (next: Tab) => setParams({ tab: next === "all" ? null : next });
+
   const showing = enabled && data && data.query === q ? data : null;
-  const total = showing
-    ? showing.panels.library.length + showing.panels.external.length + showing.panels.people.length + showing.panels.posts.length
-    : 0;
+  const papers = showing ? (source === "library" ? showing.panels.library : source === "external" ? showing.panels.external : showing.panels.papers) : [];
+  const people = showing?.panels.people ?? [];
+  const posts = showing?.panels.posts ?? [];
+  const allPapers = showing?.panels.papers ?? [];
+  const total = allPapers.length + people.length + posts.length;
+
+  if (!enabled) {
+    return (
+      <div className="space-y-6">
+        <PageHeader eyebrow="Search" title="Search the research commons" description="One search across papers (the Chanakya library and open literature), university scholars and campus discussions." />
+        <div className="flex flex-wrap gap-2">
+          <span className="self-center text-meta text-stone-500">Try</span>
+          {EXAMPLES.map((example) => (
+            <button key={example} type="button" onClick={() => go(example)} className="rounded-full border border-stone-200 bg-paper px-3 py-2 text-ui text-stone-700 hover:bg-sunken">{example}</button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const tabs = [
+    { id: "all" as const, label: "All", count: showing ? total : undefined },
+    { id: "papers" as const, label: "Papers", count: showing ? allPapers.length : undefined },
+    { id: "people" as const, label: "People", count: showing ? people.length : undefined },
+    { id: "discussions" as const, label: "Discussions", count: showing ? posts.length : undefined },
+  ];
+
+  const canLoadMore = !!showing && papers.length >= paperLimit && paperLimit < PAPER_MAX;
 
   return (
-    <div className="space-y-8">
-      {!enabled && (
-        <PageHeader
-          eyebrow="Hybrid search"
-          title="Search the research commons"
-          description="Results span Chanakya holdings, open literature, university scholars and campus discussions. Use the persistent search field above to begin."
-        />
-      )}
-
-      {showing && (
-        <div className="space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-meta text-stone-600">Results for <span className="font-medium text-ink">“{showing.query}”</span></p>
-            <FollowTopicButton topic={showing.query} />
-          </div>
-          <RelatedTopics
-            topics={showing.related_topics}
-            onPivot={(t) => go(t)}
-            onRefine={(t) => go(`${q} ${t}`)}
-          />
+    <div className="space-y-5">
+      <header className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="font-display text-h2 text-ink">Results for “{q}”</h1>
+          <FollowTopicButton topic={q} />
         </div>
-      )}
-      {!enabled && <div className="flex flex-wrap gap-2">
-        <span className="self-center text-meta text-stone-500">Try</span>
-        {EXAMPLES.map((example) => <button key={example} type="button" onClick={() => go(example)} className="rounded-full border border-stone-200 bg-paper px-3 py-2 text-ui text-stone-700 hover:bg-sunken">{example}</button>)}
-      </div>}
+        {showing && <RelatedTopics topics={showing.related_topics} onPivot={(t) => go(t)} onRefine={(t) => go(`${q} ${t}`)} />}
+      </header>
 
-      {enabled && (
-        <section aria-live="polite" aria-busy={loading}>
-          {error ? (
-            <div className="card">
-              <ErrorState error={error} onRetry={reload} />
-            </div>
-          ) : !showing ? (
-            <div className="grid gap-5 lg:grid-cols-2">
-              {[0, 1, 2, 3].map((i) => (
-                <SkeletonCard key={i} rows={3} />
+      <Tabs tabs={tabs} value={tab} onChange={setTab} />
+
+      <section aria-live="polite" aria-busy={loading}>
+        {error ? (
+          <div className="card"><ErrorState error={error} onRetry={reload} /></div>
+        ) : !showing ? (
+          <div className="card"><SkeletonList rows={5} /></div>
+        ) : total === 0 ? (
+          <div className="card"><EmptyState title={`Nothing found for “${q}”`} hint="Papers, people and discussions all came back empty. Try fewer or more general words." /></div>
+        ) : tab === "all" ? (
+          <div className="animate-rise space-y-5">
+            <Section title="Papers" count={allPapers.length} onSeeAll={allPapers.length > 5 ? () => setTab("papers") : undefined}>
+              {allPapers.length ? <ul className="divide-y divide-stone-100">{allPapers.slice(0, 5).map((p) => <PaperResult key={p.paper_id} paper={p} />)}</ul> : <EmptyState className="py-8" title="No papers matched" />}
+            </Section>
+            <Section title="People" count={people.length} onSeeAll={people.length > 3 ? () => setTab("people") : undefined}>
+              {people.length ? <ul className="divide-y divide-stone-100">{people.slice(0, 3).map((u) => <PersonResult key={u.user_id} person={u} />)}</ul> : <EmptyState className="py-8" title="No scholars matched" />}
+            </Section>
+            <Section title="Discussions" count={posts.length} onSeeAll={posts.length > 3 ? () => setTab("discussions") : undefined}>
+              {posts.length ? <ul className="divide-y divide-stone-100">{posts.slice(0, 3).map((p) => <DiscussionResult key={p.post_id} post={p} />)}</ul> : <EmptyState className="py-8" title="No discussions matched" />}
+            </Section>
+          </div>
+        ) : tab === "papers" ? (
+          <div className="animate-rise space-y-3">
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Paper source">
+              {(Object.keys(SOURCE_LABELS) as Source[]).map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setParams({ source: key === "all" ? null : key })}
+                  aria-pressed={source === key}
+                  className={cx("rounded-full px-3.5 py-1.5 text-meta font-semibold transition", source === key ? "bg-brand-600 text-white" : "bg-stone-100 text-stone-600 hover:bg-stone-200")}
+                >
+                  {SOURCE_LABELS[key]}
+                </button>
               ))}
+              <span className="num ml-1 text-meta text-stone-500">Top {papers.length} {papers.length === 1 ? "match" : "matches"}</span>
             </div>
-          ) : total === 0 ? (
-            <div className="card">
-              <EmptyState
-                title={`Nothing found for “${q}”`}
-                hint="The library, external index, people and posts all came back empty. Try fewer or more general words."
-              />
+            <div className="card overflow-hidden">
+              {papers.length ? <ul className="divide-y divide-stone-100">{papers.map((p) => <PaperResult key={p.paper_id} paper={p} />)}</ul> : <EmptyState className="py-10" title={`No ${source === "library" ? "library" : "open-literature"} papers matched`} hint="Try another source or broader words." />}
+              {canLoadMore && (
+                <div className="flex justify-center border-t border-stone-100 px-4 py-4">
+                  <button type="button" className="btn" disabled={loading} onClick={() => setPaperLimit((n) => Math.min(PAPER_MAX, n + PAPER_PAGE))}>
+                    {loading && <Loader2 className="h-4 w-4 animate-spin" />} Load more papers
+                  </button>
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="animate-rise space-y-3">
-              <p className="num text-meta text-stone-500">
-                {total} results for <span className="font-medium text-stone-800">“{showing.query}”</span> across four sources
-              </p>
-              <div className="grid gap-5 lg:grid-cols-2">
-                <LibraryPanel papers={showing.panels.library} />
-                <ExternalPanel papers={showing.panels.external} />
-                <PeoplePanel people={showing.panels.people} />
-                <PostsPanel posts={showing.panels.posts} />
-              </div>
-            </div>
-          )}
-        </section>
-      )}
-
+          </div>
+        ) : tab === "people" ? (
+          <div className="card animate-rise overflow-hidden">
+            {people.length ? <ul className="divide-y divide-stone-100">{people.map((u) => <PersonResult key={u.user_id} person={u} />)}</ul> : <EmptyState className="py-10" title="No scholars matched" />}
+          </div>
+        ) : (
+          <div className="card animate-rise overflow-hidden">
+            {posts.length ? <ul className="divide-y divide-stone-100">{posts.map((p) => <DiscussionResult key={p.post_id} post={p} />)}</ul> : <EmptyState className="py-10" title="No discussions matched" />}
+          </div>
+        )}
+      </section>
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { FileText } from "lucide-react";
 import { BackLink } from "@/components/ui/BackLink";
 import { UnderReviewNote } from "@/components/feed/UnderReviewNote";
+import { FollowUserButton } from "@/components/ui/FollowUserButton";
 import { EditedMark, PostMenu, type PostEdit } from "@/components/feed/PostMenu";
 import { CommentThread } from "@/components/feed/CommentThread";
 import { PostActionBar } from "@/components/feed/PostActionBar";
@@ -27,7 +28,7 @@ export function PostThread({ postId }: { postId: string }) {
   const toast = useToast();
   const router = useRouter();
   const [override, setOverride] = useState<PostEdit | null>(null);
-  const { data: loaded, error, loading, reload } = useAsync((signal) => getPost(postId, signal), [postId]);
+  const { data: loaded, error, loading, reload } = useAsync((signal) => getPost(postId, signal), [postId, user?.user_id], true, `post:${postId}:${user?.user_id ?? "anon"}`);
   const post = loaded ? { ...loaded, ...(override ?? {}) } : loaded;
   const topic = post?.tags?.[0] ?? null;
   const more = useAsync((signal) => getFeed(user?.user_id ?? null, signal, "new"), [topic, user?.user_id], !!topic);
@@ -116,7 +117,7 @@ export function PostThread({ postId }: { postId: string }) {
         </main>
         <aside className="min-w-0 space-y-5">
           <Panel eyebrow="Author" title="About the researcher">
-            <div className="space-y-3 p-4"><div className="flex items-center gap-3"><Avatar name={post.author.full_name} size={42} /><div className="min-w-0"><p className="font-medium text-ink">{post.author.full_name}</p><RoleBadge role={post.author.role} /></div></div><p className="text-meta text-stone-600">{shortSchool(post.author.department)} · {post.author.post_count} posts</p>{post.author.bio && <p className="text-body leading-relaxed text-stone-600">{post.author.bio}</p>}{post.author.interest_tags && <div className="flex flex-wrap gap-2">{post.author.interest_tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</div>}</div>
+            <div className="space-y-3 p-4"><div className="flex items-center gap-3"><Link href={`/u/${post.author.user_id}`} className="shrink-0"><Avatar name={post.author.full_name} size={42} /></Link><div className="min-w-0"><Link href={`/u/${post.author.user_id}`} className="font-medium text-ink hover:text-brand-700 hover:underline">{post.author.full_name}</Link><div><RoleBadge role={post.author.role} /></div></div></div><FollowUserButton userId={post.author.user_id} name={post.author.full_name} className="w-full" /><p className="text-meta text-stone-600">{shortSchool(post.author.department)} · {post.author.post_count} posts</p>{post.author.bio && <p className="text-body leading-relaxed text-stone-600">{post.author.bio}</p>}{post.author.interest_tags && <div className="flex flex-wrap gap-2">{post.author.interest_tags.map((tag) => <Tag key={tag}>{tag}</Tag>)}</div>}</div>
           </Panel>
           {topic && <Panel eyebrow="More in this topic" title={topic}>
             {more.loading && !more.data ? <SkeletonCard rows={3} className="border-0" />

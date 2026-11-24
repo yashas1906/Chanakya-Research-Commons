@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { ChevronDown, Flame, PenLine, TrendingUp } from "lucide-react";
 import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
+import { FollowUserButton } from "@/components/ui/FollowUserButton";
 import { getTrends } from "@/lib/api";
 import { useAsync } from "@/lib/hooks";
 import { useTopicFollows } from "@/lib/topic-follows";
@@ -51,7 +52,8 @@ export function FeedRail({
           <span className="relative -mt-6 flex h-12 w-12 items-center justify-center rounded-xl border-4 border-paper bg-saffron-400 font-display text-lg text-deep">R</span>
           <h2 className="mt-2 font-display text-[17px] text-ink">Research feed</h2>
           <p className="mt-1 text-meta leading-relaxed text-stone-600">Findings, questions and papers from scholars across Chanakya University.</p>
-          <dl className="mt-3 grid grid-cols-3 gap-2 border-y border-stone-100 py-3 text-center">
+          <p className="mt-3 text-label text-stone-400">In the posts shown below</p>
+          <dl className="mt-1 grid grid-cols-3 gap-2 border-y border-stone-100 py-3 text-center">
             {[["Posts", postCount], ["Schools", schoolCount], ["Topics", topics.length]].map(([label, value]) => (
               <div key={label}>
                 <dt className="text-label text-stone-500">{label}</dt>
@@ -151,14 +153,15 @@ export function FeedRail({
         ) : (
           <ul className="p-1.5">
             {people.slice(0, 3).map((person) => (
-              <li key={person.user_id}>
-                <Link href={`/u/${person.user_id}`} className="flex items-center gap-3 rounded-lg px-2.5 py-2 transition hover:bg-stone-100">
+              <li key={person.user_id} className="flex items-center gap-1 rounded-lg pr-1.5 transition hover:bg-stone-100">
+                <Link href={`/u/${person.user_id}`} className="flex min-w-0 flex-1 items-center gap-3 px-2.5 py-2">
                   <Avatar name={person.full_name} size={34} />
                   <span className="min-w-0">
                     <span className="block truncate text-meta font-semibold text-ink">{person.full_name}</span>
                     <span className="block truncate text-label capitalize text-stone-500">{person.role} · {shortSchool(person.department)}</span>
                   </span>
                 </Link>
+                <FollowUserButton userId={person.user_id} name={person.full_name} compact />
               </li>
             ))}
           </ul>
