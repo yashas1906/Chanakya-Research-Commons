@@ -262,6 +262,7 @@ export function normalizeFeed(raw: unknown): FeedPost[] {
       attached_paper_title: strOrNull(u.attached_paper_title),
       attached_paper_id: strOrNull(u.attached_paper_id),
       relevance_score: u.relevance_score === undefined ? undefined : num(u.relevance_score),
+      under_review: u.under_review === true,
     };
   });
 }

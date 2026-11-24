@@ -801,6 +801,7 @@ def get_feed(
                    pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
                    (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
                    COALESCE(mine.value, 0) AS my_vote,
+                   (p.is_flagged_spam OR u.is_flagged_spam) AS under_review,
                    CASE WHEN followed.followee_id IS NOT NULL THEN 2.0 ELSE 0.0 END +
                      CASE WHEN EXISTS (SELECT 1 FROM topic_follows tf WHERE tf.user_id = %s::uuid AND tf.topic_tag = ANY(p.tags)) THEN 1.5 ELSE 0.0 END +
                      CASE WHEN me.profile_embedding IS NOT NULL AND p.post_embedding IS NOT NULL
@@ -811,7 +812,8 @@ def get_feed(
             LEFT JOIN users me ON me.user_id = %s::uuid
             LEFT JOIN user_follows followed ON followed.follower_id = %s::uuid AND followed.followee_id = p.author_id
             LEFT JOIN post_upvotes mine ON mine.post_id = p.post_id AND mine.user_id = %s::uuid
-            WHERE p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
+            -- Flagged posts stay hidden from everyone except their author, who sees them marked "under review".
+            WHERE (p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE) OR p.author_id = me.user_id
             ORDER BY
               CASE WHEN %s = 'top' THEN p.upvote_count END DESC,
               CASE WHEN %s = 'best' AND %s::uuid IS NOT NULL THEN
@@ -834,6 +836,16 @@ def get_feed(
 def create_post(payload: PostCreate, user=Depends(current_user)):
     with get_db() as conn:
         cur = conn.cursor()
+        if payload.attached_paper_id:
+            try:
+                UUID(payload.attached_paper_id)
+            except ValueError:
+                cur.close()
+                raise HTTPException(status_code=422, detail="The attached paper ID is not valid")
+            cur.execute("SELECT 1 FROM papers WHERE paper_id = %s::uuid", (payload.attached_paper_id,))
+            if not cur.fetchone():
+                cur.close()
+                raise HTTPException(status_code=404, detail="The attached paper is not in the Commons")
         q_vec = vec_literal(f"{payload.title} {payload.body}")
         cur.execute(
             """
@@ -996,6 +1008,7 @@ def get_post(post_id: UUID, user=Depends(current_user_optional)):
                    pa.canonical_title AS attached_paper_title, pa.paper_id AS attached_paper_id,
                    (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
                    COALESCE(mine.value, 0) AS my_vote,
+                   (p.is_flagged_spam OR u.is_flagged_spam) AS under_review,
                    (SELECT COUNT(*) FROM posts authored WHERE authored.author_id = u.user_id) AS post_count,
                    u.bio AS author_bio, u.interest_tags AS author_interest_tags,
                    pa.authors AS attached_paper_authors, pa.venue AS attached_paper_venue,
@@ -1008,9 +1021,9 @@ def get_post(post_id: UUID, user=Depends(current_user_optional)):
             JOIN users u ON u.user_id = p.author_id
             LEFT JOIN papers pa ON pa.paper_id = p.attached_paper_id
             LEFT JOIN post_upvotes mine ON mine.post_id = p.post_id AND mine.user_id = %s::uuid
-            WHERE p.post_id = %s AND p.is_flagged_spam = FALSE
+            WHERE p.post_id = %s AND (p.is_flagged_spam = FALSE OR p.author_id = %s::uuid)
             """,
-            (user_id, post_id),
+            (user_id, post_id, user_id),
         )
         post = cur.fetchone()
         cur.close()
@@ -2053,6 +2066,26 @@ def get_also_saved(paper_id: UUID, limit: int = Query(5, ge=1, le=20)):
     return [{**details[p["paper_id"]], **p} for p in picked if p["paper_id"] in details]
 
 
+@app.get("/api/papers/suggest")
+def suggest_papers(q: str = Query(..., min_length=2, max_length=200), limit: int = Query(8, ge=1, le=20)):
+    """Fast title lookup for pickers (e.g. attaching a paper to a post): title words first, most saved first."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT paper_id::text AS paper_id, canonical_title, publication_year, venue, in_chanakya_library
+            FROM papers
+            WHERE canonical_title ILIKE %s
+            ORDER BY (canonical_title ILIKE %s) DESC, in_chanakya_library DESC, save_count DESC, pagerank_score DESC
+            LIMIT %s
+            """,
+            (f"%{q.strip()}%", f"{q.strip()}%", limit),
+        )
+        rows = cur.fetchall()
+        cur.close()
+    return rows
+
+
 @app.get("/api/papers/{paper_id}")
 def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
     user_id = str(user["user_id"]) if user else None
@@ -2107,7 +2140,7 @@ def get_paper(paper_id: UUID, user=Depends(current_user_optional)):
                    (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count,
                    p.created_at
             FROM posts p JOIN users u ON u.user_id = p.author_id
-            WHERE p.attached_paper_id = %s AND p.is_flagged_spam = FALSE
+            WHERE p.attached_paper_id = %s AND p.is_flagged_spam = FALSE AND u.is_flagged_spam = FALSE
             ORDER BY p.created_at DESC LIMIT 10
             """,
             (paper_id,),

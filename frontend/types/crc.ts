@@ -238,6 +238,8 @@ export interface FeedPost {
   attached_paper_title: string | null;
   attached_paper_id: string | null;
   relevance_score?: number;
+  /** Flagged by the spam check; only the author sees these, so the card says so. */
+  under_review?: boolean;
 }
 
 export interface PostDetail extends FeedPost {

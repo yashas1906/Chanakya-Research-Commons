@@ -40,10 +40,13 @@ function Dashboard() {
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
-    if (query.get("section") === section) return;
+    const current = query.get("section");
+    if (current === section) return;
     query.set("section", section);
     if (section !== "analytics") query.delete("tab");
-    router.replace(`/admin?${query.toString()}`, { scroll: false });
+    // Filling in the default section on first load replaces; a tab the admin clicks gets its own history entry.
+    if (current === null) router.replace(`/admin?${query.toString()}`, { scroll: false });
+    else router.push(`/admin?${query.toString()}`, { scroll: false });
   }, [section, router]);
 
   const tabs = [

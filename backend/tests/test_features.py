@@ -57,6 +57,42 @@ def test_flagged_member_can_still_open_own_profile(client, member, admin_headers
     assert client.get(f"/api/users/{member['user_id']}").status_code == 200
 
 
+# ---------------------------------------------------------------- F2 posts (Phase 6 flows)
+
+def test_post_with_attached_paper_tops_new_feed_and_paper_page(client, member):
+    paper_id = _library_paper_id()
+    title = client.get(f"/api/papers/{paper_id}").json()["canonical_title"]
+    hits = client.get("/api/papers/suggest", params={"q": title[:12]}).json()
+    assert any(h["paper_id"] == paper_id for h in hits)                       # the picker finds it by title
+
+    r = client.post("/api/posts", json={"title": "Phase 6 check", "body": "Attached paper.", "tags": [],
+                                        "attached_paper_id": paper_id}, headers=member["headers"])
+    assert r.status_code == 200, r.text
+    post_id = str(r.json()["post_id"])
+    newest = client.get("/api/feed", params={"sort": "new", "limit": 5}, headers=member["headers"]).json()
+    assert newest[0]["post_id"] == post_id and str(newest[0]["attached_paper_id"]) == paper_id
+    assert any(p["post_id"] == post_id for p in client.get(f"/api/papers/{paper_id}").json()["related_posts"])
+
+
+@pytest.mark.parametrize("paper_id, status", [("not-a-uuid", 422), (ZERO, 404)])
+def test_post_rejects_unknown_attached_paper(client, member, paper_id, status):
+    r = client.post("/api/posts", json={"title": "x", "body": "y", "attached_paper_id": paper_id}, headers=member["headers"])
+    assert r.status_code == status
+
+
+def test_flagged_author_sees_own_posts_marked_under_review(client, member, admin_headers):
+    post_id = str(client.post("/api/posts", json={"title": "Flag check", "body": "z"}, headers=member["headers"]).json()["post_id"])
+    assert client.post(f"/api/admin/members/{member['user_id']}/spam", json={"flagged": True}, headers=admin_headers).status_code == 200
+    try:
+        mine = client.get("/api/feed", params={"sort": "new", "limit": 100}, headers=member["headers"]).json()
+        own = [p for p in mine if p["post_id"] == post_id]
+        assert own and own[0]["under_review"] is True                         # the author still sees it, flagged
+        public = client.get("/api/feed", params={"sort": "new", "limit": 100}).json()
+        assert all(p["post_id"] != post_id for p in public)                   # everyone else does not
+    finally:
+        client.post(f"/api/admin/members/{member['user_id']}/spam", json={"flagged": False}, headers=admin_headers)
+
+
 def test_follow_and_unfollow_topic(client, member):
     h = member["headers"]
     assert client.post("/api/topics/bioinformatics/follow", headers=h).status_code == 200

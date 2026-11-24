@@ -363,8 +363,30 @@ export async function createPost(input: {
   body: string;
   tags: string[];
   attached_paper_id?: string | null;
-}): Promise<void> {
-  await request("/posts", { method: "POST", body: input });
+}): Promise<{ post_id: string }> {
+  const raw = await request("/posts", { method: "POST", body: input });
+  return { post_id: str(isRecord(raw) ? raw.post_id : "") };
+}
+
+export interface PaperSuggestion {
+  paper_id: string;
+  canonical_title: string;
+  publication_year: number | null;
+  venue: string | null;
+  in_chanakya_library: boolean;
+}
+
+/** Quick title lookup for the "attach a paper" picker. */
+export async function suggestPapers(q: string, signal?: AbortSignal): Promise<PaperSuggestion[]> {
+  const raw = await request("/papers/suggest", { query: { q, limit: 8 }, signal });
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(isRecord).map((o) => ({
+    paper_id: str(o.paper_id),
+    canonical_title: str(o.canonical_title),
+    publication_year: o.publication_year == null ? null : num(o.publication_year),
+    venue: strOrNull(o.venue),
+    in_chanakya_library: o.in_chanakya_library === true,
+  }));
 }
 
 export async function updatePost(

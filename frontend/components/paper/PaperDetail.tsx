@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useEffect } from "react";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+import { ExternalLink } from "lucide-react";
+import { BackLink } from "@/components/ui/BackLink";
 import { SaveToCollection } from "@/components/paper/SaveToCollection";
 import { NoteEditor } from "@/components/library/NoteEditor";
 import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
@@ -40,7 +41,7 @@ function PaperView({ paper }: { paper: PaperType }) {
   const authors = authorNames(paper.authors);
   return (
     <div className="space-y-8">
-      <Link href="/library" className="inline-flex items-center gap-2 text-ui font-medium text-stone-600 hover:text-ink"><ArrowLeft className="h-4 w-4" />Library</Link>
+      <BackLink fallbackHref="/library" fallbackLabel="Library" />
       <header className="max-w-4xl">
         <p className="eyebrow">{paper.item_type === "article" ? "Article" : "Research paper"}</p>
         <h1 className="mt-2 font-display text-h1 tracking-tight text-ink">{paper.canonical_title}</h1>

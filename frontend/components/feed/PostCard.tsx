@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { FileText } from "lucide-react";
 import { PostActionBar } from "@/components/feed/PostActionBar";
+import { UnderReviewNote } from "@/components/feed/UnderReviewNote";
 import { EditedMark, PostMenu, type PostEdit } from "@/components/feed/PostMenu";
 import { Avatar } from "@/components/ui/Section";
 import { Tag } from "@/components/ui/Pill";
@@ -82,6 +83,7 @@ export function PostCard({ post: initial, onTagClick, onDeleted }: { post: FeedP
           onDeleted={() => { setRemoved(true); onDeleted?.(post.post_id); }}
         />
       </header>
+      {post.under_review && <UnderReviewNote className="mt-2.5" />}
       <h2 className="mt-2.5 font-display text-[19px] leading-snug text-ink">
         <Link href={`/feed/${post.post_id}`} className="after:absolute after:inset-0 after:z-0 group-hover:text-brand-700">{post.title}</Link>
       </h2>

@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { ArrowLeft, FileText } from "lucide-react";
+import { FileText } from "lucide-react";
+import { BackLink } from "@/components/ui/BackLink";
+import { UnderReviewNote } from "@/components/feed/UnderReviewNote";
 import { EditedMark, PostMenu, type PostEdit } from "@/components/feed/PostMenu";
 import { CommentThread } from "@/components/feed/CommentThread";
 import { PostActionBar } from "@/components/feed/PostActionBar";
@@ -78,7 +80,7 @@ export function PostThread({ postId }: { postId: string }) {
 
   return (
     <div className="space-y-6">
-      <Link href="/feed" className="inline-flex items-center gap-2 text-ui font-medium text-stone-600 hover:text-ink"><ArrowLeft className="h-4 w-4" />Feed</Link>
+      <BackLink fallbackHref="/feed" fallbackLabel="Feed" />
       <div className="grid min-w-0 grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
         <main className="min-w-0 space-y-6">
           <article className="card min-w-0 p-5 sm:p-8">
@@ -97,6 +99,7 @@ export function PostThread({ postId }: { postId: string }) {
               </span>
             </header>
             {post.tags && post.tags.length > 0 && <div className="mt-5 flex flex-wrap gap-2">{post.tags.map((tag) => <Link key={tag} href={`/search?q=${encodeURIComponent(tag)}`}><Tag>{tag}</Tag></Link>)}</div>}
+            {post.under_review && <UnderReviewNote className="mt-4" />}
             <h1 className="mt-4 font-display text-h1 tracking-tight text-ink">{post.title}</h1>
             <p className="mt-5 whitespace-pre-wrap text-body leading-7 text-stone-700">{post.body}</p>
             <div className="mt-6 border-t border-stone-100 pt-4"><PostActionBar post={actionPost} score={score} vote={vote} busy={busy} onVote={updateVote} /></div>

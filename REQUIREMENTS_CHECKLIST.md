@@ -161,3 +161,82 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 - [ ] Explain each library and pretrained model used (sentence-transformers, pgvector, datasketch, NetworkX, mlxtend, scikit-learn, Ollama model, MinIO).
 - [ ] README final pass: setup, architecture, how to reproduce every evaluation number.
 - [ ] Demo script and viva preparation.
+
+---
+
+## Part C: Website walkthrough and UX audit (24 Nov 2026)
+
+Checked by reading every page component, the API client and the backend endpoints, and querying the live database. Issues the user reported are marked **(reported)**.
+
+### C1. How the site fits together
+
+| Route | Component | What it is for | Main links out |
+|---|---|---|---|
+| `/` | `HomeWorkspace` | Landing page: quick search, six schools, featured papers, latest posts | `/library?school=`, `/papers/{id}`, `/feed/{id}`, `/search` |
+| `/feed` | `FeedWorkspace` + `Composer` + `FeedRail` | Campus discussions. Sorts Best / New / Top; filters by school and topic in the left rail; trending topics, followed topics and suggested people in the right rail | `/feed/{id}`, `/papers/{id}` (attached paper), `/u/{id}` |
+| `/feed/{postId}` | `PostThread` | One discussion: post, linked paper, comments, author card, more in this topic | `/papers/{id}`, `/assistant?paper=`, `/search?q=tag` |
+| `/library` | `LibraryWorkspace` | Tabs: Chanakya holdings · Recommended · My saves · Collections. Left rail: sort, school, decade, PageRank tier. "Add by DOI, arXiv or link" button | `/papers/{id}` |
+| `/papers/{paperId}` | `PaperDetail` | One paper: abstract, topics, citation metrics, discussions about it, "readers also saved", save, note, ask assistant, sources it was found in | `/library` (back link), `/feed?attach=` (start discussion), `/assistant?paper=` |
+| `/search?q=` | `SearchWorkspace` + `ResultPanels` | Unified search: four panels (library, external, people, posts) in a 2×2 grid, related topics, follow-topic | `/papers/{id}`, `/feed/{id}`, `/feed` |
+| `/assistant` | `AssistantWorkspace` | RAG Q&A with citations and retrieved passages; chat history | `/papers/{id}` |
+| `/u/{userId}`, `/profile` | `ProfileView` | Member page: Follow button, tabs Overview / Posts / Comments / Collections / Saved (self) | `/feed/{id}`, `/papers/{id}` |
+| `/admin`, `/analytics` | `AdminDashboard` | Admin only: overview, members, alerts, analytics, drill-down. `/analytics` redirects here | — |
+
+Shell: the navbar has icon-only links (Home, Feed, Library, Assistant, plus Analytics for admins), a search toggle that opens `GlobalSearch`, a **+** button (`/feed?compose=1`) and the account menu. Only `/feed` and `/library` get the left filter rail.
+
+**Where "Add by DOI, arXiv or link" fits.** It is requirement F3 ("save by URL, DOI or arXiv ID"). It covers papers that are *not* already in the Commons: you paste a DOI, arXiv ID or article URL, the backend (`POST /api/library/save-by-identifier`) looks it up in Crossref, arXiv or the page's own metadata, adds it to the shared corpus and saves it to your library. Keep it, but it needs a clearer place and label (see Phase 7).
+
+### C2. Root causes found
+
+| Symptom | Cause (verified) |
+|---|---|
+| **(reported)** My new post does not show under "New" | The feed query dropped every post whose author has `users.is_flagged_spam = TRUE`. The account Yashas Hombal was still flagged (one of the 3 spam false positives in Phase 3), so all of its posts were hidden in every sort, with no message explaining why. |
+| **(reported)** "Start a discussion" does not start one | The link goes to `/feed?attach={paperId}`, but nothing read `attach`: the composer stayed closed and had no paper field. The paper page's only back link is hard-coded to `/library`. |
+| **(reported)** No way to attach a paper to a post | `createPost` and `POST /api/posts` accept `attached_paper_id`, but `Composer` never sent it and had no paper picker. Only the 600 seeded posts have papers. |
+| **(reported)** Browser Back skips pages | Library tabs and filters, feed search, the global scoped search and the admin tabs use `router.replace`, which overwrites the history entry. Feed sort, school and topic were local `useState`, not URL state, so they reset on Back. |
+| **(reported)** Search is split confusingly | Papers are split into two separate panels by `in_chanakya_library` (library vs "external", but both come from the local DB). The same topic shows up in both, each with its own scroll box, inside a 2×2 grid. |
+| **(reported)** Library shows "100" holdings | `getHoldings(100)` (API max 100) while 461 papers are in the library. Facet counts and filters only see those 100. |
+| **(reported)** Discussions on a paper look unrelated or spammy | 120 of 600 seeded posts have a title that does not match their attached paper; seeded bodies are templated. `related_posts` filtered spam posts but not posts by spam-flagged authors. |
+| No follow from a post | `PostCard` and `PostThread` link to the author but have no Follow button. The search People panel has neither a profile link nor a Follow button. |
+
+### Phase 6: Broken flows ✅ done (24 Nov 2026; 4 new backend tests, 25/25 pass)
+- [x] **Spam flag hides own posts:** cleared the false-positive flag on Yashas Hombal, Divya Shetty and Fatima Sheikh (24 Nov). Members now always see their own posts, marked "under review" if flagged.
+- [x] **Attach a paper when posting:** "Attach a paper" in `Composer` opens a picker (your saves first, then any paper by title via the new `GET /api/papers/suggest`); the chosen paper is a removable chip. `POST /api/posts` now rejects an invalid (422) or unknown (404) paper.
+- [x] **Start a discussion from a paper:** `/feed?attach=<id>` asks logged-out visitors to log in, then opens the composer with the paper attached.
+- [x] **New post visible straight away:** after publishing, the feed switches to New (clearing filters), shows a "Your post is live" bar with a link to the post, and a toast.
+- [x] **Browser Back:** feed sort, school and topic are in the URL (`?sort=&school=&topic=`) and pushed; Library tabs, sort and filters are pushed; admin tabs are pushed. Typing in the search bar still replaces (no history entry per keystroke). Analytics sub-tabs inside the admin dashboard still replace.
+- [x] **Back links:** new `BackLink` on the paper and post pages: "← Back" returns to the previous in-app page; opened directly, it shows "← Library" / "← Feed".
+- [x] **Paper discussions:** `related_posts` excludes posts by spam-flagged authors.
+
+### Phase 7: Library redesign
+- [ ] Tab order: **Chanakya holdings · My saves · Recommended · Collections**.
+- [ ] Load all holdings (paginate or "Load more"; the API cap is 100), so the count says 461 and filters cover everything.
+- [ ] One consistent page layout: header (title + one-line purpose) → tabs → toolbar row (filter-box search, sort dropdown, active filter chips, result count) → list. Move sort out of the left rail into the toolbar; keep school, decade and tier in the rail.
+- [ ] Rename and reposition "Add by DOI, arXiv or link" to **"Add a paper not in the library"**, in the My saves toolbar and empty state, with one line explaining it.
+- [ ] Paper rows: same card structure in every tab (title, authors · venue · year, 2-line abstract, meta row with tier, saves and topics, actions on the right).
+- [ ] Recommended: shorten the long "How this list is made" box into a collapsible info line.
+- [ ] Paper page: group the right sidebar into "Actions" (save + collection, note, ask assistant, share) and "About this record" (prestige, saved-by, sources, references).
+
+### Phase 8: Search redesign
+- [ ] Replace the 2×2 grid of scroll boxes with **one results page and tabs: All · Papers · People · Discussions**.
+- [ ] Papers: one ranked list (library and external merged), with an "In Chanakya library" badge and a source filter (All / Library / External).
+- [ ] "All" tab: top 5 papers, top 3 people and top 3 discussions, each with "See all →".
+- [ ] Remove the internal scroll boxes; use page scroll and "Load more".
+- [ ] People results: link to `/u/{id}` and add a Follow button. Discussion results: show the attached paper.
+- [ ] Tab and query in the URL (`/search?q=&tab=`) so Back works.
+- [ ] Scores (RRF, similarity) behind a "Why this result" tooltip rather than raw numbers.
+
+### Phase 9: Feed and social
+- [ ] **Follow from posts:** Follow / Following button on `PostCard`, on the `PostThread` author card, and in "Scholars you may know".
+- [ ] **"Following" feed:** a Following sort or filter with posts from people and topics you follow; empty state linking to suggested people.
+- [ ] Mark posts in "Best" with why they appear ("From someone you follow", "Topic you follow", "Recommended").
+- [ ] Feed loads only 40 posts and the rail counts only those 40; add "Load more" and label the counts honestly.
+- [ ] Composer: tag input as chips with suggestions from existing topics.
+- [ ] Data: fix the 120 seeded posts whose title does not match their attached paper, and make templated bodies match the paper's school and topic.
+
+### Phase 10: Navigation and polish
+- [ ] Navbar is icon-only; add text labels on wide screens (or a visible label for the active page).
+- [ ] One global search entry; label the scope chip clearly when the bar filters the current page on `/feed` and `/library`.
+- [ ] Keep scroll position and loaded data when going Back to a list (cache `useAsync` results per URL).
+- [ ] Consistent empty, loading and error states; every logged-out action (Start a discussion, Save, Follow) opens login and returns to the same place.
+- [ ] Re-check every link and button in C1 after Phases 6–9, and add frontend smoke tests for these flows.

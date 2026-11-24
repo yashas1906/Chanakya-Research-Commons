@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { markInAppNavigation } from "@/lib/nav-history";
 import { usePathname } from "next/navigation";
 import { PlugZap, RefreshCw } from "lucide-react";
 import { AuthModal } from "@/components/auth/AuthModal";
@@ -36,6 +37,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }, [apiDown, reloadHealth]);
 
   useEffect(() => setSidebarOpen(false), [pathname]);
+
+  // After the first page, every route change means the browser has an in-app page to go Back to.
+  const firstPath = useRef(true);
+  useEffect(() => {
+    if (firstPath.current) {
+      firstPath.current = false;
+      return;
+    }
+    markInAppNavigation();
+  }, [pathname]);
   useEffect(() => {
     if (!sidebarOpen) return;
     const onKey = (event: KeyboardEvent) => {

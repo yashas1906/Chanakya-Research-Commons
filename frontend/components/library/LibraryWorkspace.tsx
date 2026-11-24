@@ -86,7 +86,8 @@ export function LibraryWorkspace() {
         else next.set(key, value);
       });
       const qs = next.toString();
-      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+      // Tabs, sort and filters are clicks: push them so the browser Back button undoes each one.
+      router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     },
     [params, pathname, router],
   );

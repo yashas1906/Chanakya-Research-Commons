@@ -1,22 +1,25 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Clock, Flame, TrendingUp, X } from "lucide-react";
-import { Composer } from "@/components/feed/Composer";
+import { CheckCircle2, Clock, Flame, TrendingUp, X } from "lucide-react";
+import { Composer, type AttachedPaper } from "@/components/feed/Composer";
 import { FeedRail } from "@/components/feed/FeedRail";
 import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
 import { PostCard } from "@/components/feed/PostCard";
 import { FilterOption, FilterToggle, SidebarPortal, SidebarSection } from "@/components/shell/SidebarSlot";
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { Skeleton } from "@/components/ui/Skeleton";
-import { getFeed, getRecommendations } from "@/lib/api";
+import { describeError, getFeed, getPaper, getRecommendations } from "@/lib/api";
+import { useToast } from "@/components/ui/Toast";
 import { cx, schoolLabel, shortSchool } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { useAuth } from "@/context/AuthContext";
 import { SCHOOLS } from "@/types/crc";
 
 type FeedSort = "best" | "new" | "top";
+const isSort = (value: string | null): value is FeedSort => value === "best" || value === "new" || value === "top";
 
 const SORTS: Array<{ id: FeedSort; label: string; icon: typeof Flame }> = [
   { id: "best", label: "Best", icon: Flame },
@@ -50,36 +53,81 @@ function RemovableChip({ label, onRemove }: { label: string; onRemove: () => voi
 }
 
 export function FeedWorkspace() {
-  const { user } = useAuth();
+  const { user, status: authStatus, promptLogin } = useAuth();
+  const toast = useToast();
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
   const userId = user?.user_id ?? null;
 
-  // The single global search bar drives `?q=`; school/topic filters live in the sidebar.
+  // Sort, school and topic live in the URL, so the browser Back button steps through them.
+  // The single global search bar drives `?q=`.
   const query = (params.get("q") ?? "").trim();
   const composeRequested = params.get("compose") === "1";
-  const [school, setSchool] = useState("ALL");
-  const [topic, setTopic] = useState<string | null>(null);
-  const [sort, setSort] = useState<FeedSort>("best");
+  const attachId = params.get("attach");
+  const sortParam = params.get("sort");
+  const sort: FeedSort = isSort(sortParam) ? sortParam : "best";
+  const school = params.get("school") ?? "ALL";
+  const topic = params.get("topic");
+  const [attach, setAttach] = useState<AttachedPaper | null>(null);
+  const [justPosted, setJustPosted] = useState<string | null>(null);
 
   const feed = useAsync((signal) => getFeed(userId, signal, sort), [userId, sort]);
   const recs = useAsync((signal) => getRecommendations(userId!, signal), [userId], !!userId);
   const posts = useMemo(() => feed.data ?? [], [feed.data]);
 
-  const clearQuery = useCallback(() => {
-    const next = new URLSearchParams(params.toString());
-    next.delete("q");
-    const qs = next.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [params, pathname, router]);
+  const navigate = useCallback(
+    (patch: Record<string, string | null>, mode: "push" | "replace" = "push") => {
+      const next = new URLSearchParams(params.toString());
+      Object.entries(patch).forEach(([key, value]) => (value === null ? next.delete(key) : next.set(key, value)));
+      const qs = next.toString();
+      const url = qs ? `${pathname}?${qs}` : pathname;
+      if (mode === "push") router.push(url, { scroll: false });
+      else router.replace(url, { scroll: false });
+    },
+    [params, pathname, router],
+  );
+  const setSort = (next: FeedSort) => navigate({ sort: next === "best" ? null : next });
+  const setSchool = (next: string) => navigate({ school: next === "ALL" ? null : next });
+  const setTopic = (next: string | null) => navigate({ topic: next });
+  const toggleTopic = (next: string) => setTopic(topic === next ? null : next);
 
-  const consumeCompose = useCallback(() => {
-    const next = new URLSearchParams(params.toString());
-    next.delete("compose");
-    const qs = next.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  }, [params, pathname, router]);
+  const clearQuery = useCallback(() => navigate({ q: null }, "replace"), [navigate]);
+  const consumeCompose = useCallback(() => navigate({ compose: null }, "replace"), [navigate]);
+
+  // "Start a discussion" on a paper page links to /feed?attach=<paperId>: open the composer with it attached.
+  useEffect(() => {
+    if (!attachId || authStatus === "loading") return;
+    if (authStatus !== "authenticated") {
+      promptLogin("login");
+      return;
+    }
+    let active = true;
+    getPaper(attachId)
+      .then((paper) => {
+        if (!active) return;
+        setAttach({ paper_id: paper.paper_id, canonical_title: paper.canonical_title });
+        navigate({ attach: null }, "replace");
+      })
+      .catch((error) => {
+        if (!active) return;
+        toast(`Could not attach that paper: ${describeError(error)}`);
+        navigate({ attach: null }, "replace");
+      });
+    return () => {
+      active = false;
+    };
+  }, [attachId, authStatus, promptLogin, navigate, toast]);
+
+  // A new post goes to the top of "New"; say so, and link to it.
+  const onPosted = (postId: string) => {
+    setAttach(null);
+    setJustPosted(postId);
+    toast("Your post is live");
+    if (sort === "new" && school === "ALL" && !topic && !query) feed.reload();
+    else navigate({ sort: "new", school: null, topic: null, q: null });
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
 
   const matchesQuery = useCallback(
     (post: (typeof posts)[number]) => {
@@ -109,10 +157,7 @@ export function FeedWorkspace() {
   const filtered = searched.filter((post) => (school === "ALL" || post.author_dept === school) && (!topic || post.tags?.includes(topic)));
 
   const activeCount = (school !== "ALL" ? 1 : 0) + (topic ? 1 : 0);
-  const clearFilters = () => {
-    setSchool("ALL");
-    setTopic(null);
-  };
+  const clearFilters = () => navigate({ school: null, topic: null });
   const focusComposer = () => document.getElementById("compose")?.scrollIntoView({ behavior: "smooth", block: "center" });
 
   return (
@@ -132,7 +177,7 @@ export function FeedWorkspace() {
             <SidebarSection title="Topics" onClear={topic ? () => setTopic(null) : undefined}>
               <div role="radiogroup" aria-label="Filter by topic" className="space-y-0.5">
                 {topics.slice(0, 10).map(([name, count]) => (
-                  <FilterOption key={name} label={name} count={count} active={topic === name} onClick={() => setTopic((c) => (c === name ? null : name))} />
+                  <FilterOption key={name} label={name} count={count} active={topic === name} onClick={() => toggleTopic(name)} />
                 ))}
               </div>
             </SidebarSection>
@@ -148,7 +193,17 @@ export function FeedWorkspace() {
       <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
           <div id="compose">
-            <Composer onPosted={feed.reload} autoOpen={composeRequested} onOpened={consumeCompose} />
+            <Composer onPosted={onPosted} autoOpen={composeRequested} onOpened={consumeCompose} attach={attach} />
+            {justPosted && (
+              <div role="status" className="mt-3 flex items-center gap-2.5 rounded-xl bg-sage-50 px-4 py-2.5 text-meta text-sage-700 ring-1 ring-inset ring-sage-200 animate-fade">
+                <CheckCircle2 className="h-4 w-4 shrink-0" />
+                <span className="min-w-0 flex-1">Your post is live and at the top of <span className="font-semibold">New</span>.</span>
+                <Link href={`/feed/${justPosted}`} className="font-semibold underline underline-offset-2">View post</Link>
+                <button type="button" onClick={() => setJustPosted(null)} className="rounded-md p-1 hover:bg-sage-100" aria-label="Dismiss">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-2">
