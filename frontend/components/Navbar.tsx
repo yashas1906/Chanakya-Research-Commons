@@ -14,7 +14,6 @@ const NAV = [
   { href: "/feed", label: "Feed" },
   { href: "/library", label: "Library" },
   { href: "/assistant", label: "Assistant" },
-  { href: "/analytics", label: "Analytics" },
 ] as const;
 
 const isActive = (pathname: string, href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
