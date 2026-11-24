@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect } from "react";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, MessageSquarePlus, Sparkles } from "lucide-react";
 import { BackLink } from "@/components/ui/BackLink";
 import { SaveToCollection } from "@/components/paper/SaveToCollection";
 import { NoteEditor } from "@/components/library/NoteEditor";
@@ -76,20 +76,27 @@ function PaperView({ paper }: { paper: PaperType }) {
                   : <ul className="mt-4 divide-y divide-stone-100">{alsoSaved.data.map((item) => <li key={item.paper_id} className="py-3"><Link href={`/papers/${item.paper_id}`} className="font-display text-h3 text-ink hover:underline">{item.canonical_title}</Link><p className="mt-1 text-meta text-stone-500">{item.publication_year ?? "Year unavailable"} · {fmtInt(item.save_count)} saves</p><p className="mt-0.5 text-label font-medium text-brand-600">{alsoSavedReason(item)}</p></li>)}</ul>}
           </section>
         </main>
-        <aside className="min-w-0 space-y-5">
-          <section className="card space-y-4 p-5">
-            <p className="eyebrow">Corpus prestige</p>
-            <PrestigeTier percentile={paper.pagerank_percentile} score={paper.pagerank_score} />
-            <p className="text-meta text-stone-600">Citation-graph prestige within the Chanakya corpus.</p>
-            <dl className="grid grid-cols-2 gap-3 border-t border-stone-100 pt-4"><div><dt className="text-meta text-stone-500">PageRank</dt><dd className="num mt-1 text-ui font-medium text-ink">{fmtPagerank(paper.pagerank_score)}</dd></div><div><dt className="text-meta text-stone-500">Saved by</dt><dd className="num mt-1 text-ui font-medium text-ink">{fmtInt(paper.save_count)} members</dd></div></dl>
+        {/* On phones the aside dissolves ("contents") so the actions card can sit above the abstract and the record card below it. */}
+        <aside className="contents lg:block lg:min-w-0 lg:space-y-5">
+          <section className="card order-first space-y-3 p-5 lg:order-none" aria-label="Your actions">
+            <p className="eyebrow">Your actions</p>
             <SaveToCollection paperId={paper.paper_id} isSaved={paper.is_saved} />
             {savedNow && <NoteEditor paperId={paper.paper_id} initial={paper.private_notes} />}
-            <Link href={`/assistant?paper=${paper.paper_id}&q=${encodeURIComponent("Summarize this paper’s main contribution")}`} className="btn flex w-full">Ask the RAG assistant</Link>
+            <Link href={`/assistant?paper=${paper.paper_id}&q=${encodeURIComponent("Summarize this paper’s main contribution")}`} className="btn flex w-full"><Sparkles className="h-4 w-4" /> Ask the research assistant</Link>
+            <Link href={`/feed?attach=${paper.paper_id}`} className="btn flex w-full"><MessageSquarePlus className="h-4 w-4" /> Discuss this paper</Link>
             <ShareButton url={`/papers/${paper.paper_id}`} />
           </section>
+
+          <section className="card min-w-0 p-5" aria-label="About this record">
+            <p className="eyebrow">About this record</p>
+            <div className="mt-3 space-y-3">
+              <PrestigeTier percentile={paper.pagerank_percentile} score={paper.pagerank_score} />
+              <p className="text-meta text-stone-600">Citation-graph prestige within the Chanakya corpus.</p>
+            </div>
+            <dl className="mt-4 grid grid-cols-2 gap-3 border-t border-stone-100 pt-4"><div><dt className="text-meta text-stone-500">PageRank</dt><dd className="num mt-1 text-ui font-medium text-ink">{fmtPagerank(paper.pagerank_score)}</dd></div><div><dt className="text-meta text-stone-500">Saved by</dt><dd className="num mt-1 text-ui font-medium text-ink">{fmtInt(paper.save_count)} {paper.save_count === 1 ? "member" : "members"}</dd></div></dl>
           {paper.source_records.length > 0 && (
-            <section className="card p-5">
-              <p className="eyebrow">Found in</p>
+            <div className="mt-4 border-t border-stone-100 pt-4">
+              <h3 className="text-meta font-semibold text-ink">Found in</h3>
               <p className="mt-1 text-meta text-stone-500">
                 {paper.source_records.length > 1 ? "Duplicate records from these sources were merged into this one entry." : "Where this record came from."}
               </p>
@@ -108,9 +115,16 @@ function PaperView({ paper }: { paper: PaperType }) {
                   </li>
                 ))}
               </ul>
-            </section>
+            </div>
           )}
-          {paper.references.length > 0 && <section className="card p-5"><p className="eyebrow">Quick references</p><p className="mt-1 text-meta text-stone-500">{paper.cites_count} references · {paper.cited_by_count} citations</p><ul className="mt-3 space-y-2">{paper.references.slice(0, 4).map((reference) => <li key={reference.paper_id}><Link href={`/papers/${reference.paper_id}`} className="text-meta text-stone-700 hover:text-ink hover:underline">{reference.canonical_title}</Link></li>)}</ul></section>}
+          {paper.references.length > 0 && (
+            <div className="mt-4 border-t border-stone-100 pt-4">
+              <h3 className="text-meta font-semibold text-ink">Quick references</h3>
+              <p className="mt-1 text-meta text-stone-500">{paper.cites_count} references · {paper.cited_by_count} citations</p>
+              <ul className="mt-3 space-y-2">{paper.references.slice(0, 4).map((reference) => <li key={reference.paper_id}><Link href={`/papers/${reference.paper_id}`} className="text-meta text-stone-700 hover:text-ink hover:underline">{reference.canonical_title}</Link></li>)}</ul>
+            </div>
+          )}
+          </section>
         </aside>
       </div>
     </div>

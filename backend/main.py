@@ -1137,7 +1137,7 @@ def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user
 @app.get("/api/library")
 def get_library(
     user_id: Optional[str] = None,
-    limit: int = Query(30, ge=1, le=100),
+    limit: int = Query(30, ge=1, le=1000),
     user=Depends(current_user_optional),
 ):
     with get_db() as conn:
@@ -1172,7 +1172,7 @@ def get_library(
         else:
             cur.execute(
                 """
-                SELECT p.paper_id, p.canonical_title, p.abstract, p.authors, p.publication_year, p.venue, p.topics,
+                SELECT p.paper_id, p.canonical_title, LEFT(p.abstract, 500) AS abstract, p.authors, p.publication_year, p.venue, p.topics,
                        p.save_count, p.pagerank_score,
                        CASE
                          WHEN 'School of Arts, Humanities and Social Sciences' = ANY(p.topics) THEN 'School of Arts, Humanities and Social Sciences'

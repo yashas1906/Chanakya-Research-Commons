@@ -473,7 +473,7 @@ export async function getHoldings(limit = 40, signal?: AbortSignal): Promise<Pap
 }
 
 export async function getSaves(userId: string, signal?: AbortSignal): Promise<SavedPaper[]> {
-  const raw = await request("/library", { query: { user_id: userId, limit: 100 }, signal });
+  const raw = await request("/library", { query: { user_id: userId, limit: 1000 }, signal });
   return Array.isArray(raw) ? raw.map(normalizeSavedPaper) : [];
 }
 

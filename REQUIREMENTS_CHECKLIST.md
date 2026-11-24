@@ -208,14 +208,14 @@ Shell: the navbar has icon-only links (Home, Feed, Library, Assistant, plus Anal
 - [x] **Back links:** new `BackLink` on the paper and post pages: "← Back" returns to the previous in-app page; opened directly, it shows "← Library" / "← Feed".
 - [x] **Paper discussions:** `related_posts` excludes posts by spam-flagged authors.
 
-### Phase 7: Library redesign
-- [ ] Tab order: **Chanakya holdings · My saves · Recommended · Collections**.
-- [ ] Load all holdings (paginate or "Load more"; the API cap is 100), so the count says 461 and filters cover everything.
-- [ ] One consistent page layout: header (title + one-line purpose) → tabs → toolbar row (filter-box search, sort dropdown, active filter chips, result count) → list. Move sort out of the left rail into the toolbar; keep school, decade and tier in the rail.
-- [ ] Rename and reposition "Add by DOI, arXiv or link" to **"Add a paper not in the library"**, in the My saves toolbar and empty state, with one line explaining it.
-- [ ] Paper rows: same card structure in every tab (title, authors · venue · year, 2-line abstract, meta row with tier, saves and topics, actions on the right).
-- [ ] Recommended: shorten the long "How this list is made" box into a collapsible info line.
-- [ ] Paper page: group the right sidebar into "Actions" (save + collection, note, ask assistant, share) and "About this record" (prestige, saved-by, sources, references).
+### Phase 7: Library redesign ✅ done (24 Nov 2026; 1 new backend test, 26/26 pass)
+- [x] Tab order: **Chanakya holdings · My saves · Recommended · Collections**, each with a one-line description. Switching tabs starts the new tab with no filters.
+- [x] All holdings load (`/api/library` limit raised to 1000; holdings abstracts trimmed to 500 characters for the list). The list shows 30 at a time with "Show 30 more".
+- [x] Page layout: header → tabs + description → toolbar (search box for this list, sort dropdown, Filters button on narrow screens) → count and filter chips with "Clear all" → list. Sort moved out of the left rail; school, decade and tier stay there. The search box updates the URL without a history entry per keystroke.
+- [x] "Add by DOI, arXiv or link" is now **"Add a paper not in the library"** with a one-line explanation, in the My saves toolbar and in the empty state of any search that finds nothing.
+- [x] One shared `PaperRow` for holdings, My saves, Recommended and profiles (title + Save, byline, 2-line abstract, meta row, note on your own saves). Collections keep their compact nested list inside each collection.
+- [x] Recommended: the "How this list is made" box is a one-line summary that expands on click.
+- [x] Paper page: sidebar split into **Your actions** (save + collection, note, ask the assistant, discuss this paper, share) and **About this record** (prestige, PageRank, saved by, sources, references). On phones the actions card sits above the abstract.
 
 ### Phase 8: Search redesign
 - [ ] Replace the 2×2 grid of scroll boxes with **one results page and tabs: All · Papers · People · Discussions**.

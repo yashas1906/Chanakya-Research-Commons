@@ -57,6 +57,17 @@ def test_flagged_member_can_still_open_own_profile(client, member, admin_headers
     assert client.get(f"/api/users/{member['user_id']}").status_code == 200
 
 
+# ---------------------------------------------------------------- F3 library holdings (Phase 7)
+
+def test_library_lists_every_holding_with_short_abstracts(client):
+    with _db() as conn, conn.cursor() as cur:
+        cur.execute("SELECT COUNT(*) FROM papers WHERE in_chanakya_library")
+        total = cur.fetchone()[0]
+    rows = client.get("/api/library", params={"limit": 1000}).json()
+    assert len(rows) == min(total, 1000)                                    # not capped at 100 any more
+    assert all(len(r["abstract"] or "") <= 500 for r in rows)               # list view only needs a preview
+
+
 # ---------------------------------------------------------------- F2 posts (Phase 6 flows)
 
 def test_post_with_attached_paper_tops_new_feed_and_paper_page(client, member):
