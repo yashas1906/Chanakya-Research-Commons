@@ -206,7 +206,7 @@ export function LibraryWorkspace() {
         <div className="min-w-0">
           <div className="min-w-0 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <Tabs className="min-w-0 flex-1" tabs={tabs} value={view} onChange={(next) => update({ tab: next === "holdings" ? null : next })} />
+              <Tabs className="w-full min-w-0 sm:w-auto sm:flex-1" tabs={tabs} value={view} onChange={(next) => update({ tab: next === "holdings" ? null : next })} />
               {hasFilters && <FilterToggle activeCount={activeCount} />}
             </div>
 

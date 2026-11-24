@@ -8,7 +8,7 @@ export interface TabDef<T extends string> {
   count?: number;
 }
 
-/** Underline tabs with a smooth ink indicator. */
+/** Underline tabs with a smooth ink indicator. Scrolls sideways instead of wrapping on narrow screens. */
 export function Tabs<T extends string>({
   tabs,
   value,
@@ -21,7 +21,7 @@ export function Tabs<T extends string>({
   className?: string;
 }) {
   return (
-    <div role="tablist" className={cx("flex gap-6 border-b border-stone-200/90", className)}>
+    <div role="tablist" className={cx("flex gap-6 overflow-x-auto border-b border-stone-200/90 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", className)}>
       {tabs.map((t) => {
         const active = t.id === value;
         return (
@@ -32,7 +32,7 @@ export function Tabs<T extends string>({
             aria-selected={active}
             onClick={() => onChange(t.id)}
             className={cx(
-              "relative -mb-px pb-2.5 pt-1 text-meta font-medium transition-colors duration-150",
+              "relative -mb-px shrink-0 whitespace-nowrap pb-2.5 pt-1 text-meta font-medium transition-colors duration-150",
               active ? "text-ink" : "text-stone-500 hover:text-stone-800",
             )}
           >

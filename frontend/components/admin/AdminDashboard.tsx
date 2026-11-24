@@ -32,6 +32,12 @@ function Dashboard() {
   const [section, setSection] = useState<Section>(() => (isSection(params.get("section")) ? (params.get("section") as Section) : "overview"));
   const overview = useAsync((s) => getAdminOverview(s), []);
 
+  // Follow ?section= when it changes from outside (e.g. the Analytics icon in the top bar).
+  const urlSection = params.get("section");
+  useEffect(() => {
+    if (isSection(urlSection)) setSection(urlSection as Section);
+  }, [urlSection]);
+
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
     if (query.get("section") === section) return;

@@ -14,10 +14,15 @@ const NAV = [
   { href: "/feed", label: "Feed", icon: Newspaper },
   { href: "/library", label: "Library", icon: BookOpen },
   { href: "/assistant", label: "Assistant", icon: MessageSquareText },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
 ] as const;
 
-const isActive = (pathname: string, href: string) => (href === "/" ? pathname === "/" : pathname.startsWith(href));
+// Analytics is part of the admin dashboard, so only admins get this icon.
+const ADMIN_NAV = { href: "/admin?section=analytics", label: "Analytics", icon: BarChart3 } as const;
+
+const isActive = (pathname: string, href: string) => {
+  const path = href.split("?")[0];
+  return path === "/" ? pathname === "/" : pathname.startsWith(path);
+};
 
 /** Label that appears under an icon on hover/keyboard focus, so the bar can stay icon-only. */
 function Tip({ children }: { children: React.ReactNode }) {
@@ -96,7 +101,7 @@ export function Navbar() {
         </Link>
 
         <nav aria-label="Primary" className="flex min-w-0 flex-1 items-center justify-center gap-0.5 sm:gap-1.5">
-          {NAV.map(({ href, label, icon: Icon }) => {
+          {[...NAV, ...(user?.role === "admin" ? [ADMIN_NAV] : [])].map(({ href, label, icon: Icon }) => {
             const active = isActive(pathname, href);
             return (
               <Link key={href} href={href} aria-label={label} aria-current={active ? "page" : undefined} className={iconButton(active)}>
