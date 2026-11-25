@@ -19,7 +19,7 @@ import { cx, schoolLabel, shortSchool } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { useAuth } from "@/context/AuthContext";
 import { SCHOOLS } from "@/types/crc";
-import { domainOf } from "@/lib/domains";
+import { DOMAINS, domainOf } from "@/lib/domains";
 
 type FeedSort = "best" | "following" | "new" | "top";
 const isSort = (value: string | null): value is FeedSort => value === "best" || value === "following" || value === "new" || value === "top";
@@ -169,6 +169,8 @@ export function FeedWorkspace() {
     posts.forEach((post) => post.tags?.forEach((tag) => counts.set(tag, (counts.get(tag) ?? 0) + 1)));
     return [...counts.entries()].sort((a, b) => b[1] - a[1]);
   }, [posts]);
+  // The Domains filter always lists every domain in the same order, whatever the sort; counts may be 0.
+  const domainCounts = useMemo(() => new Map(topics), [topics]);
   const schools = useMemo(
     () => [...SCHOOLS, ...[...schoolCounts.keys()].filter((item) => !(SCHOOLS as readonly string[]).includes(item))],
     [schoolCounts],
@@ -192,15 +194,13 @@ export function FeedWorkspace() {
               ))}
             </div>
           </SidebarSection>
-          {topics.length > 0 && (
-            <SidebarSection title="Domains" onClear={topic ? () => setTopic(null) : undefined}>
-              <div role="radiogroup" aria-label="Filter by research domain" className="space-y-0.5">
-                {topics.map(([name, count]) => (
-                  <FilterOption key={name} label={name} count={count} active={topic === name} onClick={() => toggleTopic(name)} />
-                ))}
-              </div>
-            </SidebarSection>
-          )}
+          <SidebarSection title="Domains" onClear={topic ? () => setTopic(null) : undefined}>
+            <div role="radiogroup" aria-label="Filter by research domain" className="space-y-0.5">
+              {DOMAINS.map((name) => (
+                <FilterOption key={name} title={name} label={name} count={domainCounts.get(name) ?? 0} active={topic === name} onClick={() => toggleTopic(name)} />
+              ))}
+            </div>
+          </SidebarSection>
           {activeCount > 0 && (
             <div className="px-4 pb-4 pt-1">
               <button type="button" onClick={clearFilters} className="btn w-full">Clear all filters</button>
