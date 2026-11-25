@@ -1,7 +1,7 @@
 {
   "_generated": {
     "by": "evaluation/build_ground_truth.py",
-    "at": "2026-11-24T10:32:13+00:00",
+    "at": "2026-11-25T07:35:05+00:00",
     "note": "Labels come from the seed's planting rules, never from detector output."
   },
   "duplicate_pairs": [

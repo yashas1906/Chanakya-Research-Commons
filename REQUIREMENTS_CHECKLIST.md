@@ -1,7 +1,7 @@
 # Chanakya Research Commons: Requirements Checklist and Pending Work
 
 Checked against the DMW course project brief (submission due **28 Nov 2026**).
-Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phases 1–4 completed 24 Nov 2026** (rows below updated; numbers from `evaluation/evaluation_results.json`).
+Audit date: 24 Nov 2026. **Phases 1–12 and 5 (submission) completed 25 Nov 2026.** Counts and evaluation numbers below are from the live database and `evaluation/evaluation_results.json` as re-run on 25 Nov 2026.
 
 **Legend:** ✅ done · ⚠️ partly done or weak · ❌ missing · `[ ]` pending task
 
@@ -21,7 +21,7 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 ### F2. Posts and discussions
 | Requirement | Status | Notes |
 |---|---|---|
-| Create posts with tags | ✅ | |
+| Create posts with tags | ✅ | Tags are 1–3 research domains from a fixed list of 32 (dropdown), so the feed's filter stays clean. |
 | Attach papers or links from the library | ⚠️ | Papers ✅. Links only as text in the post body. |
 | Comment, reply, upvote | ✅ | |
 | Personal feed from followed people, followed topics and recommendations | ✅ | "Best" sort blends all three. |
@@ -84,12 +84,12 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 ### Data and seed corpus
 | Requirement | Status | Notes |
 |---|---|---|
-| At least 500 papers with abstracts | ✅ | 741, all with abstracts and embeddings. |
-| Citation links where available | ✅ | 188 internal edges (papers in the corpus rarely cite each other) plus OpenAlex global citation counts for 741 papers, used to validate PageRank (Spearman 0.41). |
-| At least 50 members across at least 6 departments | ✅ | 62 members, 6 schools, all 4 roles. |
-| At least 2,000 posts and comments | ✅ | 600 posts + 2,002 comments. |
-| At least 10,000 save/view/search events over at least 6 months | ✅ | About 11,200 events, 22 May to 24 Nov (just over 6 months). |
-| Follow links between members | ✅ | 360 member follows, 121 topic follows. |
+| At least 500 papers with abstracts | ✅ | 1,089 (960 papers + 129 RSS articles), all with abstracts and embeddings. |
+| Citation links where available | ✅ | 188 internal edges (papers in the corpus rarely cite each other) plus OpenAlex global citation counts, used to validate PageRank (Spearman 0.41). |
+| At least 50 members across at least 6 departments | ✅ | 61 members, 6 schools, all 4 roles. |
+| At least 2,000 posts and comments | ✅ | 601 posts + 2,002 comments. |
+| At least 10,000 save/view/search events over at least 6 months | ✅ | 14,389 events, 22 May to 25 Nov (just over 6 months). |
+| Follow links between members | ✅ | 362 member follows, 120 topic follows. |
 | Documented generator with realistic patterns | ✅ | `seed_database.py`, `improve_data.py`. |
 | Planted ground truth in a separate file | ✅ | Rebuilt by `evaluation/build_ground_truth.py` from the seed's planting rules: 30 duplicate pairs, 5 spam accounts, 3 spikes with a fixed anchor date. |
 | Synthetic data replaceable without schema changes | ✅ | `users.is_synthetic` flag. |
@@ -99,17 +99,17 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 |---|---|---|
 | Search quality vs baselines | ✅ | Held-out nDCG@10: hybrid 0.815 vs keyword 0.197 and old PageRank×50 hybrid 0.724; level with semantic-only (0.822, CIs overlap). PageRank weight tuned on dev queries (best = 0). |
 | Matching / dedup quality | ✅ | Benchmark F1 1.00 vs 0.87 (old word-set MinHash) and 0.10 (exact title). Actual merges 45/46 correct, 30/30 planted duplicates merged. |
-| Recommendation quality vs baselines | ⚠️ | New co-save + content hybrid: held-out recall@10 0.077 = item-CF, > popularity 0.019; beats the old formula on dev members (0.111 vs 0.049). Profile-only scored 0.115 on held-out members, so the result is within noise (26 members). Popularity was legitimately ~0: saves are spread thinly. |
-| Spam detection | ✅ | One shared model, log-scaled features: PR-AUC 0.81, ROC-AUC 0.99; threshold 0.09 → P 0.83 / R 1.00. A post-count baseline scores PR-AUC 0.93 (report this). |
+| Recommendation quality vs baselines | ✅ | Co-save + content hybrid: held-out recall@10 0.107 = item-CF 0.107, > profile-only 0.036 and popularity 0.018 (28 held-out members; intervals overlap with item-CF, so reported as a tie). |
+| Spam detection | ✅ | One shared model, log-scaled features: PR-AUC 0.73, ROC-AUC 0.975; threshold 0.09 → P 0.67 / R 0.80 (was 0.83 / 1.00 with 15 leftover test accounts in the population: threshold unstable with 5 positives). Post-count baseline PR-AUC 0.925. All reported in the technical report. |
 | RAG retrieval and refusal | ✅ | Hit@4 1.00; refusal rate 0.8 on out-of-corpus questions. |
 
 ### General expectations
 | Requirement | Status | Notes |
 |---|---|---|
-| One Git repo with README (setup, architecture, reproduce results) | ⚠️ | README now lists every step (migrations, seed, improve_data, ingest, enrich, ELT, ground truth, evaluation). A clean from-scratch rerun has not been done yet (see Phase 3). |
+| One Git repo with README (setup, architecture, reproduce results) | ✅ | README lists every step and where each evaluation number lives; the evaluation was re-run on 25 Nov and reproduced. A from-scratch re-seed in a separate database has not been done (see Phase 3). |
 | Config via environment files; no secrets committed | ✅ | All credentials come from `.env` (ignored by git); code stops with a clear message if one is missing and Docker Compose refuses to start without them. Old defaults remain in git history: they only ever protected local containers, but use fresh values for any shared deployment. |
 | Runs locally on free / open-source software | ✅ | Docker Compose + local Ollama. |
-| Report explains each library and model | ⬜ | Not part of this audit. Pending in the report. |
+| Report explains each library and model | ✅ | `docs/TECHNICAL_REPORT.md` §7. |
 
 ---
 
@@ -156,11 +156,12 @@ Audit date: 24 Nov 2026. Counts come from the live database at that date. **Phas
 - [x] Delete `CRC_Patches/`, `crc-frontend.patch` and `crc-frontend.zip` from the repo (old copies of the code).
 - [x] Add backend tests for the main endpoints: 21 tests (`backend/tests/test_features.py`, `test_endpoints.py`); throwaway accounts use `@tests.crc.invalid` and are deleted by `conftest.py` (the 19 accounts left by earlier runs were removed).
 
-### Phase 5: Submission
-- [ ] Technical report: architecture, data design, method per feature and why, evaluation results, limitations, deployment plan for Chanakya.
-- [ ] Explain each library and pretrained model used (sentence-transformers, pgvector, datasketch, NetworkX, mlxtend, scikit-learn, Ollama model, MinIO).
-- [ ] README final pass: setup, architecture, how to reproduce every evaluation number.
-- [ ] Demo script and viva preparation.
+### Phase 5: Submission ✅ done (25 Nov 2026)
+- [x] Technical report: architecture, data design, method per feature and why, evaluation results, limitations, deployment plan for Chanakya (`docs/TECHNICAL_REPORT.md`).
+- [x] Explain each library and pretrained model used (report §7).
+- [x] README final pass: setup, architecture, how to reproduce every evaluation number.
+- [x] Demo script and viva preparation (`docs/DEMO_AND_VIVA.md`; every demo query checked against the database).
+- [x] Evaluation re-run on the current database; changed spam and recommendation numbers updated everywhere.
 
 ---
 
