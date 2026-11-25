@@ -127,7 +127,10 @@ export function AdminOverviewTab({ state, onOpenMembers }: { state: AsyncState<A
           )}
         </Panel>
 
-        <AlertsPanel onChanged={reload} />
+        {/* On wide screens the alerts card takes the contributors card's height and scrolls inside it. */}
+        <div className="relative min-w-0 lg:min-h-[26rem]">
+          <AlertsPanel onChanged={reload} className="lg:absolute lg:inset-0" />
+        </div>
       </div>
     </div>
   );

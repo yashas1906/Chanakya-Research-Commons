@@ -15,7 +15,7 @@ import type { SystemAlert } from "@/types/crc";
 const isSpam = (a: SystemAlert) => a.alert_type === "spam_account" || a.alert_type === "USER_SPAM";
 
 /** F7 moderation queue: topic spikes and suspected spam accounts, with actions. */
-export function AlertsPanel({ onChanged }: { onChanged?: () => void }) {
+export function AlertsPanel({ onChanged, className }: { onChanged?: () => void; className?: string }) {
   const toast = useToast();
   const alerts = useAsync((signal) => getAlerts(signal), []);
   const [busy, setBusy] = useState<string | null>(null);
@@ -47,7 +47,7 @@ export function AlertsPanel({ onChanged }: { onChanged?: () => void }) {
 
   const list = alerts.data ?? [];
   return (
-    <Panel title="Alerts to review" meta={alerts.data ? String(list.length) : undefined}>
+    <Panel title="Alerts to review" meta={alerts.data ? String(list.length) : undefined} className={className} bodyClassName="flex flex-col">
       <div className="flex flex-wrap gap-2 border-b border-stone-100 px-4 py-2.5">
         <button type="button" className="btn-ghost min-h-8 px-2.5 text-meta" onClick={() => scan("spike")} disabled={busy !== null}>
           <Radar className="h-4 w-4" /> {busy === "scan-spike" ? "Scanning…" : "Scan for topic spikes"}
@@ -63,7 +63,8 @@ export function AlertsPanel({ onChanged }: { onChanged?: () => void }) {
       ) : list.length === 0 ? (
         <EmptyState title="Nothing to review" hint="Topic spikes and suspected spam accounts appear here after each scan or scheduled refresh." />
       ) : (
-        <ul className="divide-y divide-stone-100">
+        // The list scrolls inside the card, so a long queue never stretches the dashboard.
+        <ul className="crc-scroll max-h-[32rem] min-h-0 flex-1 divide-y divide-stone-100 overflow-y-auto overscroll-contain lg:max-h-none" aria-label="Alerts">
           {list.map((a) => {
             const spam = isSpam(a);
             const d = a.details ?? {};
