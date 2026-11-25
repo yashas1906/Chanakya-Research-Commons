@@ -130,7 +130,7 @@ What it does, and the technique behind each part:
 ## 4. Database Design & Schema Architecture
 
 The database `chanakya_commons` runs in PostgreSQL 16 with `pgvector` and `pg_trgm`. DDL: `db/schema.sql`;
-changes since then: `db/migrations/002–009` (idempotent, applied by `db/apply_migrations.py`).
+changes since then: `db/migrations/002–010` (idempotent, applied by `db/apply_migrations.py`).
 
 ### 4.1 Operational / OLTP Schema (`public`)
 
@@ -337,7 +337,7 @@ python evaluation/evaluate_all.py         # writes evaluation/evaluation_results
 `F7_trends_and_spam`; assistant `F8_assistant_retrieval`. The "also saved" coverage was measured by calling
 `/api/papers/{id}/also-saved` for every library item (25 Nov 2026).
 
-**API tests:** `python -m pytest backend/tests -q` runs 32 end-to-end tests against the development database; the
+**API tests:** `python -m pytest backend/tests -q` runs 33 end-to-end tests against the development database; the
 throwaway accounts they create (`@tests.crc.invalid`) are deleted with everything they made.
 
 ---
@@ -389,7 +389,7 @@ pip install -r backend/requirements.txt
 
 **Step 3: Schema and seed corpus**
 ```bash
-python db/apply_migrations.py                    # schema.sql changes + migrations 002–009
+python db/apply_migrations.py                    # schema.sql changes + migrations 002–010
 python data_pipeline/seed_database.py            # OpenAlex/arXiv papers, synthetic community, planted ground truth
 python data_pipeline/improve_data.py             # realistic names, comments and votes
 python -m data_pipeline.fix_post_papers --apply  # attach seeded posts to papers on their own topics
@@ -412,7 +412,7 @@ python data_pipeline/run_dw_elt.py
 ```bash
 python evaluation/build_ground_truth.py
 python evaluation/evaluate_all.py                # → evaluation/evaluation_results.json (section 8)
-python -m pytest backend/tests -q                # 32 API tests
+python -m pytest backend/tests -q                # 33 API tests
 ```
 *OpenAlex returns slightly different results over time, so a fresh seed gives slightly different counts and scores.*
 
@@ -481,7 +481,7 @@ Chanakya-Research-Commons/
 │   └── CRC DMW Project Gap Analysis and Improvement Plan.pdf
 ├── db/
 │   ├── schema.sql                extensions, OLTP schema, dw star schema, mining views
-│   ├── migrations/002–009        incremental, idempotent schema changes
+│   ├── migrations/002–010        incremental, idempotent schema changes
 │   ├── apply_migrations.py · update_database.py · apply_schools_migration.py
 ├── data_pipeline/
 │   ├── seed_database.py · improve_data.py · fix_post_papers.py   seed corpus and synthetic community
@@ -493,7 +493,7 @@ Chanakya-Research-Commons/
 │   ├── main.py                   FastAPI application
 │   ├── domains.py                the 32 research domains for posts
 │   ├── services/                 search (RRF) · recommendations · spam · mining (FP-Growth, clustering) · anomaly
-│   ├── tests/                    32 API tests
+│   ├── tests/                    33 API tests
 │   └── requirements.txt · Dockerfile
 ├── frontend/                     Next.js 14 app (app/, components/, lib/, types/)
 ├── frontend_static/index.html    older zero-build preview (public features only)
@@ -528,3 +528,4 @@ Chanakya-Research-Commons/
 | 2026-11-25 | `phase-12` | Admin dashboard: "Analytics" in the top bar is now "Dashboard" and opens on Overview. New Chanakya holdings tab to post papers/articles (title, type, authors, abstract, venue, year, DOI, arXiv, link, school, topics) straight into the library, with posting history, edit and delete. Members tab gains a Manage panel per member: role change and every post with view, edit and delete. Migration `009_admin_holdings.sql` records who posted each holding. |
 | 2026-11-25 | `polish` | Admin alert list scrolls inside its card; the Feed's Domains filter always lists all 32 domains in a fixed order; the search "All" tab removed (results open on Papers). |
 | 2026-11-25 | `phase-5` | Submission: `docs/TECHNICAL_REPORT.md` (architecture, data design, methods, evaluation, libraries and models, limitations, deployment plan), `docs/DEMO_AND_VIVA.md`, README final pass. Evaluation re-run on the current database (spam threshold instability reported); `.env.example` now sets `CRC_CORS_ORIGINS`, the name the backend reads. |
+| 2026-11-25 | `comments` | Members can edit and delete their own comments, in the discussion thread and on their profile ("edited" marker; a deleted comment with replies stays as a placeholder). Migration `010_comment_edits.sql`. Security: no secrets in docs, PostgreSQL / MinIO / Ollama bound to `127.0.0.1`. |

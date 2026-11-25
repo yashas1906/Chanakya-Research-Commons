@@ -694,7 +694,7 @@ def get_user_profile(user_id: UUID, viewer=Depends(current_user_optional)):
             """
             SELECT
               (SELECT COUNT(*) FROM posts WHERE author_id = %(u)s::uuid AND is_flagged_spam = FALSE) AS post_count,
-              (SELECT COUNT(*) FROM comments WHERE author_id = %(u)s::uuid) AS comment_count,
+              (SELECT COUNT(*) FROM comments WHERE author_id = %(u)s::uuid AND NOT is_deleted) AS comment_count,
               (SELECT COALESCE(SUM(upvote_count), 0) FROM posts WHERE author_id = %(u)s::uuid AND is_flagged_spam = FALSE) AS karma,
               (SELECT COUNT(*) FROM user_follows WHERE followee_id = %(u)s::uuid) AS follower_count,
               (SELECT COUNT(*) FROM user_follows WHERE follower_id = %(u)s::uuid) AS following_count,
@@ -725,9 +725,9 @@ def get_user_profile(user_id: UUID, viewer=Depends(current_user_optional)):
 
         cur.execute(
             """
-            SELECT c.comment_id, c.post_id, p.title AS post_title, c.body, c.created_at
+            SELECT c.comment_id, c.post_id, p.title AS post_title, c.body, c.created_at, c.edited_at, c.parent_comment_id
             FROM comments c JOIN posts p ON p.post_id = c.post_id
-            WHERE c.author_id = %s::uuid AND p.is_flagged_spam = FALSE
+            WHERE c.author_id = %s::uuid AND p.is_flagged_spam = FALSE AND NOT c.is_deleted
             ORDER BY c.created_at DESC
             LIMIT 40
             """,
@@ -1089,9 +1089,13 @@ def get_comments(post_id: UUID):
             raise HTTPException(status_code=404, detail="Post not found")
         cur.execute(
             """
-            SELECT c.comment_id, c.post_id, c.author_id, u.full_name AS author_name,
-                   u.role AS author_role, u.department AS author_dept,
-                   c.parent_comment_id, c.body, c.created_at
+            SELECT c.comment_id, c.post_id,
+                   CASE WHEN c.is_deleted THEN NULL ELSE c.author_id END AS author_id,
+                   CASE WHEN c.is_deleted THEN 'Deleted comment' ELSE u.full_name END AS author_name,
+                   CASE WHEN c.is_deleted THEN NULL ELSE u.role END AS author_role,
+                   CASE WHEN c.is_deleted THEN NULL ELSE u.department END AS author_dept,
+                   c.parent_comment_id, CASE WHEN c.is_deleted THEN '' ELSE c.body END AS body,
+                   c.created_at, c.edited_at, c.is_deleted
             FROM comments c
             JOIN users u ON c.author_id = u.user_id
             WHERE c.post_id = %s::uuid
@@ -1114,7 +1118,7 @@ def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user
             raise HTTPException(status_code=404, detail="Post not found")
         if payload.parent_comment_id:
             cur.execute(
-                "SELECT 1 FROM comments WHERE comment_id = %s AND post_id = %s",
+                "SELECT 1 FROM comments WHERE comment_id = %s AND post_id = %s AND NOT is_deleted",
                 (payload.parent_comment_id, post_id),
             )
             if not cur.fetchone():
@@ -1140,7 +1144,7 @@ def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user
             """
             SELECT c.comment_id, c.post_id, c.author_id, u.full_name AS author_name,
                    u.role AS author_role, u.department AS author_dept,
-                   c.parent_comment_id, c.body, c.created_at
+                   c.parent_comment_id, c.body, c.created_at, c.edited_at, c.is_deleted
             FROM comments c JOIN users u ON u.user_id = c.author_id
             WHERE c.comment_id = %s
             """,
@@ -1150,6 +1154,76 @@ def add_comment(post_id: UUID, payload: CommentCreate, user=Depends(current_user
         conn.commit()
         cur.close()
         return comment
+
+
+class CommentUpdate(BaseModel):
+    body: str = Field(..., min_length=1, max_length=5000)
+
+
+def _own_comment(cur, comment_id: UUID, user, allow_admin: bool = False) -> dict:
+    """The comment, locked for update, if this member may change it; otherwise 404 / 403."""
+    cur.execute("SELECT comment_id, author_id, post_id, is_deleted FROM comments WHERE comment_id = %s FOR UPDATE", (comment_id,))
+    row = cur.fetchone()
+    if not row or row["is_deleted"]:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    is_author = str(row["author_id"]) == str(user["user_id"])
+    if not is_author and not (allow_admin and user["role"] == "admin"):
+        raise HTTPException(status_code=403, detail="You can only change your own comments")
+    return row
+
+
+@app.patch("/api/comments/{comment_id}")
+def update_comment(comment_id: UUID, payload: CommentUpdate, user=Depends(current_user)):
+    """Only the author can edit a comment. Stamps edited_at so the thread can show "edited"."""
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(status_code=422, detail="A comment cannot be empty")
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            _own_comment(cur, comment_id, user)
+        except HTTPException:
+            cur.close()
+            raise
+        cur.execute(
+            """
+            UPDATE comments SET body = %s,
+                   edited_at = CASE WHEN body = %s THEN edited_at ELSE NOW() END
+            WHERE comment_id = %s
+            RETURNING comment_id, body, edited_at
+            """,
+            (body, body, comment_id),
+        )
+        updated = cur.fetchone()
+        conn.commit()
+        cur.close()
+    return updated
+
+
+@app.delete("/api/comments/{comment_id}")
+def delete_comment(comment_id: UUID, user=Depends(current_user)):
+    """
+    The author (or an admin moderating) deletes a comment. A comment with replies is kept as a
+    "deleted" placeholder so the replies stay in context; one without replies is removed, with its event.
+    """
+    with get_db() as conn:
+        cur = conn.cursor()
+        try:
+            _own_comment(cur, comment_id, user, allow_admin=True)
+        except HTTPException:
+            cur.close()
+            raise
+        cur.execute("SELECT EXISTS (SELECT 1 FROM comments WHERE parent_comment_id = %s) AS has_replies", (comment_id,))
+        if cur.fetchone()["has_replies"]:
+            cur.execute("UPDATE comments SET is_deleted = TRUE, body = '' WHERE comment_id = %s", (comment_id,))
+            mode = "placeholder"
+        else:
+            cur.execute("DELETE FROM comments WHERE comment_id = %s", (comment_id,))
+            mode = "removed"
+        cur.execute("DELETE FROM activity_events WHERE event_type = 'add_comment' AND target_id = %s", (str(comment_id),))
+        conn.commit()
+        cur.close()
+    return {"status": "deleted", "comment_id": str(comment_id), "mode": mode}
 
 
 # ==========================================

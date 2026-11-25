@@ -7,6 +7,7 @@ import { AppearanceSetting } from "@/components/profile/AppearanceSetting";
 import { EditProfileDialog } from "@/components/profile/EditProfileDialog";
 import { ProfileCollections } from "@/components/profile/ProfileCollections";
 import { PostCard } from "@/components/feed/PostCard";
+import { CommentEditor, CommentOwnerActions } from "@/components/feed/CommentControls";
 import { PaperRow } from "@/components/library/PaperRow";
 import { Avatar } from "@/components/ui/Section";
 import { RoleBadge } from "@/components/ui/RoleBadge";
@@ -20,6 +21,7 @@ import { noteMemberFollow } from "@/lib/member-follows";
 import { cx, fmtCount, relTime, shortSchool } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { useSaves } from "@/lib/saves-context";
+import type { ProfileComment } from "@/types/crc";
 
 type TabId = "overview" | "posts" | "comments" | "collections" | "saved";
 
@@ -47,6 +49,33 @@ function ProfileSkeleton() {
       <Skeleton className="h-10 w-80" />
       <Skeleton className="h-32 w-full" />
     </div>
+  );
+}
+
+/** One comment in a profile's Comments tab; on your own profile it can be edited or deleted in place. */
+function ProfileCommentItem({ comment, mine, onDeleted }: { comment: ProfileComment; mine: boolean; onDeleted: () => void }) {
+  const [body, setBody] = useState(comment.body);
+  const [editedAt, setEditedAt] = useState(comment.edited_at);
+  const [editing, setEditing] = useState(false);
+  return (
+    <li className="card p-4">
+      <p className="text-label text-stone-500">
+        Commented on{" "}
+        <Link href={`/feed/${comment.post_id}#c-${comment.comment_id}`} className="font-semibold text-ink hover:text-brand-700">{comment.post_title}</Link>
+        {" · "}{relTime(comment.created_at)}
+        {editedAt && <span className="text-stone-400"> (edited)</span>}
+      </p>
+      {editing ? (
+        <CommentEditor commentId={comment.comment_id} initial={body} onCancel={() => setEditing(false)} onSaved={(next, at) => { setBody(next); setEditedAt(at ?? editedAt); setEditing(false); }} />
+      ) : (
+        <p className="mt-2 whitespace-pre-wrap text-body leading-relaxed text-stone-700">{body}</p>
+      )}
+      {mine && !editing && (
+        <div className="mt-3 flex items-center gap-3">
+          <CommentOwnerActions commentId={comment.comment_id} onEdit={() => setEditing(true)} onDeleted={onDeleted} />
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -134,16 +163,7 @@ export function ProfileView({ userId }: { userId: string }) {
     <div className="card"><EmptyState title="No comments yet" hint={isSelf ? "Join a discussion to see your replies here." : `${person.full_name} hasn’t commented yet.`} /></div>
   ) : (
     <ul className="space-y-3">
-      {comments.map((c) => (
-        <li key={c.comment_id} className="card card-hover p-4">
-          <p className="text-label text-stone-500">
-            Commented on{" "}
-            <Link href={`/feed/${c.post_id}`} className="font-semibold text-ink hover:text-brand-700">{c.post_title}</Link>
-            {" · "}{relTime(c.created_at)}
-          </p>
-          <p className="mt-2 whitespace-pre-wrap text-body leading-relaxed text-stone-700">{c.body}</p>
-        </li>
-      ))}
+      {comments.map((c) => <ProfileCommentItem key={c.comment_id} comment={c} mine={isSelf} onDeleted={profile.reload} />)}
     </ul>
   );
 

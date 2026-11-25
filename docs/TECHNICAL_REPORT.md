@@ -124,7 +124,7 @@ everything a member waits for (search, feed, recommendations, retrieval) is a si
 
 | Component | Path | Role |
 |---|---|---|
-| Schema | `db/schema.sql`, `db/migrations/002–009` | OLTP + warehouse DDL; migrations are idempotent (`db/apply_migrations.py`) |
+| Schema | `db/schema.sql`, `db/migrations/002–010` | OLTP + warehouse DDL; migrations are idempotent (`db/apply_migrations.py`) |
 | Seed generator | `data_pipeline/seed_database.py`, `improve_data.py` | Real papers from OpenAlex/arXiv; synthetic members and 6 months of activity with planted patterns |
 | Ingestion | `data_pipeline/ingest.py`, `feeds.json`, `scheduler.py` | Incremental batches from OpenAlex, arXiv, RSS; 6-hourly refresh |
 | Entity resolution | `data_pipeline/dedup.py` | MinHash LSH, verification, union-find merge, `paper_merges` log |
@@ -132,7 +132,7 @@ everything a member waits for (search, feed, recommendations, retrieval) is a si
 | Backend | `backend/main.py`, `backend/services/*.py`, `backend/domains.py` | REST API; search, recommendation, spam and mining logic shared with the evaluation |
 | Frontend | `frontend/` | Next.js 14 (App Router, TypeScript, Tailwind) |
 | Evaluation | `evaluation/build_ground_truth.py`, `evaluate_all.py` | Ground truth from planting rules; every metric in §6 |
-| Tests | `backend/tests/` | 32 API tests against the development database; test accounts clean up after themselves |
+| Tests | `backend/tests/` | 33 API tests against the development database; test accounts clean up after themselves |
 
 ---
 
@@ -538,10 +538,11 @@ and the refusal gate are what the system controls.
 
 ### 6.6 Software tests
 
-32 backend tests (`backend/tests/`) exercise the API end to end against the development database: login and
+33 backend tests (`backend/tests/`) exercise the API end to end against the development database: login and
 throttling, profiles, posts with attached papers, domain validation, feeds and follow reasons, library saves
 and notes, save-by-identifier, search panels, recommendations privacy, also-saved, trends, moderation,
-drill-down, admin holdings (create / edit / duplicate DOI / delete), admin post moderation and role changes.
+drill-down, admin holdings (create / edit / duplicate DOI / delete), admin post moderation and role changes,
+and comment editing and deletion (author only; placeholder kept when a comment has replies).
 Test accounts use a reserved domain and are deleted with everything they created.
 
 ---
@@ -648,7 +649,7 @@ docker compose up -d postgres minio ollama
 python -m venv .venv && .venv/Scripts/activate        # Windows; use .venv/bin/activate elsewhere
 pip install -r backend/requirements.txt
 
-python db/apply_migrations.py                         # schema + migrations 002–009
+python db/apply_migrations.py                         # schema + migrations 002–010
 python data_pipeline/seed_database.py                 # OpenAlex/arXiv papers, synthetic community, planted truth
 python data_pipeline/improve_data.py                  # realistic names, comments, votes
 python -m data_pipeline.fix_post_papers --apply       # attach seeded posts to on-topic papers
@@ -658,7 +659,7 @@ python data_pipeline/run_dw_elt.py                    # PageRank, star schema, a
 
 python evaluation/build_ground_truth.py               # labels from the planting rules
 python evaluation/evaluate_all.py                     # every number in §6 → evaluation/evaluation_results.json
-python -m pytest backend/tests -q                     # 32 API tests
+python -m pytest backend/tests -q                     # 33 API tests
 
 docker exec -it crc_ollama ollama pull llama3.2:3b    # for the assistant
 python start.py                                       # backend :8000, frontend :3000, opens the browser

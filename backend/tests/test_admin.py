@@ -78,3 +78,36 @@ def test_admin_changes_roles_but_not_their_own(client, member, admin_headers):
     assert client.patch(f"/api/admin/members/{member['user_id']}/role", json={"role": "admin"}, headers=member["headers"]).status_code == 403
     me = client.get("/api/auth/me", headers=admin_headers).json()
     assert client.patch(f"/api/admin/members/{me['user_id']}/role", json={"role": "student"}, headers=admin_headers).status_code == 422
+
+
+def test_members_edit_and_delete_only_their_own_comments(client, member, other_member, admin_headers):
+    post = client.post("/api/posts", json={"title": "Comment rules", "body": "Body.", "tags": []}, headers=member["headers"]).json()
+    pid = str(post["post_id"])
+    add = lambda body, headers, parent=None: client.post(f"/api/posts/{pid}/comments", json={"body": body, "parent_comment_id": parent}, headers=headers)
+    mine = str(add("first take", member["headers"]).json()["comment_id"])
+    reply = str(add("a reply", other_member["headers"], mine).json()["comment_id"])
+
+    # Only the author can edit; the edit is marked.
+    assert client.patch(f"/api/comments/{mine}", json={"body": "hijack"}, headers=other_member["headers"]).status_code == 403
+    assert client.patch(f"/api/comments/{mine}", json={"body": "   "}, headers=member["headers"]).status_code == 422
+    r = client.patch(f"/api/comments/{mine}", json={"body": "second take"}, headers=member["headers"])
+    assert r.status_code == 200 and r.json()["edited_at"]
+    thread = {c["comment_id"]: c for c in client.get(f"/api/posts/{pid}/comments").json()}
+    assert thread[mine]["body"] == "second take" and thread[mine]["edited_at"]
+
+    # Another member can't delete it. Deleting a comment with replies leaves an anonymous placeholder.
+    assert client.delete(f"/api/comments/{mine}", headers=other_member["headers"]).status_code == 403
+    r = client.delete(f"/api/comments/{mine}", headers=member["headers"])
+    assert r.status_code == 200 and r.json()["mode"] == "placeholder"
+    thread = {c["comment_id"]: c for c in client.get(f"/api/posts/{pid}/comments").json()}
+    assert thread[mine]["is_deleted"] and thread[mine]["body"] == "" and thread[mine]["author_id"] is None
+    assert reply in thread                                                        # the reply survives
+    assert add("reply to deleted", member["headers"], mine).status_code == 400
+    assert client.patch(f"/api/comments/{mine}", json={"body": "back"}, headers=member["headers"]).status_code == 404
+    profile = client.get(f"/api/users/{member['user_id']}", headers=member["headers"]).json()
+    assert all(c["comment_id"] != mine for c in profile["comments"])
+
+    # A comment without replies is removed outright; an admin may remove anyone's.
+    r = client.delete(f"/api/comments/{reply}", headers=admin_headers)
+    assert r.status_code == 200 and r.json()["mode"] == "removed"
+    assert all(c["comment_id"] != reply for c in client.get(f"/api/posts/{pid}/comments").json())

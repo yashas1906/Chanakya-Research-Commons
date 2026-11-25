@@ -348,6 +348,7 @@ export async function getProfile(userId: string, signal?: AbortSignal): Promise<
         post_title: str(r.post_title),
         body: str(r.body),
         created_at: str(r.created_at),
+        edited_at: strOrNull(r.edited_at),
       };
     }),
     is_following: o.is_following === true,
@@ -482,6 +483,18 @@ export async function addComment(
   input: { author_id: string; body: string; parent_comment_id?: string | null },
 ): Promise<void> {
   await request(ENDPOINTS.comments(postId), { method: "POST", body: input });
+}
+
+/** Change the text of your own comment. */
+export async function updateComment(commentId: string, body: string): Promise<{ body: string; edited_at: string | null }> {
+  const raw = await request(`/comments/${commentId}`, { method: "PATCH", body: { body } });
+  const o = isRecord(raw) ? raw : {};
+  return { body: str(o.body, body), edited_at: strOrNull(o.edited_at) };
+}
+
+/** Delete your own comment. One with replies stays as a "deleted" placeholder. */
+export async function deleteComment(commentId: string): Promise<void> {
+  await request(`/comments/${commentId}`, { method: "DELETE" });
 }
 
 /* --------------------------------- library ------------------------------ */

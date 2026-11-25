@@ -7,6 +7,7 @@ import { RoleBadge } from "@/components/ui/RoleBadge";
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { SkeletonLines } from "@/components/ui/Skeleton";
 import { ShareButton } from "@/components/feed/ShareButton";
+import { CommentEditor, CommentOwnerActions } from "@/components/feed/CommentControls";
 import { addComment, describeError, getComments } from "@/lib/api";
 import { relTime } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
@@ -100,31 +101,47 @@ function Reply({
   );
 }
 
-function CommentItem({ node, postId, depth, onReply }: { node: Node; postId: string; depth: number; onReply: (body: string, parentId: string) => Promise<void> }) {
+function CommentItem({ node, postId, depth, onReply, onChanged }: { node: Node; postId: string; depth: number; onReply: (body: string, parentId: string) => Promise<void>; onChanged: () => void }) {
+  const { user } = useAuth();
   const [replying, setReplying] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  // Edit and Delete appear only on the signed-in member's own comments (the server checks this too).
+  const mine = !!user && !node.is_deleted && node.author_id === user.user_id;
   const visualDepth = Math.min(depth, 5);
   const children = collapsed ? null : node.children;
   return (
     <li id={`c-${node.comment_id}`} className="min-w-0 scroll-mt-24 space-y-3">
       <div className="flex min-w-0 gap-3">
-        <Avatar name={node.author_name} size={32} />
+        {node.is_deleted ? <span aria-hidden className="h-8 w-8 shrink-0 rounded-full border border-dashed border-stone-300" /> : <Avatar name={node.author_name} size={32} />}
         <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-ui font-medium text-ink">{node.author_name}</span>
-            {node.author_role && <RoleBadge role={node.author_role} />}
-            <span className="text-meta text-stone-500">{relTime(node.created_at)}</span>
-          </div>
-          <p className="mt-1 whitespace-pre-wrap text-body leading-relaxed text-stone-700">{node.body}</p>
+          {node.is_deleted ? (
+            <p className="py-1 text-meta italic text-stone-400">This comment was deleted.</p>
+          ) : (
+            <>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-ui font-medium text-ink">{node.author_name}</span>
+                {node.author_role && <RoleBadge role={node.author_role} />}
+                <span className="text-meta text-stone-500">{relTime(node.created_at)}</span>
+                {node.edited_at && <span className="text-meta text-stone-400" title={`Edited ${relTime(node.edited_at)}`}>(edited)</span>}
+              </div>
+              {editing ? (
+                <CommentEditor commentId={node.comment_id} initial={node.body} onCancel={() => setEditing(false)} onSaved={() => { setEditing(false); onChanged(); }} />
+              ) : (
+                <p className="mt-1 whitespace-pre-wrap text-body leading-relaxed text-stone-700">{node.body}</p>
+              )}
+            </>
+          )}
           <div className="mt-2 flex flex-wrap items-center gap-3">
-            <button type="button" onClick={() => setReplying((value) => !value)} className="inline-flex items-center gap-1 text-meta font-medium text-stone-600 hover:text-ink"><CornerDownRight className="h-4 w-4" />Reply</button>
-            <ShareButton url={`/feed/${postId}#c-${node.comment_id}`} />
+            {!node.is_deleted && <button type="button" onClick={() => setReplying((value) => !value)} className="inline-flex items-center gap-1 text-meta font-medium text-stone-600 hover:text-ink"><CornerDownRight className="h-4 w-4" />Reply</button>}
+            {!node.is_deleted && <ShareButton url={`/feed/${postId}#c-${node.comment_id}`} />}
+            {mine && !editing && <CommentOwnerActions commentId={node.comment_id} hasReplies={node.children.length > 0} onEdit={() => { setEditing(true); setReplying(false); }} onDeleted={onChanged} />}
             {node.children.length > 0 && <button type="button" onClick={() => setCollapsed((value) => !value)} className="text-meta text-stone-500 hover:text-ink">{collapsed ? `[+] ${countReplies(node)} replies` : "Collapse thread"}</button>}
           </div>
         </div>
       </div>
       {replying && <div className="ml-10"><Reply placeholder={`Reply to ${node.author_name}…`} onSubmit={(body) => onReply(body, node.comment_id)} onCancel={() => setReplying(false)} /></div>}
-      {children && children.length > 0 && <ul className={`ml-4 space-y-4 pl-4 ${visualDepth < 5 ? "border-l border-stone-200" : ""}`}>{children.map((child) => <CommentItem key={child.comment_id} node={child} postId={postId} depth={visualDepth + 1} onReply={onReply} />)}</ul>}
+      {children && children.length > 0 && <ul className={`ml-4 space-y-4 pl-4 ${visualDepth < 5 ? "border-l border-stone-200" : ""}`}>{children.map((child) => <CommentItem key={child.comment_id} node={child} postId={postId} depth={visualDepth + 1} onReply={onReply} onChanged={onChanged} />)}</ul>}
       {depth >= 5 && node.children.length > 0 && collapsed && <button type="button" onClick={() => setCollapsed(false)} className="ml-10 text-meta font-medium text-stone-600">Continue thread ({countReplies(node)} replies)</button>}
     </li>
   );
@@ -185,7 +202,7 @@ export function CommentThread({ postId, onCountKnown }: { postId: string; onCoun
       {loading && !data ? <SkeletonLines lines={4} />
         : error ? <ErrorState compact error={error} onRetry={reload} />
           : tree.length === 0 ? <EmptyState className="py-6" title={filter ? "No comments match" : "No replies yet"} hint={filter ? "Try a different search term." : "Be the first to respond."} />
-            : <ul className="space-y-6">{tree.map((node) => <CommentItem key={node.comment_id} node={node} postId={postId} depth={0} onReply={(body, parent) => submit(body, parent)} />)}</ul>}
+            : <ul className="space-y-6">{tree.map((node) => <CommentItem key={node.comment_id} node={node} postId={postId} depth={0} onReply={(body, parent) => submit(body, parent)} onChanged={reload} />)}</ul>}
     </section>
   );
 }

@@ -149,7 +149,7 @@ Show the results table (report §6 or README §8) and close with the honest find
 | Spikes | Recall@3 1.00, alert precision 1.00 |
 | Spam | ROC-AUC 0.975, PR-AUC 0.73; baseline post count PR-AUC 0.925; threshold 0.09 → P 0.67, R 0.80 |
 | Assistant | Hit@4 1.00, 22 ms retrieval, refuses 4/5 off-corpus at similarity < 0.32 |
-| Tests | 32 backend API tests passing |
+| Tests | 33 backend API tests passing |
 
 ---
 

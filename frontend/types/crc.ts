@@ -51,6 +51,7 @@ export interface ProfileComment {
   post_title: string;
   body: string;
   created_at: string;
+  edited_at: string | null;
 }
 
 export interface ProfilePayload {
@@ -292,6 +293,10 @@ export interface Comment {
   parent_comment_id: string | null;
   body: string;
   created_at: string;
+  /** Set when the author changed the text. */
+  edited_at: string | null;
+  /** Deleted by its author but kept as a placeholder because it has replies. */
+  is_deleted: boolean;
 }
 
 /* ------------------------------------------------------------------ */

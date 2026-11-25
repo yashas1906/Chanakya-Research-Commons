@@ -290,6 +290,8 @@ export function normalizeComments(raw: unknown, postId: string): Comment[] {
       parent_comment_id: strOrNull(u.parent_comment_id),
       body: str(u.body),
       created_at: str(u.created_at),
+      edited_at: strOrNull(u.edited_at),
+      is_deleted: u.is_deleted === true,
     };
   });
 }
