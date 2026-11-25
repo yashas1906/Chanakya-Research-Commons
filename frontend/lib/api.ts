@@ -1080,3 +1080,119 @@ export async function getDrilldown(school: string | null, topic: string | null, 
     }),
   };
 }
+
+/* ------------------------- admin: holdings & members ------------------------ */
+
+/** The fields an admin fills in to post a Chanakya holding. */
+export interface HoldingInput {
+  title: string;
+  abstract: string;
+  authors: string[];
+  publication_year: number | null;
+  venue: string;
+  doi: string;
+  arxiv_id: string;
+  url: string;
+  item_type: "paper" | "article";
+  school: string;
+  topics: string[];
+}
+
+export interface AdminHolding {
+  paper_id: string;
+  canonical_title: string;
+  authors: string[];
+  publication_year: number | null;
+  venue: string | null;
+  doi: string | null;
+  item_type: "paper" | "article";
+  topics: string[];
+  save_count: number;
+  discussion_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+  created_by_name: string | null;
+}
+
+export async function getAdminHoldings(
+  query: { q?: string; scope: "posted" | "all"; limit: number; offset: number },
+  signal?: AbortSignal,
+): Promise<{ total: number; items: AdminHolding[] }> {
+  const o = (await request("/admin/holdings", { query, signal })) as Record<string, unknown>;
+  const items = Array.isArray(o.items) ? o.items : [];
+  return {
+    total: num(o.total),
+    items: items.map((raw) => {
+      const r = isRecord(raw) ? raw : {};
+      const authors = Array.isArray(r.authors) ? r.authors.map((a) => (isRecord(a) ? str(a.name) : str(a))).filter(Boolean) : [];
+      return {
+        paper_id: str(r.paper_id),
+        canonical_title: str(r.canonical_title),
+        authors,
+        publication_year: typeof r.publication_year === "number" ? r.publication_year : null,
+        venue: strOrNull(r.venue),
+        doi: strOrNull(r.doi),
+        item_type: r.item_type === "article" ? "article" : "paper",
+        topics: strList(r.topics),
+        save_count: num(r.save_count),
+        discussion_count: num(r.discussion_count),
+        created_at: strOrNull(r.created_at),
+        updated_at: strOrNull(r.updated_at),
+        created_by_name: strOrNull(r.created_by_name),
+      };
+    }),
+  };
+}
+
+export async function createHolding(input: HoldingInput): Promise<{ paper_id: string; canonical_title: string }> {
+  const raw = await request("/admin/holdings", { method: "POST", body: input });
+  const o = isRecord(raw) ? raw : {};
+  return { paper_id: str(o.paper_id), canonical_title: str(o.canonical_title) };
+}
+
+export async function updateHolding(paperId: string, input: HoldingInput): Promise<void> {
+  await request(`/admin/holdings/${paperId}`, { method: "PATCH", body: input });
+}
+
+export async function deleteHolding(paperId: string): Promise<void> {
+  await request(`/admin/holdings/${paperId}`, { method: "DELETE" });
+}
+
+export interface AdminMemberPost {
+  post_id: string;
+  title: string;
+  body: string;
+  tags: string[];
+  upvote_count: number;
+  comment_count: number;
+  created_at: string | null;
+  edited_at: string | null;
+  is_flagged_spam: boolean;
+  attached_paper_id: string | null;
+  attached_paper_title: string | null;
+}
+
+export async function getAdminMemberPosts(userId: string, signal?: AbortSignal): Promise<AdminMemberPost[]> {
+  const raw = await request(`/admin/members/${userId}/posts`, { signal });
+  if (!Array.isArray(raw)) return [];
+  return raw.map((x) => {
+    const r = isRecord(x) ? x : {};
+    return {
+      post_id: str(r.post_id),
+      title: str(r.title),
+      body: str(r.body),
+      tags: strList(r.tags),
+      upvote_count: num(r.upvote_count),
+      comment_count: num(r.comment_count),
+      created_at: strOrNull(r.created_at),
+      edited_at: strOrNull(r.edited_at),
+      is_flagged_spam: r.is_flagged_spam === true,
+      attached_paper_id: strOrNull(r.attached_paper_id),
+      attached_paper_title: strOrNull(r.attached_paper_title),
+    };
+  });
+}
+
+export async function setMemberRole(userId: string, role: AdminMember["role"]): Promise<void> {
+  await request(`/admin/members/${userId}/role`, { method: "PATCH", body: { role } });
+}

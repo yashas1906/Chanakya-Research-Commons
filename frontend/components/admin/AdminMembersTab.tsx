@@ -1,14 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Search, ShieldAlert } from "lucide-react";
+import { Fragment, useEffect, useState } from "react";
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FileText, Search, ShieldAlert } from "lucide-react";
 import { Avatar } from "@/components/ui/Section";
 import { RoleBadge } from "@/components/ui/RoleBadge";
 import { EmptyState, ErrorState } from "@/components/ui/States";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { getAdminMembers } from "@/lib/api";
 import { SpamToggle } from "@/components/admin/SpamToggle";
+import { MemberPostsPanel } from "@/components/admin/MemberPostsPanel";
 import { cx, fmtInt, relTime } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import type { AdminMemberSort } from "@/types/crc";
@@ -37,6 +38,8 @@ export function AdminMembersTab({ departments }: { departments: string[] }) {
   const [sort, setSort] = useState<AdminMemberSort>("joined");
   const [order, setOrder] = useState<"asc" | "desc">("desc");
   const [page, setPage] = useState(0);
+  // The member whose posts and role panel is open under their row.
+  const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
     const t = window.setTimeout(() => {
@@ -114,12 +117,13 @@ export function AdminMembersTab({ departments }: { departments: string[] }) {
                     </button>
                   </th>
                 ))}
-                <th scope="col" className="px-3 py-2.5"><span className="sr-only">Moderation</span></th>
+                <th scope="col" className="px-3 py-2.5"><span className="sr-only">Manage</span></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-100">
               {data.items.map((m) => (
-                <tr key={m.user_id} className="transition hover:bg-stone-50/70">
+                <Fragment key={m.user_id}>
+                <tr className={cx("transition hover:bg-stone-50/70", open === m.user_id && "bg-stone-50/70")}>
                   <td className="px-3 py-2.5">
                     <Link href={`/u/${m.user_id}`} className="flex items-center gap-3">
                       <Avatar name={m.full_name} size={34} />
@@ -142,9 +146,28 @@ export function AdminMembersTab({ departments }: { departments: string[] }) {
                   <td className="num px-3 py-2.5 text-right font-semibold text-ink">{fmtInt(m.karma)}</td>
                   <td className="hidden whitespace-nowrap px-3 py-2.5 text-stone-500 lg:table-cell">{m.last_active ? relTime(m.last_active) : "—"}</td>
                   <td className="px-3 py-2.5 text-right">
-                    {m.role !== "admin" && <SpamToggle userId={m.user_id} name={m.full_name} flagged={m.is_flagged_spam} onChanged={reload} />}
+                    <div className="flex items-center justify-end gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setOpen(open === m.user_id ? null : m.user_id)}
+                        aria-expanded={open === m.user_id}
+                        className={cx("btn h-8 min-h-8 px-2.5 text-meta", open === m.user_id && "border-brand-300 bg-brand-50 text-brand-700")}
+                      >
+                        <FileText className="h-3.5 w-3.5" /> Manage
+                        <ChevronDown className={cx("h-3.5 w-3.5 transition-transform", open === m.user_id && "rotate-180")} />
+                      </button>
+                      {m.role !== "admin" && <SpamToggle userId={m.user_id} name={m.full_name} flagged={m.is_flagged_spam} onChanged={reload} />}
+                    </div>
                   </td>
                 </tr>
+                {open === m.user_id && (
+                  <tr>
+                    <td colSpan={COLUMNS.length + 1} className="p-0">
+                      <MemberPostsPanel member={m} onChanged={reload} />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
           </table>

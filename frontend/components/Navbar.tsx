@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
-  BarChart3,
+  LayoutDashboard,
   BookOpen,
   Home,
   MessageSquareText,
@@ -25,11 +25,11 @@ const NAV = [
   { href: "/assistant", label: "Assistant", icon: MessageSquareText },
 ] as const;
 
-// Analytics is part of the admin dashboard, so only admins get this icon.
+// The admin dashboard (overview, members, holdings, analytics): only admins get this item.
 const ADMIN_NAV = {
-  href: "/admin?section=analytics",
-  label: "Analytics",
-  icon: BarChart3,
+  href: "/admin",
+  label: "Dashboard",
+  icon: LayoutDashboard,
 } as const;
 
 const isActive = (pathname: string, href: string) => {

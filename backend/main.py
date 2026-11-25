@@ -888,7 +888,7 @@ def create_post(payload: PostCreate, user=Depends(current_user)):
 
 @app.patch("/api/posts/{post_id}")
 def update_post(post_id: UUID, payload: PostUpdate, user=Depends(current_user)):
-    """Author-only edit. Stamps edited_at so the UI can show an "edited" marker."""
+    """The author (or an admin moderating) can edit. Stamps edited_at so the UI can show an "edited" marker."""
     changes = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
     if not changes:
         raise HTTPException(status_code=422, detail="Nothing to update")
@@ -899,7 +899,7 @@ def update_post(post_id: UUID, payload: PostUpdate, user=Depends(current_user)):
         if not row:
             cur.close()
             raise HTTPException(status_code=404, detail="Post not found")
-        if str(row["author_id"]) != str(user["user_id"]):
+        if str(row["author_id"]) != str(user["user_id"]) and user["role"] != "admin":
             cur.close()
             raise HTTPException(status_code=403, detail="You can only edit your own posts")
         title = (changes.get("title") if changes.get("title") is not None else row["title"]).strip()
@@ -2444,6 +2444,232 @@ def set_member_spam_flag(member_id: UUID, payload: SpamFlagRequest, user=Depends
         conn.commit()
         cur.close()
     return {"user_id": str(member_id), "is_flagged_spam": payload.flagged}
+
+
+# ==========================================
+# Admin: Chanakya holdings, member posts, roles
+# ==========================================
+class HoldingInput(BaseModel):
+    title: str = Field(..., min_length=3, max_length=500)
+    abstract: Optional[str] = Field("", max_length=20000)
+    authors: list[str] = Field(default_factory=list, max_length=60)
+    publication_year: Optional[int] = Field(None, ge=1800, le=2100)
+    venue: Optional[str] = Field("", max_length=200)
+    doi: Optional[str] = Field(None, max_length=150)
+    arxiv_id: Optional[str] = Field(None, max_length=50)
+    url: Optional[str] = Field(None, max_length=1000)
+    item_type: str = Field("paper", pattern="^(paper|article)$")
+    school: Optional[str] = None
+    topics: list[str] = Field(default_factory=list, max_length=12)
+
+
+class RoleChange(BaseModel):
+    role: str = Field(..., pattern="^(student|faculty|researcher|admin)$")
+
+
+def _holding_values(h: HoldingInput) -> dict:
+    """Normalise the form: trimmed text, None for blanks, the school last in topics like the rest of the corpus."""
+    if h.school and h.school not in _SCHOOL_LABELS:
+        raise HTTPException(status_code=422, detail="Choose one of the six Chanakya schools")
+    doi = (h.doi or "").strip()
+    doi = re.sub(r"^(https?://)?(dx\.)?doi\.org/", "", doi, flags=re.I).lower() or None
+    topics: list[str] = []
+    for t in h.topics:
+        t = " ".join((t or "").split())
+        if t and t not in topics and t not in _SCHOOL_LABELS:
+            topics.append(t[:80])
+    if h.school:
+        topics.append(h.school)
+    title = " ".join(h.title.split())
+    abstract = (h.abstract or "").strip()
+    arxiv = (h.arxiv_id or "").strip()
+    if arxiv.lower().startswith("arxiv:"):
+        arxiv = arxiv[6:].strip()
+    return {
+        "title": title,
+        "abstract": abstract or None,
+        "authors": [{"name": a.strip()[:200]} for a in h.authors if a and a.strip()],
+        "year": h.publication_year,
+        "venue": (h.venue or "").strip()[:200] or None,
+        "doi": doi,
+        "arxiv_id": arxiv or None,
+        "url": (h.url or "").strip() or None,
+        "item_type": h.item_type,
+        "topics": topics,
+        "text": f"{title}. {abstract[:600]}",
+    }
+
+
+def _holding_conflict(cur, v: dict, exclude: Optional[UUID] = None) -> None:
+    cur.execute(
+        """
+        SELECT paper_id, canonical_title FROM papers
+        WHERE ((%(doi)s::text IS NOT NULL AND lower(doi) = %(doi)s) OR (%(ax)s::text IS NOT NULL AND arxiv_id = %(ax)s))
+          AND (%(ex)s::uuid IS NULL OR paper_id <> %(ex)s::uuid)
+        LIMIT 1
+        """,
+        {"doi": v["doi"], "ax": v["arxiv_id"], "ex": exclude},
+    )
+    clash = cur.fetchone()
+    if clash:
+        raise HTTPException(status_code=409, detail=f"That DOI or arXiv ID already belongs to “{clash['canonical_title']}”.")
+
+
+_HOLDING_COLUMNS = """
+    p.paper_id, p.canonical_title, p.authors, p.publication_year, p.venue, p.doi, p.arxiv_id, p.url, p.item_type,
+    p.topics, p.save_count, p.in_chanakya_library, p.created_at, p.updated_at, p.created_by,
+    u.full_name AS created_by_name,
+    (SELECT COUNT(*) FROM posts po WHERE po.attached_paper_id = p.paper_id) AS discussion_count
+"""
+
+
+@app.get("/api/admin/holdings")
+def admin_list_holdings(
+    q: Optional[str] = None,
+    scope: str = Query("posted", pattern="^(posted|all)$"),
+    limit: int = Query(25, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    user=Depends(require_role("admin")),
+):
+    """Holdings posted from the dashboard (scope=posted), or every Chanakya holding (scope=all); latest change first."""
+    where = ["p.created_by IS NOT NULL"] if scope == "posted" else ["p.in_chanakya_library = TRUE"]
+    params: dict = {"limit": limit, "offset": offset}
+    if q and q.strip():
+        where.append("(p.canonical_title ILIKE %(q)s OR p.venue ILIKE %(q)s OR p.doi ILIKE %(q)s OR p.authors::text ILIKE %(q)s)")
+        params["q"] = f"%{q.strip()}%"
+    clause = " AND ".join(where)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) AS n FROM papers p WHERE {clause}", params)
+        total = cur.fetchone()["n"]
+        cur.execute(
+            f"""
+            SELECT {_HOLDING_COLUMNS}
+            FROM papers p LEFT JOIN users u ON u.user_id = p.created_by
+            WHERE {clause}
+            ORDER BY COALESCE(p.updated_at, p.created_at) DESC
+            LIMIT %(limit)s OFFSET %(offset)s
+            """,
+            params,
+        )
+        items = cur.fetchall()
+        cur.close()
+    return {"total": total, "items": items}
+
+
+@app.post("/api/admin/holdings")
+def admin_create_holding(payload: HoldingInput, user=Depends(require_role("admin"))):
+    """Post a new record straight into the Chanakya holdings; it gets its own paper page at once."""
+    v = _holding_values(payload)
+    emb = embed_model.encode(v["text"]).tolist()
+    paper_id = uuid.uuid4()
+    with get_db() as conn:
+        cur = conn.cursor()
+        _holding_conflict(cur, v)
+        cur.execute(
+            """
+            INSERT INTO papers (paper_id, doi, arxiv_id, canonical_title, abstract, authors, publication_year, venue, topics,
+                                sources, minhash_signature, embedding, item_type, url, in_chanakya_library, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, '["chanakya"]'::jsonb, %s, %s::vector, %s, %s, TRUE, %s::uuid)
+            """,
+            (paper_id, v["doi"], v["arxiv_id"], v["title"], v["abstract"], json.dumps(v["authors"]), v["year"], v["venue"],
+             v["topics"], psycopg2.Binary(_minhash_bytes(v["title"], v["abstract"] or "")), emb, v["item_type"], v["url"], user["user_id"]),
+        )
+        cur.execute(
+            "INSERT INTO paper_sources (paper_id, source_name, external_id, source_url) VALUES (%s, 'chanakya', %s, %s)",
+            (paper_id, str(paper_id), v["url"] or ""),
+        )
+        cur.execute(
+            "INSERT INTO paper_chunks (paper_id, chunk_index, chunk_text, chunk_embedding) VALUES (%s, 0, %s, %s::vector)",
+            (paper_id, (v["abstract"] or v["title"])[:1500], emb),
+        )
+        conn.commit()
+        cur.close()
+    return {"paper_id": str(paper_id), "canonical_title": v["title"]}
+
+
+@app.patch("/api/admin/holdings/{paper_id}")
+def admin_update_holding(paper_id: UUID, payload: HoldingInput, user=Depends(require_role("admin"))):
+    """Edit any holding's record. The search embedding and assistant chunk are rebuilt from the new text."""
+    v = _holding_values(payload)
+    emb = embed_model.encode(v["text"]).tolist()
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM papers WHERE paper_id = %s FOR UPDATE", (paper_id,))
+        if not cur.fetchone():
+            cur.close()
+            raise HTTPException(status_code=404, detail="Holding not found")
+        _holding_conflict(cur, v, exclude=paper_id)
+        cur.execute(
+            """
+            UPDATE papers SET doi = %s, arxiv_id = %s, canonical_title = %s, abstract = %s, authors = %s::jsonb,
+                   publication_year = %s, venue = %s, topics = %s, item_type = %s, url = %s, embedding = %s::vector,
+                   minhash_signature = %s, in_chanakya_library = TRUE, updated_at = NOW()
+            WHERE paper_id = %s
+            """,
+            (v["doi"], v["arxiv_id"], v["title"], v["abstract"], json.dumps(v["authors"]), v["year"], v["venue"], v["topics"],
+             v["item_type"], v["url"], emb, psycopg2.Binary(_minhash_bytes(v["title"], v["abstract"] or "")), paper_id),
+        )
+        cur.execute("DELETE FROM paper_chunks WHERE paper_id = %s", (paper_id,))
+        cur.execute(
+            "INSERT INTO paper_chunks (paper_id, chunk_index, chunk_text, chunk_embedding) VALUES (%s, 0, %s, %s::vector)",
+            (paper_id, (v["abstract"] or v["title"])[:1500], emb),
+        )
+        cur.execute("UPDATE paper_sources SET source_url = %s WHERE paper_id = %s AND source_name = 'chanakya'", (v["url"] or "", paper_id))
+        conn.commit()
+        cur.close()
+    return {"paper_id": str(paper_id), "canonical_title": v["title"]}
+
+
+@app.delete("/api/admin/holdings/{paper_id}")
+def admin_delete_holding(paper_id: UUID, user=Depends(require_role("admin"))):
+    """Delete a record and its page. Saves and citations go with it; posts that attached it keep their text."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM papers WHERE paper_id = %s RETURNING canonical_title", (paper_id,))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Holding not found")
+    return {"status": "deleted", "paper_id": str(paper_id)}
+
+
+@app.get("/api/admin/members/{member_id}/posts")
+def admin_member_posts(member_id: UUID, user=Depends(require_role("admin"))):
+    """Every post a member wrote, flagged ones included, newest first."""
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            SELECT p.post_id, p.title, p.body, p.tags, p.upvote_count, p.created_at, p.edited_at, p.is_flagged_spam,
+                   pa.paper_id AS attached_paper_id, pa.canonical_title AS attached_paper_title,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.post_id) AS comment_count
+            FROM posts p LEFT JOIN papers pa ON pa.paper_id = p.attached_paper_id
+            WHERE p.author_id = %s::uuid
+            ORDER BY p.created_at DESC
+            """,
+            (member_id,),
+        )
+        rows = cur.fetchall()
+        cur.close()
+    return rows
+
+
+@app.patch("/api/admin/members/{member_id}/role")
+def admin_set_role(member_id: UUID, payload: RoleChange, user=Depends(require_role("admin"))):
+    """Change a member's role. Admins can't demote themselves, so there is always at least one admin."""
+    if str(member_id) == str(user["user_id"]):
+        raise HTTPException(status_code=422, detail="You can't change your own role")
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE users SET role = %s WHERE user_id = %s::uuid RETURNING user_id", (payload.role, member_id))
+        row = cur.fetchone()
+        conn.commit()
+        cur.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return {"user_id": str(member_id), "role": payload.role}
 
 
 @app.post("/api/analytics/run-spike-scan")

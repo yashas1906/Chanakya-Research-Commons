@@ -264,7 +264,7 @@ def _merge_one(cur, dup: str, canon: str, score: dict | None) -> None:
         """
         UPDATE papers SET
             save_count = (SELECT COUNT(*) FROM library_saves WHERE paper_id = %s::uuid),
-            in_chanakya_library = EXISTS (SELECT 1 FROM library_saves WHERE paper_id = %s::uuid)
+            in_chanakya_library = EXISTS (SELECT 1 FROM library_saves WHERE paper_id = %s::uuid) OR created_by IS NOT NULL
         WHERE paper_id = %s::uuid
         """,
         (canon, canon, canon),

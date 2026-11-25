@@ -22,7 +22,7 @@ import { useAsync } from "@/lib/hooks";
 import { PanelHeading } from "@/components/paper/PanelHeading";
 import type { AlsoSavedPaper, PaperDetail as PaperType } from "@/types/crc";
 
-const SOURCE_LABELS: Record<string, string> = { openalex: "OpenAlex", arxiv: "arXiv", rss: "RSS feed", crossref: "Crossref", external: "External" };
+const SOURCE_LABELS: Record<string, string> = { openalex: "OpenAlex", arxiv: "arXiv", rss: "RSS feed", crossref: "Crossref", external: "External", chanakya: "Chanakya Library" };
 /** Abstracts longer than this start collapsed, so the abstract and the details card beside it line up. */
 const ABSTRACT_PREVIEW = 900;
 
@@ -164,7 +164,13 @@ function PaperView({ paper }: { paper: PaperType }) {
                 {paper.source_records.map((record) => (
                   <li key={`${record.source_name}-${record.external_id}`} className="flex items-center justify-between gap-3 text-meta">
                     <span className="font-medium text-ink">{SOURCE_LABELS[record.source_name] ?? record.source_name}</span>
-                    {record.source_url ? (
+                    {record.source_name === "chanakya" ? (
+                      record.source_url ? (
+                        <a href={record.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-stone-500 hover:text-ink">Full text <ExternalLink className="h-3.5 w-3.5 shrink-0" /></a>
+                      ) : (
+                        <span className="text-stone-400">Posted by the library</span>
+                      )
+                    ) : record.source_url ? (
                       <a href={record.source_url} target="_blank" rel="noopener noreferrer" className="inline-flex min-w-0 items-center gap-1 text-stone-500 hover:text-ink">
                         <span className="truncate">{record.external_id?.startsWith("rss:") ? "Open" : (record.external_id ?? "Open").replace(/^https?:\/\/[^/]+\//, "")}</span>
                         <ExternalLink className="h-3.5 w-3.5 shrink-0" />

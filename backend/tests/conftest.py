@@ -42,14 +42,16 @@ def _cleanup() -> int:
     if ids:
         cur.execute("DELETE FROM activity_events WHERE user_id = ANY(%s::uuid[])", (ids,))
         cur.execute("DELETE FROM system_alerts WHERE entity_ref = ANY(%s)", ([str(i) for i in ids],))
+        cur.execute("DELETE FROM papers WHERE created_by = ANY(%s::uuid[])", (ids,))  # holdings tests posted
         cur.execute("DELETE FROM users WHERE user_id = ANY(%s::uuid[])", (ids,))  # posts, saves, follows... cascade
         # Counters that the deleted saves / votes contributed to.
         cur.execute(
             """
-            UPDATE papers p SET save_count = s.n, in_chanakya_library = s.n > 0
+            -- Holdings an admin posted stay in the library even with no saves.
+            UPDATE papers p SET save_count = s.n, in_chanakya_library = (s.n > 0 OR p.created_by IS NOT NULL)
             FROM (SELECT p2.paper_id, COUNT(ls.save_id) AS n FROM papers p2
                   LEFT JOIN library_saves ls ON ls.paper_id = p2.paper_id GROUP BY p2.paper_id) s
-            WHERE s.paper_id = p.paper_id AND (p.save_count <> s.n OR p.in_chanakya_library <> (s.n > 0))
+            WHERE s.paper_id = p.paper_id AND (p.save_count <> s.n OR p.in_chanakya_library <> (s.n > 0 OR p.created_by IS NOT NULL))
             """
         )
         cur.execute(
