@@ -54,7 +54,7 @@ export function FeedRail({
           <p className="mt-1 text-meta leading-relaxed text-stone-600">Findings, questions and papers from scholars across Chanakya University.</p>
           <p className="mt-3 text-label text-stone-400">In the posts shown below</p>
           <dl className="mt-1 grid grid-cols-3 gap-2 border-y border-stone-100 py-3 text-center">
-            {[["Posts", postCount], ["Schools", schoolCount], ["Topics", topics.length]].map(([label, value]) => (
+            {[["Posts", postCount], ["Schools", schoolCount], ["Domains", topics.length]].map(([label, value]) => (
               <div key={label}>
                 <dt className="text-label text-stone-500">{label}</dt>
                 <dd className="num font-display text-[17px] text-ink">{value}</dd>

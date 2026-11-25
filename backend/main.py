@@ -39,6 +39,7 @@ try:
     from backend.services.spam_service import SPAM_THRESHOLD, load_member_features, members_to_flag, score_members
     from backend.services.search_service import hybrid_paper_sql, hybrid_params
     from backend.services.recommendation_service import RECOMMEND_PAPERS_SQL
+    from backend.domains import clean_domains, domain_for
 except ImportError:
     from services.mining_service import (
         get_topic_associations,
@@ -52,6 +53,7 @@ except ImportError:
     from services.spam_service import SPAM_THRESHOLD, load_member_features, members_to_flag, score_members
     from services.search_service import hybrid_paper_sql, hybrid_params
     from services.recommendation_service import RECOMMEND_PAPERS_SQL
+    from domains import clean_domains, domain_for
 
 from contextlib import asynccontextmanager, contextmanager
 from psycopg2 import pool
@@ -801,6 +803,14 @@ def get_feed(
         raise HTTPException(status_code=401, detail="Sign in to see posts from people and topics you follow")
     with get_db() as conn:
         cur = conn.cursor()
+        # Posts are filed under broad domains; a followed paper topic ("VLSI design") counts for its domain too.
+        followed: list[str] = []
+        if acting_id:
+            cur.execute("SELECT topic_tag FROM topic_follows WHERE user_id = %s::uuid", (acting_id,))
+            for r in cur.fetchall():
+                followed.append(r["topic_tag"])
+                if domain_for(r["topic_tag"]):
+                    followed.append(domain_for(r["topic_tag"]))
         cur.execute(
             """
             WITH feed AS (
@@ -811,7 +821,7 @@ def get_feed(
                      COALESCE(mine.value, 0) AS my_vote,
                      (p.is_flagged_spam OR u.is_flagged_spam) AS under_review,
                      (followed.followee_id IS NOT NULL) AS author_followed,
-                     EXISTS (SELECT 1 FROM topic_follows tf WHERE tf.user_id = %(me)s::uuid AND tf.topic_tag = ANY(p.tags)) AS topic_followed,
+                     COALESCE(p.tags && %(followed)s::text[], FALSE) AS topic_followed,
                      CASE WHEN me.profile_embedding IS NOT NULL AND p.post_embedding IS NOT NULL
                        THEN (1 - (p.post_embedding <=> me.profile_embedding)) ELSE 0.0 END AS similarity
               FROM posts p
@@ -835,7 +845,7 @@ def get_feed(
               created_at DESC
             LIMIT %(limit)s
             """,
-            {"me": acting_id, "sort": sort, "limit": limit},
+            {"me": acting_id, "sort": sort, "limit": limit, "followed": followed},
         )
         rows = cur.fetchall()
         cur.close()
@@ -856,6 +866,7 @@ def create_post(payload: PostCreate, user=Depends(current_user)):
             if not cur.fetchone():
                 cur.close()
                 raise HTTPException(status_code=404, detail="The attached paper is not in the Commons")
+        tags = clean_domains(payload.tags)
         q_vec = vec_literal(f"{payload.title} {payload.body}")
         cur.execute(
             """
@@ -863,12 +874,12 @@ def create_post(payload: PostCreate, user=Depends(current_user)):
             VALUES (%s::uuid, %s::uuid, %s, %s, %s, %s::vector)
             RETURNING post_id, title, created_at
             """,
-            (user["user_id"], payload.attached_paper_id, payload.title, payload.body, payload.tags, q_vec),
+            (user["user_id"], payload.attached_paper_id, payload.title, payload.body, tags, q_vec),
         )
         post = cur.fetchone()
         cur.execute(
             "INSERT INTO activity_events (user_id, event_type, target_id, topic_tags) VALUES (%s::uuid, 'create_post', %s::uuid, %s)",
-            (user["user_id"], post["post_id"], payload.tags),
+            (user["user_id"], post["post_id"], tags),
         )
         conn.commit()
         cur.close()
@@ -893,7 +904,7 @@ def update_post(post_id: UUID, payload: PostUpdate, user=Depends(current_user)):
             raise HTTPException(status_code=403, detail="You can only edit your own posts")
         title = (changes.get("title") if changes.get("title") is not None else row["title"]).strip()
         body = (changes.get("body") if changes.get("body") is not None else row["body"]).strip()
-        tags = changes["tags"] if changes.get("tags") is not None else row["tags"]
+        tags = clean_domains(changes["tags"]) if changes.get("tags") is not None else row["tags"]
         if not title or not body:
             cur.close()
             raise HTTPException(status_code=422, detail="Title and body cannot be blank")

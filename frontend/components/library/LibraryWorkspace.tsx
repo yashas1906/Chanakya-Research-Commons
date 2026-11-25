@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Link2, Search, X } from "lucide-react";
+import { Link2, X } from "lucide-react";
 import { PaperRow } from "@/components/library/PaperRow";
 import { CollectionsPanel } from "@/components/library/CollectionsPanel";
 import { RecommendedPanel } from "@/components/library/RecommendedPanel";
@@ -97,6 +97,7 @@ export function LibraryWorkspace() {
   const year = params.get("year") ?? "ALL";
   const tierParam = params.get("tier");
   const tier: RankFilter = isTier(tierParam) ? tierParam : "all";
+  // Text search comes from the shared search bar at the top, which writes `?q=` while on this page.
   const query = (params.get("q") ?? "").trim();
 
   const navigate = useCallback(
@@ -114,23 +115,6 @@ export function LibraryWorkspace() {
     [params, pathname, router],
   );
   const update = navigate;
-
-  // The in-page search box: typing replaces the URL (no history entry per keystroke).
-  // Only text the member types is written back; a URL change (Back, a chip, "Clear all") just refills the box.
-  const [draft, setDraft] = useState(query);
-  const typed = useRef(false);
-  useEffect(() => {
-    typed.current = false;
-    setDraft(query);
-  }, [query]);
-  useEffect(() => {
-    if (!typed.current || draft.trim() === query) return;
-    const timer = window.setTimeout(() => {
-      typed.current = false;
-      navigate({ q: draft.trim() || null }, "replace");
-    }, 250);
-    return () => window.clearTimeout(timer);
-  }, [draft, query, navigate]);
 
   const openAdd = () => (authStatus === "authenticated" ? setAddOpen(true) : promptLogin("login"));
 
@@ -213,6 +197,13 @@ export function LibraryWorkspace() {
         <SidebarPortal>
           <div className="border-t border-stone-100">
             <p className="px-4 pb-1 pt-4 font-display text-[15px] text-ink">Filter {view === "saves" ? "your saves" : "the library"}</p>
+            <SidebarSection title="Sort by" onClear={sort !== "saves" ? () => update({ sort: null }) : undefined}>
+              <div role="radiogroup" aria-label="Sort papers" className="space-y-0.5">
+                {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+                  <FilterOption key={key} label={SORT_LABELS[key]} active={sort === key} onClick={() => update({ sort: key === "saves" ? null : key })} />
+                ))}
+              </div>
+            </SidebarSection>
             <SidebarSection title="School" onClear={school !== "ALL" ? () => update({ school: null }) : undefined}>
               <div role="radiogroup" aria-label="Filter by school" className="space-y-0.5">
                 <FilterOption label="All schools" active={school === "ALL"} count={source.filter((p) => matches(p, "school")).length} onClick={() => update({ school: null })} />
@@ -258,38 +249,18 @@ export function LibraryWorkspace() {
 
           {isList && !savesLocked && (
             <div className="space-y-3">
-              {/* Toolbar: search this list · sort · filters (rail on wide screens, drawer below) · result count. */}
-              <div className="flex flex-wrap items-center gap-2">
-                <label className="relative min-w-0 flex-1 basis-60">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-stone-400" />
-                  <input
-                    value={draft}
-                    onChange={(event) => {
-                      typed.current = true;
-                      setDraft(event.target.value);
-                    }}
-                    placeholder={view === "saves" ? "Search your saves by title, author, venue or topic" : "Search the library by title, author, venue or topic"}
-                    aria-label="Search this list"
-                    className="input pl-9"
-                  />
-                </label>
-                <label className="flex items-center gap-2 text-meta text-stone-500">
-                  <span className="hidden sm:inline">Sort</span>
-                  <select aria-label="Sort papers" value={sort} onChange={(event) => update({ sort: event.target.value === "saves" ? null : event.target.value })} className="input w-auto py-0">
-                    {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => <option key={key} value={key}>{SORT_LABELS[key]}</option>)}
-                  </select>
-                </label>
-                <FilterToggle activeCount={activeCount} />
-              </div>
-
+              {/* Count, sort order and active filters; sort and filters themselves live in the left rail (a drawer on narrow screens). */}
               <div className="flex flex-wrap items-center gap-2" aria-label="Active filters">
                 <span className="num text-meta text-stone-500">
                   {listLoading ? "Loading…" : `${sortedRows.length} ${sortedRows.length === 1 ? "paper" : "papers"}`}
+                  <span className="text-stone-400"> · sorted by {SORT_LABELS[sort].toLowerCase()}</span>
                 </span>
+                {query && <RemovableChip label={`Search: “${query}”`} onRemove={() => update({ q: null }, "replace")} />}
                 {school !== "ALL" && <RemovableChip label={shortSchool(school)} onRemove={() => update({ school: null })} />}
                 {year !== "ALL" && <RemovableChip label={year} onRemove={() => update({ year: null })} />}
                 {tier !== "all" && <RemovableChip label={TIER_LABELS[tier]} onRemove={() => update({ tier: null })} />}
                 {anyFilter && <button type="button" onClick={clearFilters} className="text-meta font-medium text-stone-500 underline-offset-2 hover:text-ink hover:underline">Clear all</button>}
+                <span className="ml-auto"><FilterToggle activeCount={activeCount + (sort !== "saves" ? 1 : 0)} /></span>
               </div>
 
               {view === "saves" && <AddPaperCallout onAdd={openAdd} />}

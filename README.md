@@ -536,6 +536,7 @@ Chanakya-Research-Commons/
 | 2026-11-24 | `phase-2` | Website gaps: add by DOI / arXiv / link, private notes, topic follows, live trending topics, admin alert queue with dismiss/confirm and flag/clear, on-demand spike and spam scans, university → school → topic → member drill-down, topics over time, most saved / discussed papers. |
 | 2026-11-24 | `phase-3` | Evaluation rebuilt on the deployed code with regenerated ground truth and dev/test splits; shared search / recommendation / spam modules; PageRank weight and spam threshold tuned; co-save + content recommendations; event history backfilled; OpenAlex citation counts. |
 | 2026-11-24 | `phase-4` | No credentials in code or Compose (all from `.env`); FastAPI lifespan handler; 21 backend tests that clean up their own accounts; old patch/zip copies of the code removed (Gap Analysis PDF moved to `docs/`). |
+| 2026-11-25 | `phase-11` | Posts are filed under a fixed list of 32 research domains picked from a dropdown (no more free-text topics); migration `008_post_domains.sql` maps old topics to domains, and following a paper topic matches its domain in the feed. Paper page restructured: actions in the header, a stats strip, abstract beside topics/sources, and citation graph, discussions and reader activity as three equal panels. Library search box removed (the top search bar covers it) and sort moved into the filter rail. |
 
 ## Updating an existing database
 

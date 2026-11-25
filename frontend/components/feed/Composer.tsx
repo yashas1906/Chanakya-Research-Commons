@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FileText, Loader2, Paperclip, PenLine, Search, X } from "lucide-react";
 import { Avatar } from "@/components/ui/Section";
-import { TagInput } from "@/components/feed/TagInput";
+import { DomainSelect } from "@/components/feed/DomainSelect";
 import { createPost, describeError, isAbort, suggestPapers, type PaperSuggestion } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useSaves } from "@/lib/saves-context";
@@ -107,21 +107,18 @@ function PaperPicker({ onPick, onCancel }: { onPick: (paper: AttachedPaper) => v
   );
 }
 
-/** Compact "create post" bar that opens into title / body / paper / tags. */
+/** Compact "create post" bar that opens into title / body / paper / research domains. */
 export function Composer({
   onPosted,
   autoOpen = false,
   onOpened,
   attach = null,
-  topicSuggestions = [],
 }: {
   onPosted: (postId: string) => void;
   autoOpen?: boolean;
   onOpened?: () => void;
   /** Paper to pre-attach (from "Start a discussion" on a paper page). */
   attach?: AttachedPaper | null;
-  /** Topics already used on the Commons, offered while typing tags. */
-  topicSuggestions?: string[];
 }) {
   const { user, promptLogin } = useAuth();
   const [open, setOpen] = useState(false);
@@ -246,7 +243,7 @@ export function Composer({
           </button>
         )}
 
-        <TagInput value={tags} onChange={setTags} suggestions={topicSuggestions} />
+        <DomainSelect value={tags} onChange={setTags} />
         {err && <p role="alert" className="text-meta text-terracotta-600">{err}</p>}
         <div className="flex justify-end gap-2">
           <button type="button" onClick={reset} className="btn">Cancel</button>

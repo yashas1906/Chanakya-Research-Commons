@@ -8,6 +8,8 @@ import random
 import hashlib
 import argparse
 import xml.etree.ElementTree as ET
+import sys
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 import requests
 import numpy as np
@@ -16,6 +18,9 @@ from psycopg2.extras import execute_values
 from minio import Minio
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from backend.domains import domain_for  # noqa: E402  posts are filed under research domains, not raw topics
 
 try:
     from data_pipeline.dedup import minhash_signature
@@ -669,17 +674,18 @@ def main():
             title = f"Thoughts on {p['title'][:75]}"
             body = f"Has anyone tested the approach in '{p['title']}' for our {u['department']} work on {u['tags'][0]}?"
 
+        post_domains = list(dict.fromkeys(d for d in (domain_for(t) for t in u["tags"]) if d))
         post_items.append({
             "post_id": pid,
             "author_id": u["user_id"],
             "paper_id": p["paper_id"],
             "title": title,
             "body": body,
-            "tags": u["tags"],
+            "tags": post_domains,
             "upvotes": random.randint(0, 30) if not u["is_spam"] else 0,
             "created_at": ts,
         })
-        event_rows.append((u["user_id"], "create_post", pid, None, u["tags"], ts))
+        event_rows.append((u["user_id"], "create_post", pid, None, post_domains, ts))
 
     post_embeddings = model.encode([f"{pt['title']} {pt['body']}" for pt in post_items])
     execute_values(

@@ -19,6 +19,7 @@ import { cx, schoolLabel, shortSchool } from "@/lib/format";
 import { useAsync } from "@/lib/hooks";
 import { useAuth } from "@/context/AuthContext";
 import { SCHOOLS } from "@/types/crc";
+import { domainOf } from "@/lib/domains";
 
 type FeedSort = "best" | "following" | "new" | "top";
 const isSort = (value: string | null): value is FeedSort => value === "best" || value === "following" || value === "new" || value === "top";
@@ -106,7 +107,8 @@ export function FeedWorkspace() {
   );
   const setSort = (next: FeedSort) => navigate({ sort: next === "best" ? null : next });
   const setSchool = (next: string) => navigate({ school: next === "ALL" ? null : next });
-  const setTopic = (next: string | null) => navigate({ topic: next });
+  // Trending and followed topics are paper-level ("VLSI design"); posts are filed under its domain.
+  const setTopic = (next: string | null) => navigate({ topic: next ? domainOf(next) ?? next : null });
   const toggleTopic = (next: string) => setTopic(topic === next ? null : next);
 
   const clearQuery = useCallback(() => navigate({ q: null }, "replace"), [navigate]);
@@ -191,9 +193,9 @@ export function FeedWorkspace() {
             </div>
           </SidebarSection>
           {topics.length > 0 && (
-            <SidebarSection title="Topics" onClear={topic ? () => setTopic(null) : undefined}>
-              <div role="radiogroup" aria-label="Filter by topic" className="space-y-0.5">
-                {topics.slice(0, 10).map(([name, count]) => (
+            <SidebarSection title="Domains" onClear={topic ? () => setTopic(null) : undefined}>
+              <div role="radiogroup" aria-label="Filter by research domain" className="space-y-0.5">
+                {topics.map(([name, count]) => (
                   <FilterOption key={name} label={name} count={count} active={topic === name} onClick={() => toggleTopic(name)} />
                 ))}
               </div>
@@ -210,7 +212,7 @@ export function FeedWorkspace() {
       <div className="grid min-w-0 grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <div className="min-w-0 space-y-4">
           <div id="compose">
-            <Composer onPosted={onPosted} autoOpen={composeRequested} onOpened={consumeCompose} attach={attach} topicSuggestions={topics.map(([name]) => name)} />
+            <Composer onPosted={onPosted} autoOpen={composeRequested} onOpened={consumeCompose} attach={attach} />
             {justPosted && (
               <div role="status" className="mt-3 flex items-center gap-2.5 rounded-xl bg-sage-50 px-4 py-2.5 text-meta text-sage-700 ring-1 ring-inset ring-sage-200 animate-fade">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
