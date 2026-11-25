@@ -454,6 +454,6 @@ db/migrations/002_post_votes.sql            (the db/migrations/ folder does not 
 
 - **Downvotes** require a `value` column on `post_upvotes`; `upvote_count` is treated as net score.
 - **Auth** uses stdlib PBKDF2 + HMAC-signed bearer tokens rather than adding JWT/passlib. If you prefer `PyJWT`/`passlib[bcrypt]`, swap the helper functions only; the endpoint contracts stay the same.
-- **Demo passcode:** seeded accounts all share `CRC_DEMO_PASSCODE` (default `chanakya-demo`) until real credentials are issued. Change it before any shared deployment.
+- **Demo passcode:** seeded accounts all share `CRC_DEMO_PASSCODE` (set in `.env`; there is no default) until real credentials are issued. Change it before any shared deployment.
 - **Container width** stays `max-w-7xl` (1280 px) as specified; the "too small" feeling is fixed through the type scale, not by widening.
 - **Out of scope:** dark mode, email/SMS verification, password reset, real SSO, comment voting, moderation tools.

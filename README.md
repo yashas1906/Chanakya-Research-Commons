@@ -357,7 +357,8 @@ Defined in `docker-compose.yml`. Every credential comes from `.env`; Compose ref
 | `scheduler` (profile `scheduler`) | `crc_scheduler` | `./backend` | | Ingest + ELT every 6 hours |
 
 > [!NOTE]
-> PostgreSQL is on host port **5434** to avoid clashing with a local PostgreSQL on 5432.
+> PostgreSQL is on host port **5434** to avoid clashing with a local PostgreSQL on 5432. PostgreSQL, MinIO and
+> Ollama are published on `127.0.0.1` only, so other machines on the network cannot reach them.
 
 ---
 
@@ -444,28 +445,25 @@ Then restart the backend and the frontend.
 
 ## 11. Environment Variables
 
-Copy `.env.example` to `.env` (it is ignored by git):
+All configuration comes from a `.env` file in the repository root. Create it from the template with
+`cp .env.example .env` and fill in your own values. **Never commit `.env`**: it is listed in `.gitignore`, and
+only `.env.example` (placeholders, no real values) is tracked.
 
-```env
-POSTGRES_USER=crc_admin
-POSTGRES_PASSWORD=<choose-a-database-password>
-POSTGRES_DB=chanakya_commons
-DATABASE_URL=postgresql://crc_admin:<database-password>@localhost:5434/chanakya_commons
+| Variable | Purpose | Secret |
+|---|---|---|
+| `POSTGRES_USER`, `POSTGRES_DB` | Database user and name | |
+| `POSTGRES_PASSWORD` | Database password | **yes** |
+| `DATABASE_URL` | Connection string used by the backend and pipeline (host port 5434); contains the password | **yes** |
+| `MINIO_ROOT_USER`, `MINIO_ENDPOINT` | Data-lake user and address | |
+| `MINIO_ROOT_PASSWORD` | Data-lake password | **yes** |
+| `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | Local LLM address and model name | |
+| `CRC_AUTH_SECRET` | Signs login tokens; a long random string | **yes** |
+| `CRC_DEMO_PASSCODE` | Shared passcode of the seeded demo accounts | **yes** |
+| `CRC_CORS_ORIGINS` | Frontend origins allowed to call the API | |
+| `NEXT_PUBLIC_API_ORIGIN` | API address used by the frontend | |
 
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=<choose-a-minio-password>
-MINIO_ENDPOINT=localhost:9000
-
-OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.2:3b
-
-CRC_AUTH_SECRET=<long-random-secret>          # signs session tokens
-CRC_DEMO_PASSCODE=<choose-a-demo-passcode>    # shared passcode of the seeded accounts
-CRC_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
-NEXT_PUBLIC_API_ORIGIN=http://localhost:8000
-```
-
-The code stops with a clear message if a required value is missing. Use fresh values for any shared deployment.
+The code stops with a clear message if a required value is missing. Generate secrets with
+`python -c "import secrets; print(secrets.token_urlsafe(32))"`, and use fresh values for any shared deployment.
 
 ---
 
