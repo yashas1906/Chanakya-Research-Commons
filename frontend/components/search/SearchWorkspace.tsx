@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ArrowRight, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/Section";
 import { RelatedTopics } from "@/components/search/RelatedTopics";
 import { FollowTopicButton } from "@/components/ui/FollowTopicButton";
@@ -16,9 +16,9 @@ import { useAsync } from "@/lib/hooks";
 
 const EXAMPLES = ["graph neural networks", "federated learning", "protein structure prediction", "contract law and AI"];
 
-type Tab = "all" | "papers" | "people" | "discussions";
+type Tab = "papers" | "people" | "discussions";
 type Source = "all" | "library" | "external";
-const isTab = (v: string | null): v is Tab => v === "all" || v === "papers" || v === "people" || v === "discussions";
+const isTab = (v: string | null): v is Tab => v === "papers" || v === "people" || v === "discussions";
 const isSource = (v: string | null): v is Source => v === "all" || v === "library" || v === "external";
 
 const PAPER_PAGE = 20;
@@ -26,29 +26,14 @@ const PAPER_MAX = 60;
 const OTHER_LIMIT = 10;
 const SOURCE_LABELS: Record<Source, string> = { all: "All sources", library: "Chanakya library", external: "Open literature" };
 
-function Section({ title, count, onSeeAll, children }: { title: string; count: number; onSeeAll?: () => void; children: React.ReactNode }) {
-  return (
-    <section className="card overflow-hidden">
-      <div className="flex items-center justify-between gap-3 border-b border-stone-100 px-4 py-3 sm:px-5">
-        <h2 className="font-display text-[17px] text-ink">{title} <span className="num ml-1 text-meta text-stone-400">{count}</span></h2>
-        {onSeeAll && (
-          <button type="button" onClick={onSeeAll} className="inline-flex items-center gap-1 text-meta font-semibold text-brand-600 hover:underline">
-            See all <ArrowRight className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      {children}
-    </section>
-  );
-}
-
 export function SearchWorkspace() {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
   const q = (params.get("q") ?? "").trim();
   const tabParam = params.get("tab");
-  const tab: Tab = isTab(tabParam) ? tabParam : "all";
+  // Results open on Papers; old links to the removed "All" tab land there too.
+  const tab: Tab = isTab(tabParam) ? tabParam : "papers";
   const sourceParam = params.get("source");
   const source: Source = isSource(sourceParam) ? sourceParam : "all";
 
@@ -75,7 +60,7 @@ export function SearchWorkspace() {
     Object.entries(patch).forEach(([k, v]) => (v === null ? next.delete(k) : next.set(k, v)));
     router.push(`${pathname}?${next.toString()}`, { scroll: false });
   }, [params, pathname, router]);
-  const setTab = (next: Tab) => setParams({ tab: next === "all" ? null : next });
+  const setTab = (next: Tab) => setParams({ tab: next === "papers" ? null : next });
 
   const showing = enabled && data && data.query === q ? data : null;
   const papers = showing ? (source === "library" ? showing.panels.library : source === "external" ? showing.panels.external : showing.panels.papers) : [];
@@ -99,7 +84,6 @@ export function SearchWorkspace() {
   }
 
   const tabs = [
-    { id: "all" as const, label: "All", count: showing ? total : undefined },
     { id: "papers" as const, label: "Papers", count: showing ? allPapers.length : undefined },
     { id: "people" as const, label: "People", count: showing ? people.length : undefined },
     { id: "discussions" as const, label: "Discussions", count: showing ? posts.length : undefined },
@@ -126,18 +110,6 @@ export function SearchWorkspace() {
           <div className="card"><SkeletonList rows={5} /></div>
         ) : total === 0 ? (
           <div className="card"><EmptyState title={`Nothing found for “${q}”`} hint="Papers, people and discussions all came back empty. Try fewer or more general words." /></div>
-        ) : tab === "all" ? (
-          <div className="animate-rise space-y-5">
-            <Section title="Papers" count={allPapers.length} onSeeAll={allPapers.length > 5 ? () => setTab("papers") : undefined}>
-              {allPapers.length ? <ul className="divide-y divide-stone-100">{allPapers.slice(0, 5).map((p) => <PaperResult key={p.paper_id} paper={p} />)}</ul> : <EmptyState className="py-8" title="No papers matched" />}
-            </Section>
-            <Section title="People" count={people.length} onSeeAll={people.length > 3 ? () => setTab("people") : undefined}>
-              {people.length ? <ul className="divide-y divide-stone-100">{people.slice(0, 3).map((u) => <PersonResult key={u.user_id} person={u} />)}</ul> : <EmptyState className="py-8" title="No scholars matched" />}
-            </Section>
-            <Section title="Discussions" count={posts.length} onSeeAll={posts.length > 3 ? () => setTab("discussions") : undefined}>
-              {posts.length ? <ul className="divide-y divide-stone-100">{posts.slice(0, 3).map((p) => <DiscussionResult key={p.post_id} post={p} />)}</ul> : <EmptyState className="py-8" title="No discussions matched" />}
-            </Section>
-          </div>
         ) : tab === "papers" ? (
           <div className="animate-rise space-y-3">
             <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Paper source">
